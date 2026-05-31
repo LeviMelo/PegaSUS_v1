@@ -9,7 +9,13 @@ from pegasus.registries.index import RegistryIndex
 
 @dataclass(frozen=True)
 class RateLegalityRequest:
-    """Minimal legality request for a numerator/denominator rate or proportion."""
+    """Minimal legality request for a numerator/denominator rate or proportion.
+
+    declaration_axis_required controls whether declaration-process compatibility
+    should be evaluated. For crude all-axis rates, this should remain False. For
+    race-specific rates, it must be True, unless explicit compatible race axes
+    are supplied.
+    """
 
     numerator_carrier: str
     denominator_carrier: str
@@ -24,6 +30,7 @@ class RateLegalityRequest:
     numerator_race_axis: str | None = None
     denominator_race_axis: str | None = None
 
+    declaration_axis_required: bool = False
     bridge_applied: Literal["Bridge_R"] | None = None
 
     support_compatible: bool = True
@@ -39,14 +46,14 @@ def evaluate_rate_legality(
 ) -> DeltaResult:
     """Evaluate a first implementation legality predicate.
 
-    This implements the first usable subset of:
+    Implements the current executable subset of:
 
         Δ = Δ_support Δ_axes Δ_carrier Δ_unit Δ_aggregation
             Δ_provenance Δ_quality Δ_declaration
 
-    Later modules will make each term more granular. For now this already
-    enforces carrier compatibility, unit compatibility, and race-axis
-    declaration compatibility.
+    The declaration term is deliberately gated. Source-system race-axis
+    noncommensurability must not block all-race crude rates. It only blocks
+    rates whose estimand actually uses the race/color declaration axis.
     """
     failed_terms: list[str] = []
     warnings: list[str] = []
@@ -153,6 +160,14 @@ def _evaluate_declaration_compatibility(
 ) -> tuple[int, list[str]]:
     warnings: list[str] = []
 
+    explicit_race_axes = (
+        request.numerator_race_axis is not None
+        or request.denominator_race_axis is not None
+    )
+
+    if not request.declaration_axis_required and not explicit_race_axes:
+        return 1, warnings
+
     numerator_axis = request.numerator_race_axis
     denominator_axis = request.denominator_race_axis
 
@@ -167,7 +182,11 @@ def _evaluate_declaration_compatibility(
             denominator_axis = entry.race_axis
 
     if numerator_axis is None or denominator_axis is None:
-        return 1, warnings
+        warnings.append(
+            "race_axis_required_but_unresolved:"
+            f"numerator={numerator_axis}; denominator={denominator_axis}"
+        )
+        return 0, warnings
 
     if numerator_axis == denominator_axis:
         return 1, warnings

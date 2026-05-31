@@ -8,11 +8,7 @@ from typing import Any
 import polars as pl
 
 from pegasus.core.hashing import sha256_json
-from pegasus.output.schemas import (
-    PARQUET_FILENAMES,
-    PARQUET_SCHEMAS,
-    Schema,
-)
+from pegasus.output.schemas import PARQUET_FILENAMES, PARQUET_SCHEMAS, Schema
 from pegasus.problem1.compiled import CompiledField
 from pegasus.problem1.contracts import FieldNode, QState, WarningRecord
 
@@ -39,7 +35,6 @@ def _upsert_parquet(
     key_columns: list[str],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
     new_rows = _coerce(new_rows, schema)
 
     if path.exists():
@@ -61,7 +56,6 @@ def _append_parquet(
     schema: Schema,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
     new_rows = _coerce(new_rows, schema)
 
     if path.exists():
@@ -98,6 +92,34 @@ def field_node_to_row(field: FieldNode) -> dict[str, Any]:
         "materialization_state": field.materialization_state,
         "path": field.path,
     }
+
+
+def edge_rows_for_field(field: FieldNode) -> list[dict[str, Any]]:
+    created_at = datetime.now(timezone.utc).isoformat()
+    rows: list[dict[str, Any]] = []
+
+    for parent_id in field.lineage.parent_ids:
+        payload = {
+            "parent_field_id": parent_id,
+            "child_field_id": field.id,
+            "operator": field.lineage.operator_type,
+            "operator_params": field.lineage.operator_params,
+            "registry_versions": field.lineage.registry_versions,
+        }
+
+        rows.append(
+            {
+                "edge_id": sha256_json(payload),
+                "parent_field_id": parent_id,
+                "child_field_id": field.id,
+                "operator": field.lineage.operator_type,
+                "operator_params_json": _json(field.lineage.operator_params),
+                "registry_versions_json": _json(field.lineage.registry_versions),
+                "created_at": created_at,
+            }
+        )
+
+    return rows
 
 
 def q_state_to_row(q_state: QState) -> dict[str, Any]:
@@ -165,6 +187,15 @@ def write_compiled_field(run_dir: str | Path, compiled: CompiledField) -> FieldN
         schema=PARQUET_SCHEMAS["V_fields"],
         key_columns=["field_id"],
     )
+
+    edge_rows = edge_rows_for_field(field)
+    if edge_rows:
+        _upsert_parquet(
+            run_dir / PARQUET_FILENAMES["E_DAG"],
+            pl.DataFrame(edge_rows),
+            schema=PARQUET_SCHEMAS["E_DAG"],
+            key_columns=["edge_id"],
+        )
 
     _upsert_parquet(
         run_dir / PARQUET_FILENAMES["Q_tensor"],

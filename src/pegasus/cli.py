@@ -21,6 +21,14 @@ from pegasus.datasus.workflow import process_sim_do_local_files
 from pegasus.datasus.adapters.registry import registered_datasus_systems
 from pegasus.workflows.sim_compile import compile_sim_death_counts_to_bundle
 
+from pegasus.output.field_store import list_fields
+from pegasus.workflows.mortality import compile_crude_mortality_to_bundle
+from pegasus.workflows.population import import_population_to_bundle
+
+from pegasus.workflows.local_smoke import run_local_sim_mortality_smoke
+
+from pegasus.sidra.workflow import fetch_sidra_query_to_disk
+
 app = typer.Typer(help="PegaSUS epidemiological compiler CLI.")
 console = Console()
 
@@ -271,3 +279,183 @@ def sim_compile_death_counts(
 
     console.print("[green]SIM-DO death-count field compiled.[/green]")
     console.print(f"field_id: {field_id}")
+    
+    
+@app.command("fields")
+def fields(
+    run_dir: Path = typer.Option(..., "--run-dir", help="PegaSUS run bundle directory."),
+) -> None:
+    """List materialized fields in a run bundle."""
+    df = list_fields(run_dir)
+
+    if df.is_empty():
+        console.print("[yellow]No fields materialized yet.[/yellow]")
+        return
+
+    console.print(df)
+
+
+@app.command("population-import")
+def population_import(
+    population_path: Path = typer.Option(
+        ...,
+        "--population",
+        help="CSV/Parquet with year, municipality_cod6, population.",
+    ),
+    run_dir: Path = typer.Option(
+        ...,
+        "--run-dir",
+        help="Existing PegaSUS run bundle directory.",
+    ),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    source_label: str = typer.Option(
+        "imported_population_fixture",
+        "--source-label",
+        help="Source label for imported denominator.",
+    ),
+) -> None:
+    """Import a population denominator table into a run bundle."""
+    field_id = import_population_to_bundle(
+        population_path=population_path,
+        run_dir=run_dir,
+        registry_dir=root / "config" / "registries",
+        source_label=source_label,
+    )
+
+    console.print("[green]Population denominator field imported.[/green]")
+    console.print(f"field_id: {field_id}")
+
+
+@app.command("mortality-compile-crude")
+def mortality_compile_crude(
+    run_dir: Path = typer.Option(
+        ...,
+        "--run-dir",
+        help="Existing PegaSUS run bundle directory.",
+    ),
+    death_count_field_id: str = typer.Option(
+        ...,
+        "--death-field",
+        help="Deaths/counts numerator field ID.",
+    ),
+    population_field_id: str = typer.Option(
+        ...,
+        "--population-field",
+        help="Population/person-years denominator field ID.",
+    ),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    scale: float = typer.Option(100_000.0, "--scale", help="Rate scale."),
+) -> None:
+    """Compile crude mortality rate from death count and population fields."""
+    field_id = compile_crude_mortality_to_bundle(
+        run_dir=run_dir,
+        registry_dir=root / "config" / "registries",
+        death_count_field_id=death_count_field_id,
+        population_field_id=population_field_id,
+        scale=scale,
+    )
+
+    console.print("[green]Crude mortality-rate field compiled.[/green]")
+    console.print(f"field_id: {field_id}")
+    
+    
+@app.command("local-sim-mortality-smoke")
+def local_sim_mortality_smoke(
+    raw_sim: Path = typer.Option(
+        ...,
+        "--raw-sim",
+        help="Raw/local SIM-DO CSV or Parquet file.",
+    ),
+    population: Path = typer.Option(
+        ...,
+        "--population",
+        help="Population CSV/Parquet with year, municipality_cod6, population.",
+    ),
+    intent: Path = typer.Option(
+        Path("config/intents/alagoas_smoke.json"),
+        "--intent",
+        help="Intent JSON file.",
+    ),
+    processed_sim: Path | None = typer.Option(
+        None,
+        "--processed-sim",
+        help="Optional processed SIM-DO CSV or Parquet file.",
+    ),
+    normalization_input_kind: str = typer.Option(
+        "raw",
+        "--normalization-input",
+        help="raw or processed.",
+    ),
+    geography: str = typer.Option(
+        "residence",
+        "--geography",
+        help="residence or occurrence.",
+    ),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    population_source_label: str = typer.Option(
+        "imported_population_fixture",
+        "--population-source-label",
+        help="Label for imported population denominator.",
+    ),
+) -> None:
+    """Run local SIM-DO → death count → population → crude mortality vertical slice."""
+    if normalization_input_kind not in {"raw", "processed"}:
+        raise typer.BadParameter("normalization-input must be raw or processed.")
+
+    if geography not in {"residence", "occurrence"}:
+        raise typer.BadParameter("geography must be residence or occurrence.")
+
+    result = run_local_sim_mortality_smoke(
+        root=root,
+        intent_path=intent,
+        raw_sim_path=raw_sim,
+        processed_sim_path=processed_sim,
+        population_path=population,
+        normalization_input_kind=normalization_input_kind,  # type: ignore[arg-type]
+        geography=geography,  # type: ignore[arg-type]
+        population_source_label=population_source_label,
+    )
+
+    console.print("[green]Local SIM mortality smoke run complete.[/green]")
+    console.print(f"run_dir: {result.run_dir}")
+    console.print(f"normalized_sim: {result.normalized_sim_path}")
+    console.print(f"death_count_field_id: {result.death_count_field_id}")
+    console.print(f"population_field_id: {result.population_field_id}")
+    console.print(f"crude_mortality_field_id: {result.crude_mortality_field_id}")
+    console.print(f"summary: {result.summary_path}")
+    
+
+@app.command("sidra-fetch")
+def sidra_fetch(
+    spec: Path = typer.Option(..., "--spec", help="SIDRA query spec YAML/JSON."),
+    out_root: Path = typer.Option(..., "--out-root", help="Output directory."),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    allow_empty: bool = typer.Option(
+        False,
+        "--allow-empty",
+        help="Allow zero-fact SIDRA results without failing.",
+    ),
+) -> None:
+    """Fetch a SIDRA query, persist raw JSON, normalize facts, and write manifest."""
+    manifest = fetch_sidra_query_to_disk(
+        root=root,
+        spec_path=spec,
+        out_root=out_root,
+        allow_empty=allow_empty,
+    )
+
+    console.print("[green]SIDRA fetch complete.[/green]")
+    console.print(f"table_id: {manifest.table_id}")
+    console.print(f"periods: {manifest.periods}")
+    console.print(f"variables: {manifest.variables}")
+    console.print(f"view: {manifest.view}")
+    console.print(f"n_raw_top_level_items: {manifest.n_raw_top_level_items}")
+    console.print(f"n_facts: {manifest.n_facts}")
+    console.print(f"url: {manifest.url}")
+    console.print(f"raw_json: {manifest.raw_json_path}")
+    console.print(f"facts: {manifest.facts_path}")
+
+    if manifest.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in manifest.warnings:
+            console.print(f"- {warning}")

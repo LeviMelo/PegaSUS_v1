@@ -32,6 +32,26 @@ def test_deaths_over_population_is_legal_without_race_axis() -> None:
     assert result.failed_terms == []
 
 
+def test_sim_source_over_ibge_total_population_is_legal_when_not_race_specific() -> None:
+    index = _registry_index()
+
+    request = RateLegalityRequest(
+        numerator_carrier="Deaths",
+        denominator_carrier="Population",
+        role="mortality_rate",
+        numerator_unit="counts",
+        denominator_unit="person_years",
+        numerator_source_system="SIM-DO",
+        denominator_source_system="IBGE",
+        declaration_axis_required=False,
+    )
+
+    result = evaluate_rate_legality(request, index)
+
+    assert result.legal is True
+    assert "delta_declaration" not in result.failed_terms
+
+
 def test_sim_race_over_ibge_self_declared_denominator_is_illegal_without_bridge() -> None:
     index = _registry_index()
 
@@ -43,6 +63,7 @@ def test_sim_race_over_ibge_self_declared_denominator_is_illegal_without_bridge(
         denominator_unit="person_years",
         numerator_source_system="SIM-DO",
         denominator_source_system="IBGE",
+        declaration_axis_required=True,
     )
 
     result = evaluate_rate_legality(request, index)
@@ -63,6 +84,7 @@ def test_sim_race_over_ibge_self_declared_denominator_is_legal_with_bridge() -> 
         denominator_unit="person_years",
         numerator_source_system="SIM-DO",
         denominator_source_system="IBGE",
+        declaration_axis_required=True,
         bridge_applied="Bridge_R",
     )
 

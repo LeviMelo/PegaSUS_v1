@@ -31,6 +31,17 @@ from pegasus.sidra.workflow import fetch_sidra_query_to_disk
 
 from pegasus.sidra.population import write_sidra_population_denominator_table
 
+from pegasus.datasus.io import write_json
+from pegasus.sidra.diagnostics import diagnose_sidra_facts
+from pegasus.workflows.sidra_population import (
+    prepare_and_import_sidra_population_to_bundle,
+    prepare_sidra_population_denominator,
+)
+
+from pegasus.workflows.local_sidra_mortality import run_local_sim_sidra_mortality
+
+from pegasus.datasus.client_microdatasus import MicrodatasusRequest, ingest_microdatasus
+
 app = typer.Typer(help="PegaSUS epidemiological compiler CLI.")
 console = Console()
 
@@ -510,18 +521,357 @@ def sidra_population_export(
         "--source-label",
         help="Denominator source label.",
     ),
+    required_locality_level_id: str | None = typer.Option(
+        "6",
+        "--required-locality-level-id",
+        help="SIDRA territorial level code required for denominator export. Use 6 for Município.",
+    ),
 ) -> None:
     """Convert SIDRA population facts into a denominator table."""
-    out = write_sidra_population_denominator_table(
+    out, report = write_sidra_population_denominator_table(
         facts_path=facts_path,
         output_path=output_path,
         table_id=table_id,
         variable_id=variable_id,
         source_label=source_label,
+        required_locality_level_id=required_locality_level_id,
     )
-
-    df = pl.read_parquet(out)
 
     console.print("[green]SIDRA population denominator exported.[/green]")
     console.print(f"output: {out}")
-    console.print(f"rows: {df.height}")
+    console.print(f"rows: {report.n_output_rows}")
+    console.print(f"projection_report: {Path(out).with_suffix('.projection_report.json')}")
+
+    table = Table(title="SIDRA population projection")
+    table.add_column("Stage")
+    table.add_column("Rows", justify="right")
+
+    table.add_row("input_facts", str(report.n_input_facts))
+    table.add_row("after_table_filter", str(report.n_after_table_filter))
+    table.add_row("after_variable_filter", str(report.n_after_variable_filter))
+    table.add_row("after_locality_level_filter", str(report.n_after_locality_level_filter))
+    table.add_row("after_value_state_filter", str(report.n_after_value_state_filter))
+    table.add_row("output_rows", str(report.n_output_rows))
+
+    console.print(table)
+
+    if report.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {warning}")
+            
+
+
+@app.command("sidra-diagnose-facts")
+def sidra_diagnose_facts(
+    facts_path: Path = typer.Option(
+        ...,
+        "--facts",
+        help="SIDRA normalized facts Parquet.",
+    ),
+    output_json: Path | None = typer.Option(
+        None,
+        "--output-json",
+        help="Optional diagnostics JSON output path.",
+    ),
+) -> None:
+    """Diagnose normalized SIDRA facts."""
+    diagnostics = diagnose_sidra_facts(facts_path)
+
+    table = Table(title="SIDRA facts diagnostics")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+
+    table.add_row("rows", str(diagnostics.n_rows))
+    table.add_row("unique_tables", str(diagnostics.n_unique_tables))
+    table.add_row("unique_variables", str(diagnostics.n_unique_variables))
+    table.add_row("unique_periods", str(diagnostics.n_unique_periods))
+    table.add_row("unique_localities", str(diagnostics.n_unique_localities))
+    table.add_row("valid_values", str(diagnostics.n_valid_value))
+    table.add_row("null_values", str(diagnostics.n_null_value))
+    table.add_row("duplicate_measure_keys", str(diagnostics.n_duplicate_measure_keys))
+
+    console.print(table)
+
+    console.print("[bold]Locality levels:[/bold]")
+    console.print(diagnostics.locality_level_counts)
+
+    console.print("[bold]Value states:[/bold]")
+    console.print(diagnostics.value_state_counts)
+
+    if diagnostics.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in diagnostics.warnings:
+            console.print(f"- {warning}")
+
+    if output_json is not None:
+        write_json(output_json, diagnostics)
+        console.print(f"[green]Diagnostics written:[/green] {output_json}")
+        
+        
+        
+@app.command("sidra-population-prepare")
+def sidra_population_prepare(
+    spec: Path = typer.Option(..., "--spec", help="SIDRA population query spec."),
+    sidra_out_root: Path = typer.Option(..., "--sidra-out-root", help="SIDRA raw/facts output dir."),
+    denominator_output: Path = typer.Option(
+        ...,
+        "--denominator-output",
+        help="Output denominator Parquet.",
+    ),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    table_id: str | None = typer.Option(None, "--table-id"),
+    variable_id: str | None = typer.Option(None, "--variable-id"),
+    source_label: str = typer.Option("SIDRA_population", "--source-label"),
+    required_locality_level_id: str | None = typer.Option(
+        "6",
+        "--required-locality-level-id",
+    ),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+) -> None:
+    """Fetch SIDRA and produce a denominator table in one command."""
+    result = prepare_sidra_population_denominator(
+        root=root,
+        spec_path=spec,
+        sidra_out_root=sidra_out_root,
+        denominator_output_path=denominator_output,
+        table_id=table_id,
+        variable_id=variable_id,
+        source_label=source_label,
+        required_locality_level_id=required_locality_level_id,
+        use_cache=not no_cache,
+    )
+
+    console.print("[green]SIDRA population denominator prepared.[/green]")
+    console.print(f"facts: {result.facts_path}")
+    console.print(f"denominator: {result.denominator_path}")
+    console.print(f"projection_report: {result.projection_report_path}")
+    console.print(f"rows: {result.n_population_rows}")
+
+    if result.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in result.warnings:
+            console.print(f"- {warning}")
+            
+
+
+@app.command("sidra-population-import-bundle")
+def sidra_population_import_bundle(
+    run_dir: Path = typer.Option(..., "--run-dir", help="Existing PegaSUS run bundle."),
+    spec: Path = typer.Option(..., "--spec", help="SIDRA population query spec."),
+    sidra_out_root: Path = typer.Option(..., "--sidra-out-root", help="SIDRA raw/facts output dir."),
+    denominator_output: Path = typer.Option(
+        ...,
+        "--denominator-output",
+        help="Output denominator Parquet.",
+    ),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    table_id: str | None = typer.Option(None, "--table-id"),
+    variable_id: str | None = typer.Option(None, "--variable-id"),
+    source_label: str = typer.Option("SIDRA_population", "--source-label"),
+    required_locality_level_id: str | None = typer.Option(
+        "6",
+        "--required-locality-level-id",
+    ),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+) -> None:
+    """Fetch SIDRA population, export denominator, and import it into a run bundle."""
+    result = prepare_and_import_sidra_population_to_bundle(
+        root=root,
+        run_dir=run_dir,
+        spec_path=spec,
+        sidra_out_root=sidra_out_root,
+        denominator_output_path=denominator_output,
+        table_id=table_id,
+        variable_id=variable_id,
+        source_label=source_label,
+        required_locality_level_id=required_locality_level_id,
+        use_cache=not no_cache,
+    )
+
+    console.print("[green]SIDRA population imported into bundle.[/green]")
+    console.print(f"population_field_id: {result.population_field_id}")
+    console.print(f"denominator: {result.denominator_path}")
+    console.print(f"projection_report: {result.projection_report_path}")
+    console.print(f"rows: {result.n_population_rows}")
+
+    if result.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in result.warnings:
+            console.print(f"- {warning}")
+            
+            
+
+@app.command("local-sim-sidra-mortality")
+def local_sim_sidra_mortality(
+    raw_sim: Path = typer.Option(
+        ...,
+        "--raw-sim",
+        help="Raw/local SIM-DO CSV or Parquet file.",
+    ),
+    sidra_population_spec: Path = typer.Option(
+        ...,
+        "--sidra-population-spec",
+        help="SIDRA population query YAML/JSON spec.",
+    ),
+    sidra_out_root: Path = typer.Option(
+        ...,
+        "--sidra-out-root",
+        help="SIDRA raw/facts output directory.",
+    ),
+    sidra_denominator_output: Path = typer.Option(
+        ...,
+        "--sidra-denominator-output",
+        help="SIDRA-derived population denominator Parquet.",
+    ),
+    intent: Path = typer.Option(
+        Path("config/intents/alagoas_smoke.json"),
+        "--intent",
+        help="Intent JSON file.",
+    ),
+    processed_sim: Path | None = typer.Option(
+        None,
+        "--processed-sim",
+        help="Optional processed SIM-DO CSV or Parquet file.",
+    ),
+    normalization_input_kind: str = typer.Option(
+        "raw",
+        "--normalization-input",
+        help="raw or processed.",
+    ),
+    geography: str = typer.Option(
+        "residence",
+        "--geography",
+        help="residence or occurrence.",
+    ),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    sidra_table_id: str | None = typer.Option(None, "--sidra-table-id"),
+    sidra_variable_id: str | None = typer.Option(None, "--sidra-variable-id"),
+    population_source_label: str = typer.Option(
+        "SIDRA_population",
+        "--population-source-label",
+        help="Label for SIDRA population denominator.",
+    ),
+    required_locality_level_id: str | None = typer.Option(
+        "6",
+        "--required-locality-level-id",
+        help="SIDRA territorial level code required for denominator export.",
+    ),
+    no_sidra_cache: bool = typer.Option(
+        False,
+        "--no-sidra-cache",
+        help="Force SIDRA HTTP request instead of using raw JSON cache.",
+    ),
+) -> None:
+    """Run SIM-DO local file + SIDRA population → crude mortality vertical slice."""
+    if normalization_input_kind not in {"raw", "processed"}:
+        raise typer.BadParameter("normalization-input must be raw or processed.")
+
+    if geography not in {"residence", "occurrence"}:
+        raise typer.BadParameter("geography must be residence or occurrence.")
+
+    result = run_local_sim_sidra_mortality(
+        root=root,
+        intent_path=intent,
+        raw_sim_path=raw_sim,
+        processed_sim_path=processed_sim,
+        sidra_population_spec_path=sidra_population_spec,
+        sidra_out_root=sidra_out_root,
+        sidra_denominator_output_path=sidra_denominator_output,
+        normalization_input_kind=normalization_input_kind,  # type: ignore[arg-type]
+        geography=geography,  # type: ignore[arg-type]
+        sidra_table_id=sidra_table_id,
+        sidra_variable_id=sidra_variable_id,
+        population_source_label=population_source_label,
+        required_locality_level_id=required_locality_level_id,
+        use_sidra_cache=not no_sidra_cache,
+    )
+
+    console.print("[green]Local SIM + SIDRA mortality run complete.[/green]")
+    console.print(f"run_dir: {result.run_dir}")
+    console.print(f"normalized_sim: {result.normalized_sim_path}")
+    console.print(f"sidra_denominator: {result.sidra_denominator_path}")
+    console.print(f"sidra_projection_report: {result.sidra_projection_report_path}")
+    console.print(f"death_count_field_id: {result.death_count_field_id}")
+    console.print(f"population_field_id: {result.population_field_id}")
+    console.print(f"crude_mortality_field_id: {result.crude_mortality_field_id}")
+    console.print(f"summary: {result.summary_path}")
+    
+    
+    
+    
+@app.command("datasus-ingest")
+def datasus_ingest(
+    system: str = typer.Option(..., "--system", help="SIM-DO, SINASC, SIH-RD, or CNES-ST."),
+    uf: str = typer.Option(..., "--uf", help="UF code, e.g. AL."),
+    year_start: int = typer.Option(..., "--year-start"),
+    year_end: int | None = typer.Option(None, "--year-end"),
+    month_start: int | None = typer.Option(None, "--month-start"),
+    month_end: int | None = typer.Option(None, "--month-end"),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    rscript: str = typer.Option("Rscript", "--rscript", help="Rscript executable path."),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+    timeout_seconds: int = typer.Option(7200, "--timeout-seconds"),
+    heartbeat_timeout_seconds: int = typer.Option(900, "--heartbeat-timeout-seconds"),
+) -> None:
+    """Fetch/process DATASUS through R microdatasus and materialize raw/processed Parquet."""
+    from pegasus.datasus.client_microdatasus import normalize_datasus_system
+
+    normalized_system = normalize_datasus_system(system)
+
+    request = MicrodatasusRequest(
+        system=normalized_system,  # type: ignore[arg-type]
+        uf=uf,
+        year_start=year_start,
+        year_end=year_start if year_end is None else year_end,
+        month_start=month_start,
+        month_end=month_end,
+    )
+
+    manifest = ingest_microdatasus(
+        root=root,
+        request=request,
+        rscript_path=rscript,
+        timeout_seconds=timeout_seconds,
+        heartbeat_timeout_seconds=heartbeat_timeout_seconds,
+        use_cache=not no_cache,
+    )
+
+    if manifest.status == "ok":
+        console.print("[green]microdatasus ingestion complete.[/green]")
+    elif manifest.status == "raw_ok_process_error":
+        console.print("[yellow]microdatasus raw fetch succeeded; processing failed.[/yellow]")
+    else:
+        console.print("[red]microdatasus ingestion failed.[/red]")
+
+    console.print(f"system: {manifest.request.system}")
+    console.print(f"uf: {manifest.request.uf}")
+    console.print(f"period: {manifest.request.period_label()}")
+    console.print(f"request_hash: {manifest.request_hash}")
+    console.print(f"status: {manifest.status}")
+    console.print(f"manifest: {manifest.paths.final_manifest_json}")
+    console.print(f"raw_parquet: {manifest.paths.raw_parquet}")
+    console.print(f"processed_parquet: {manifest.paths.processed_parquet}")
+    console.print(f"raw_profile: {manifest.paths.raw_profile_json}")
+    console.print(f"processed_profile: {manifest.paths.processed_profile_json}")
+    console.print(f"comparison: {manifest.paths.comparison_json}")
+    console.print(f"r_stdout: {manifest.paths.stdout_log}")
+    console.print(f"r_stderr: {manifest.paths.stderr_log}")
+    console.print(f"r_work_dir: {manifest.paths.work_dir}")
+
+    if manifest.elapsed_seconds is not None:
+        console.print(f"elapsed_seconds: {manifest.elapsed_seconds}")
+
+    if manifest.raw_rows is not None:
+        console.print(f"raw_rows: {manifest.raw_rows}")
+
+    if manifest.processed_rows is not None:
+        console.print(f"processed_rows: {manifest.processed_rows}")
+
+    if manifest.error_message:
+        console.print(f"[red]error:[/red] {manifest.error_message}")
+
+    if manifest.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for warning in manifest.warnings:
+            console.print(f"- {warning}")

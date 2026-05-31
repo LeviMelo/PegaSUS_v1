@@ -1,0 +1,1777 @@
+{
+  "source_system": "SIM-DO",
+  "raw_n_rows": 25090,
+  "processed_n_rows": 25090,
+  "raw_only_columns": [],
+  "processed_only_columns": [
+    "IDADEanos",
+    "IDADEdias",
+    "IDADEhoras",
+    "IDADEmeses",
+    "IDADEminutos",
+    "munResAlt",
+    "munResArea",
+    "munResLat",
+    "munResLon",
+    "munResNome",
+    "munResStatus",
+    "munResTipo",
+    "munResUf"
+  ],
+  "common_columns": [
+    "ACIDTRAB",
+    "ALTCAUSA",
+    "ASSISTMED",
+    "ATESTADO",
+    "ATESTANTE",
+    "CAUSABAS",
+    "CAUSABAS_O",
+    "CAUSAMAT",
+    "CB_PRE",
+    "CIRCOBITO",
+    "CIRURGIA",
+    "CODESTAB",
+    "CODIFICADO",
+    "CODMUNNATU",
+    "CODMUNOCOR",
+    "CODMUNRES",
+    "COMUNSVOIM",
+    "CONTADOR",
+    "DIFDATA",
+    "DTATESTADO",
+    "DTCADASTRO",
+    "DTCADINF",
+    "DTCADINV",
+    "DTCONCASO",
+    "DTCONINV",
+    "DTINVESTIG",
+    "DTNASC",
+    "DTOBITO",
+    "DTRECEBIM",
+    "DTRECORIGA",
+    "ESC",
+    "ESC2010",
+    "ESCFALAGR1",
+    "ESCMAE",
+    "ESCMAE2010",
+    "ESCMAEAGR1",
+    "ESTABDESCR",
+    "ESTCIV",
+    "EXAME",
+    "FONTE",
+    "FONTEINV",
+    "FONTES",
+    "FONTESINF",
+    "GESTACAO",
+    "GRAVIDEZ",
+    "HORAOBITO",
+    "IDADE",
+    "IDADEMAE",
+    "LINHAA",
+    "LINHAB",
+    "LINHAC",
+    "LINHAD",
+    "LINHAII",
+    "LOCOCOR",
+    "MORTEPARTO",
+    "NATURAL",
+    "NECROPSIA",
+    "NUDIASINF",
+    "NUDIASOBCO",
+    "NUDIASOBIN",
+    "NUMEROLOTE",
+    "OBITOGRAV",
+    "OBITOPARTO",
+    "OBITOPUERP",
+    "OCUP",
+    "OCUPMAE",
+    "ORIGEM",
+    "PARTO",
+    "PESO",
+    "QTDFILMORT",
+    "QTDFILVIVO",
+    "RACACOR",
+    "SEMAGESTAC",
+    "SERIESCFAL",
+    "SERIESCMAE",
+    "SEXO",
+    "STCODIFICA",
+    "STDOEPIDEM",
+    "STDONOVA",
+    "TIPOBITO",
+    "TPMORTEOCO",
+    "TPNIVELINV",
+    "TPOBITOCOR",
+    "TPPOS",
+    "TPRESGINFO",
+    "VERSAOSCB",
+    "VERSAOSIST"
+  ],
+  "column_comparisons": [
+    {
+      "column": "IDADEanos",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "IDADEdias",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "IDADEhoras",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "IDADEmeses",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "IDADEminutos",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResAlt",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResArea",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResLat",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResLon",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResNome",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResStatus",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResTipo",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "munResUf",
+      "raw_present": false,
+      "processed_present": true,
+      "raw_dtype": null,
+      "processed_dtype": "String",
+      "raw_missing_rate": null,
+      "processed_missing_rate": null,
+      "raw_n_unique": null,
+      "processed_n_unique": null,
+      "raw_observed_kind": null,
+      "processed_observed_kind": null,
+      "flags": [
+        "processed_only"
+      ],
+      "warnings": [
+        "processed_column_absent_from_raw"
+      ]
+    },
+    {
+      "column": "ACIDTRAB",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9809087285771224,
+      "processed_missing_rate": 0.9849740932642487,
+      "raw_n_unique": 3,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "ALTCAUSA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.974730968513352,
+      "processed_missing_rate": 0.974730968513352,
+      "raw_n_unique": 2,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ASSISTMED",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.40741331207652454,
+      "processed_missing_rate": 0.4380629732961339,
+      "raw_n_unique": 3,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "ATESTADO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 17614,
+      "processed_n_unique": 17614,
+      "raw_observed_kind": "string_like",
+      "processed_observed_kind": "string_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ATESTANTE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.004503786369071343,
+      "processed_missing_rate": 0.004503786369071343,
+      "raw_n_unique": 5,
+      "processed_n_unique": 5,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "CAUSABAS",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 1511,
+      "processed_n_unique": 1511,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CAUSABAS_O",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 7.971303308090873e-05,
+      "processed_missing_rate": 7.971303308090873e-05,
+      "raw_n_unique": 1470,
+      "processed_n_unique": 1470,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CAUSAMAT",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 1.0,
+      "processed_missing_rate": 1.0,
+      "raw_n_unique": 0,
+      "processed_n_unique": 0,
+      "raw_observed_kind": "empty",
+      "processed_observed_kind": "empty",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CB_PRE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 1.0,
+      "processed_missing_rate": 1.0,
+      "raw_n_unique": 0,
+      "processed_n_unique": 0,
+      "raw_observed_kind": "empty",
+      "processed_observed_kind": "empty",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CIRCOBITO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9015145476285372,
+      "processed_missing_rate": 0.9123555201275408,
+      "raw_n_unique": 5,
+      "processed_n_unique": 4,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "CIRURGIA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9994420087684336,
+      "processed_missing_rate": 0.9995217218015146,
+      "raw_n_unique": 2,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "cardinality_changed",
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "cardinality_changed:raw=2;processed=1",
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "CODESTAB",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.3151056197688322,
+      "processed_missing_rate": 0.3151056197688322,
+      "raw_n_unique": 252,
+      "processed_n_unique": 252,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CODIFICADO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 2,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CODMUNNATU",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.1087285771223595,
+      "processed_missing_rate": 0.1087285771223595,
+      "raw_n_unique": 630,
+      "processed_n_unique": 630,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CODMUNOCOR",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 197,
+      "processed_n_unique": 197,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CODMUNRES",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 103,
+      "processed_n_unique": 103,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "COMUNSVOIM",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.8358708648864089,
+      "processed_missing_rate": 0.8358708648864089,
+      "raw_n_unique": 35,
+      "processed_n_unique": 35,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "CONTADOR",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 25090,
+      "processed_n_unique": 25090,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DIFDATA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 808,
+      "processed_n_unique": 808,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTATESTADO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0007971303308090873,
+      "processed_missing_rate": 0.0007971303308090873,
+      "raw_n_unique": 384,
+      "processed_n_unique": 384,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTCADASTRO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 422,
+      "processed_n_unique": 422,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTCADINF",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.974730968513352,
+      "processed_missing_rate": 0.974730968513352,
+      "raw_n_unique": 246,
+      "processed_n_unique": 246,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTCADINV",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9479872459147071,
+      "processed_missing_rate": 0.9479872459147071,
+      "raw_n_unique": 306,
+      "processed_n_unique": 306,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTCONCASO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9756078118772419,
+      "processed_missing_rate": 0.9756078118772419,
+      "raw_n_unique": 254,
+      "processed_n_unique": 254,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTCONINV",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9482662415304902,
+      "processed_missing_rate": 0.9482662415304902,
+      "raw_n_unique": 321,
+      "processed_n_unique": 321,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTINVESTIG",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.820007971303308,
+      "processed_missing_rate": 0.820007971303308,
+      "raw_n_unique": 498,
+      "processed_n_unique": 498,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTNASC",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0007971303308090873,
+      "processed_missing_rate": 0.0007971303308090873,
+      "raw_n_unique": 15752,
+      "processed_n_unique": 15752,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTOBITO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 365,
+      "processed_n_unique": 365,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTRECEBIM",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 3.9856516540454363e-05,
+      "processed_missing_rate": 3.9856516540454363e-05,
+      "raw_n_unique": 463,
+      "processed_n_unique": 463,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "DTRECORIGA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 355,
+      "processed_n_unique": 355,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "date_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ESC",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.2537265842965325,
+      "processed_missing_rate": 0.397807891590275,
+      "raw_n_unique": 6,
+      "processed_n_unique": 5,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "missingness_changed",
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "missingness_changed:raw=0.2537;processed=0.3978",
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "ESC2010",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.254563571143882,
+      "processed_missing_rate": 0.254563571143882,
+      "raw_n_unique": 7,
+      "processed_n_unique": 7,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ESCFALAGR1",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.254563571143882,
+      "processed_missing_rate": 0.254563571143882,
+      "raw_n_unique": 13,
+      "processed_n_unique": 13,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ESCMAE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9811080111598246,
+      "processed_missing_rate": 0.9828218413710642,
+      "raw_n_unique": 6,
+      "processed_n_unique": 5,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "ESCMAE2010",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9811080111598246,
+      "processed_missing_rate": 0.9811080111598246,
+      "raw_n_unique": 7,
+      "processed_n_unique": 7,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ESCMAEAGR1",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9811080111598246,
+      "processed_missing_rate": 0.9811080111598246,
+      "raw_n_unique": 13,
+      "processed_n_unique": 13,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ESTABDESCR",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 1.0,
+      "processed_missing_rate": 1.0,
+      "raw_n_unique": 0,
+      "processed_n_unique": 0,
+      "raw_observed_kind": "empty",
+      "processed_observed_kind": "empty",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "ESTCIV",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.21666002391390993,
+      "processed_missing_rate": 0.3076524511757672,
+      "raw_n_unique": 6,
+      "processed_n_unique": 5,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "missingness_changed",
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "missingness_changed:raw=0.2167;processed=0.3077",
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "EXAME",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9994420087684336,
+      "processed_missing_rate": 0.9995217218015146,
+      "raw_n_unique": 2,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "cardinality_changed",
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "cardinality_changed:raw=2;processed=1",
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "FONTE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9592267835791152,
+      "processed_missing_rate": 0.9621761658031088,
+      "raw_n_unique": 5,
+      "processed_n_unique": 4,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "FONTEINV",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.8257473096851335,
+      "processed_missing_rate": 0.8258668792347549,
+      "raw_n_unique": 9,
+      "processed_n_unique": 8,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "FONTES",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.974730968513352,
+      "processed_missing_rate": 0.974730968513352,
+      "raw_n_unique": 18,
+      "processed_n_unique": 18,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "FONTESINF",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 1.0,
+      "processed_missing_rate": 1.0,
+      "raw_n_unique": 0,
+      "processed_n_unique": 0,
+      "raw_observed_kind": "empty",
+      "processed_observed_kind": "empty",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "GESTACAO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9804304503786369,
+      "processed_missing_rate": 0.9807094459944201,
+      "raw_n_unique": 7,
+      "processed_n_unique": 6,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "GRAVIDEZ",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9780789159027501,
+      "processed_missing_rate": 0.9784376245516142,
+      "raw_n_unique": 4,
+      "processed_n_unique": 3,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "HORAOBITO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.03658828218413711,
+      "processed_missing_rate": 0.03658828218413711,
+      "raw_n_unique": 1418,
+      "processed_n_unique": 1418,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "IDADE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.00023913909924272618,
+      "raw_n_unique": 197,
+      "processed_n_unique": 196,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "IDADEMAE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9797528895974492,
+      "processed_missing_rate": 0.9797528895974492,
+      "raw_n_unique": 34,
+      "processed_n_unique": 34,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "LINHAA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.037146273415703465,
+      "processed_missing_rate": 0.037146273415703465,
+      "raw_n_unique": 965,
+      "processed_n_unique": 965,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "LINHAB",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.2165005978477481,
+      "processed_missing_rate": 0.2165005978477481,
+      "raw_n_unique": 1608,
+      "processed_n_unique": 1608,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "LINHAC",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.504304503786369,
+      "processed_missing_rate": 0.504304503786369,
+      "raw_n_unique": 1360,
+      "processed_n_unique": 1360,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "LINHAD",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.7747708250298924,
+      "processed_missing_rate": 0.7747708250298924,
+      "raw_n_unique": 968,
+      "processed_n_unique": 968,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "LINHAII",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.5950976484655242,
+      "processed_missing_rate": 0.5950976484655242,
+      "raw_n_unique": 2840,
+      "processed_n_unique": 2840,
+      "raw_observed_kind": "string_like",
+      "processed_observed_kind": "string_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "LOCOCOR",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0005978477481068154,
+      "raw_n_unique": 6,
+      "processed_n_unique": 5,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "MORTEPARTO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.974730968513352,
+      "processed_missing_rate": 0.974730968513352,
+      "raw_n_unique": 4,
+      "processed_n_unique": 4,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "NATURAL",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.10597847748106816,
+      "processed_missing_rate": 0.10617776006377043,
+      "raw_n_unique": 33,
+      "processed_n_unique": 28,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "NECROPSIA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.4149461937026704,
+      "processed_missing_rate": 0.4294938222399362,
+      "raw_n_unique": 3,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "NUDIASINF",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 1.0,
+      "processed_missing_rate": 1.0,
+      "raw_n_unique": 0,
+      "processed_n_unique": 0,
+      "raw_observed_kind": "empty",
+      "processed_observed_kind": "empty",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "NUDIASOBCO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9482662415304902,
+      "processed_missing_rate": 0.9482662415304902,
+      "raw_n_unique": 229,
+      "processed_n_unique": 229,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "NUDIASOBIN",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 1.0,
+      "processed_missing_rate": 1.0,
+      "raw_n_unique": 0,
+      "processed_n_unique": 0,
+      "raw_observed_kind": "empty",
+      "processed_observed_kind": "empty",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "NUMEROLOTE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 182,
+      "processed_n_unique": 182,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "OBITOGRAV",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9360701474691112,
+      "processed_missing_rate": 0.9500597847748107,
+      "raw_n_unique": 3,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "OBITOPARTO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9783977680350737,
+      "processed_missing_rate": 0.9789956157831805,
+      "raw_n_unique": 2,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "cardinality_changed",
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "cardinality_changed:raw=2;processed=1",
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "OBITOPUERP",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9360701474691112,
+      "processed_missing_rate": 0.9500597847748107,
+      "raw_n_unique": 4,
+      "processed_n_unique": 3,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "OCUP",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.4086488640892786,
+      "processed_missing_rate": 0.6728577122359506,
+      "raw_n_unique": 495,
+      "processed_n_unique": 489,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "missingness_changed",
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "missingness_changed:raw=0.4086;processed=0.6729",
+        "observed_kind_changed:raw=date_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "OCUPMAE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9840573933838183,
+      "processed_missing_rate": 0.993423674770825,
+      "raw_n_unique": 58,
+      "processed_n_unique": 54,
+      "raw_observed_kind": "date_like",
+      "processed_observed_kind": "string_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=date_like;processed=string_like"
+      ]
+    },
+    {
+      "column": "ORIGEM",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 1,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "PARTO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9783977680350737,
+      "processed_missing_rate": 0.9788361897170187,
+      "raw_n_unique": 3,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "PESO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9795137504982064,
+      "processed_missing_rate": 0.9795137504982064,
+      "raw_n_unique": 392,
+      "processed_n_unique": 392,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "QTDFILMORT",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9823037066560383,
+      "processed_missing_rate": 0.9823037066560383,
+      "raw_n_unique": 6,
+      "processed_n_unique": 6,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "QTDFILVIVO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9806695894778796,
+      "processed_missing_rate": 0.9806695894778796,
+      "raw_n_unique": 12,
+      "processed_n_unique": 12,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "RACACOR",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.11889198884017536,
+      "processed_missing_rate": 0.11889198884017536,
+      "raw_n_unique": 5,
+      "processed_n_unique": 5,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "SEMAGESTAC",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9804304503786369,
+      "processed_missing_rate": 0.9804304503786369,
+      "raw_n_unique": 32,
+      "processed_n_unique": 32,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "SERIESCFAL",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.8390593862096453,
+      "processed_missing_rate": 0.8390593862096453,
+      "raw_n_unique": 8,
+      "processed_n_unique": 8,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "SERIESCMAE",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9940215225189318,
+      "processed_missing_rate": 0.9940215225189318,
+      "raw_n_unique": 8,
+      "processed_n_unique": 8,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "SEXO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.00023913909924272618,
+      "raw_n_unique": 3,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "STCODIFICA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 3.9856516540454363e-05,
+      "processed_missing_rate": 3.9856516540454363e-05,
+      "raw_n_unique": 2,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "STDOEPIDEM",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 1,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "STDONOVA",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 1,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "TIPOBITO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 1,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [
+        "observed_kind_changed"
+      ],
+      "warnings": [
+        "observed_kind_changed:raw=numeric_like;processed=categorical_like"
+      ]
+    },
+    {
+      "column": "TPMORTEOCO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9361100039856517,
+      "processed_missing_rate": 0.9361100039856517,
+      "raw_n_unique": 7,
+      "processed_n_unique": 7,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "TPNIVELINV",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9479872459147071,
+      "processed_missing_rate": 0.9479872459147071,
+      "raw_n_unique": 1,
+      "processed_n_unique": 1,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "TPOBITOCOR",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9479872459147071,
+      "processed_missing_rate": 0.9479872459147071,
+      "raw_n_unique": 8,
+      "processed_n_unique": 8,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "TPPOS",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.6975687524910322,
+      "processed_missing_rate": 0.6975687524910322,
+      "raw_n_unique": 2,
+      "processed_n_unique": 2,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "TPRESGINFO",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.9974491829414109,
+      "processed_missing_rate": 0.9974491829414109,
+      "raw_n_unique": 3,
+      "processed_n_unique": 3,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "VERSAOSCB",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0006775607811877242,
+      "processed_missing_rate": 0.0006775607811877242,
+      "raw_n_unique": 4,
+      "processed_n_unique": 4,
+      "raw_observed_kind": "numeric_like",
+      "processed_observed_kind": "numeric_like",
+      "flags": [],
+      "warnings": []
+    },
+    {
+      "column": "VERSAOSIST",
+      "raw_present": true,
+      "processed_present": true,
+      "raw_dtype": "String",
+      "processed_dtype": "String",
+      "raw_missing_rate": 0.0,
+      "processed_missing_rate": 0.0,
+      "raw_n_unique": 4,
+      "processed_n_unique": 4,
+      "raw_observed_kind": "categorical_like",
+      "processed_observed_kind": "categorical_like",
+      "flags": [],
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}

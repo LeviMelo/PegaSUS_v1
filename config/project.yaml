@@ -1,0 +1,7 @@
+﻿project:
+  name: "PegaSUS"
+  package_name: "pegasus"
+  version: "0.1.0"
+  registry_version: "v1.0.2"
+  timezone: "America/Maceio"
+  default_locale: "pt-BR"

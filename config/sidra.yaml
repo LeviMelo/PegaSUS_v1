@@ -1,0 +1,22 @@
+﻿sidra:
+  base_url: "https://servicodados.ibge.gov.br/api/v3/agregados"
+  max_cells_per_request: 49900
+  view_mode: "flat"
+
+  concurrency: 16
+  timeout_seconds: 60
+
+  retry_status_codes:
+    - 429
+    - 500
+    - 502
+    - 503
+    - 504
+
+  max_retries: 5
+  backoff_initial_seconds: 0.25
+  backoff_max_seconds: 10.0
+
+  persist_raw_chunks: true
+  persist_normalized_facts: true
+  persist_full_tables_by_default: false

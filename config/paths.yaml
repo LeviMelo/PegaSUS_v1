@@ -1,0 +1,16 @@
+﻿paths:
+  root: "."
+  data_root: "data"
+
+  raw: "data/raw"
+  processed: "data/processed"
+  metadata: "data/metadata"
+  cache: "data/cache"
+  manifests: "data/manifests"
+  intermediate: "data/intermediate"
+  runs: "data/runs"
+  diagnostics: "data/diagnostics"
+
+  config: "config"
+  registries: "config/registries"
+  intents: "config/intents"

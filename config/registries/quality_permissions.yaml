@@ -1,0 +1,103 @@
+﻿schema_version: "1.0"
+registry_version: "v1.0.2"
+created_at: "2026-05-31"
+updated_at: "2026-05-31"
+provenance: "PegaSUS v1.0 production contract"
+
+entries:
+  - id: "verified"
+    status: "stable"
+    description: "Verified field; normal modeling and dashboard use allowed."
+    state: "verified"
+    permissions:
+      model_outcome: true
+      model_covariate: true
+      generate_rn: true
+      icd_descend: true
+      dashboard_safe: true
+      hsic_scan: true
+    warnings: []
+
+  - id: "fragile"
+    status: "stable"
+    description: "Fragile field; modeling allowed with warnings, RN generation blocked by default."
+    state: "fragile"
+    permissions:
+      model_outcome: true
+      model_covariate: true
+      generate_rn: false
+      icd_descend: true
+      dashboard_safe: "warning"
+      hsic_scan: true
+    warnings:
+      - "fragile_field"
+
+  - id: "forced_fragile"
+    status: "stable"
+    description: "Forced field preserved by user/developer selector; descendants inherit warning."
+    state: "forced_fragile"
+    permissions:
+      model_outcome: true
+      model_covariate: true
+      generate_rn: false
+      icd_descend: false
+      dashboard_safe: false
+      hsic_scan: false
+    warnings:
+      - "forced_fragile"
+
+  - id: "quarantined_descriptive"
+    status: "stable"
+    description: "Descriptive-only field; cannot drive inferential discovery."
+    state: "quarantined_descriptive"
+    permissions:
+      model_outcome: false
+      model_covariate: true
+      generate_rn: false
+      icd_descend: false
+      dashboard_safe: false
+      hsic_scan: false
+    warnings:
+      - "quarantined_descriptive"
+
+  - id: "quarantined_nochildren"
+    status: "stable"
+    description: "Field can be reported but cannot generate children."
+    state: "quarantined_nochildren"
+    permissions:
+      model_outcome: false
+      model_covariate: false
+      generate_rn: false
+      icd_descend: false
+      dashboard_safe: false
+      hsic_scan: false
+    warnings:
+      - "quarantined_nochildren"
+
+  - id: "illegal_excluded"
+    status: "stable"
+    description: "Illegal or excluded field."
+    state: "illegal_excluded"
+    permissions:
+      model_outcome: false
+      model_covariate: false
+      generate_rn: false
+      icd_descend: false
+      dashboard_safe: false
+      hsic_scan: false
+    warnings:
+      - "illegal_excluded"
+
+  - id: "blocked_solver_pending"
+    status: "stable"
+    description: "Blueprint-locked module exists but solver is not enabled or not complete."
+    state: "blocked_solver_pending"
+    permissions:
+      model_outcome: false
+      model_covariate: false
+      generate_rn: false
+      icd_descend: false
+      dashboard_safe: false
+      hsic_scan: false
+    warnings:
+      - "blocked_solver_pending"

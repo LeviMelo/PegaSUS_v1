@@ -1,0 +1,17 @@
+﻿datasus:
+  backend: "microdatasus"
+  rscript_path: "Rscript"
+
+  preserve_raw: true
+  preserve_processed: true
+
+  systems:
+    - "SIM-DO"
+    - "SINASC"
+    - "SIH-RD"
+    - "CNES-ST"
+
+  optional_ftp_discovery: false
+
+  r_timeout_seconds: 7200
+  heartbeat_timeout_seconds: 900

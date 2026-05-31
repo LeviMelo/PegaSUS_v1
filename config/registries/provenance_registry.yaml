@@ -1,0 +1,55 @@
+﻿schema_version: "1.0"
+registry_version: "v1.0.2"
+created_at: "2026-05-31"
+updated_at: "2026-05-31"
+provenance: "PegaSUS v1.0 production contract"
+
+primitive:
+  - "official"
+  - "harmonized"
+  - "deflated"
+  - "AMC_contracted"
+  - "geneallocated"
+  - "reconstructed"
+  - "SIM_informed_denominator_prior"
+  - "latent"
+  - "synthetic"
+  - "forced_fragile"
+  - "bridge_derived"
+  - "model_derived"
+  - "observer_rerouted"
+  - "bayesian_race_axis_bridge"
+  - "civil_health_measurement_comparison"
+
+rules:
+  - id: "latent_dashboard_unsafe"
+    if_any_parent: "latent"
+    child_warning: "latent_warning_inherited"
+    dashboard_safe: false
+
+  - id: "sim_informed_denom_with_sim_numerator"
+    if_any_parent: "SIM_informed_denominator_prior"
+    with_numerator_source: "SIM"
+    child_warning: "SIM_denominator_feedback_risk"
+    dashboard_safe: "warning"
+
+  - id: "observer_rerouted_blocks_disease_outcome"
+    if_any_parent: "observer_rerouted"
+    blocked_role: "disease_outcome"
+    child_warning: "observer_rerouted_no_disease_outcome"
+    dashboard_safe: false
+
+  - id: "geneallocated_warning"
+    if_any_parent: "geneallocated"
+    child_warning: "geneallocated_support_warning"
+    dashboard_safe: "warning"
+
+  - id: "bridge_requires_interpretation_label"
+    if_any_parent: "bridge_derived"
+    child_warning: "bridge_derived_interpretation_required"
+    dashboard_safe: "warning"
+
+  - id: "synthetic_model_only"
+    if_any_parent: "synthetic"
+    child_warning: "synthetic_model_only"
+    dashboard_safe: false

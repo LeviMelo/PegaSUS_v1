@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+env/
+.conda/
+
+# Local secrets
+.env
+.env.*
+
+# Data lake artifacts
+data/raw/**
+data/processed/**
+data/cache/**
+data/intermediate/**
+data/runs/**
+data/diagnostics/**
+data/manifests/**
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/cache/.gitkeep
+!data/intermediate/.gitkeep
+!data/runs/.gitkeep
+!data/diagnostics/.gitkeep
+!data/manifests/.gitkeep
+
+# Logs
+*.log
+
+# VSCode
+.vscode/

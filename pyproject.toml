@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pegasus"
+version = "0.1.0"
+description = "PegaSUS: compiler-like epidemiological engine for Brazilian public-health data"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "PegaSUS Development Team" }
+]
+dependencies = [
+    "pydantic>=2",
+    "pydantic-settings",
+    "typer",
+    "rich",
+    "pyyaml",
+    "httpx",
+    "aiofiles",
+    "tenacity",
+    "orjson",
+    "loguru",
+    "tqdm",
+    "numpy",
+    "scipy",
+    "pandas",
+    "polars",
+    "pyarrow",
+    "duckdb",
+    "networkx",
+    "geopandas",
+    "shapely",
+    "pyproj",
+    "python-dotenv"
+]
+
+[project.scripts]
+pegasus = "pegasus.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

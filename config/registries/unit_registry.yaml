@@ -1,0 +1,69 @@
+﻿schema_version: "1.0"
+registry_version: "v1.0.2"
+created_at: "2026-05-31"
+updated_at: "2026-05-31"
+provenance: "PegaSUS v1.0 production contract"
+
+entries:
+  - id: "counts_over_person_years"
+    status: "stable"
+    description: "Count numerator divided by person-years."
+    numerator_unit: "counts"
+    denominator_unit: "person_years"
+    output_unit: "rate"
+    legal_roles:
+      - "mortality_rate"
+      - "hospitalization_rate"
+      - "birth_rate"
+      - "capacity_density"
+      - "facility_density"
+      - "workforce_density"
+    warnings: []
+
+  - id: "counts_over_counts"
+    status: "stable"
+    description: "Count numerator divided by count denominator."
+    numerator_unit: "counts"
+    denominator_unit: "counts"
+    output_unit: "proportion"
+    legal_roles:
+      - "infant_mortality"
+      - "neonatal_mortality"
+      - "postneonatal_mortality"
+      - "maternal_mortality"
+      - "inpatient_mortality"
+      - "icu_use_share"
+      - "birth_outcome_share"
+      - "delivery_share"
+      - "anomaly_prevalence"
+    warnings: []
+
+  - id: "currency_over_counts"
+    status: "stable"
+    description: "Currency divided by event count."
+    numerator_unit: "currency_real"
+    denominator_unit: "counts"
+    output_unit: "mean_cost"
+    legal_roles:
+      - "mean_cost"
+    warnings: []
+
+  - id: "days_over_counts"
+    status: "stable"
+    description: "Hospital-days divided by admission count."
+    numerator_unit: "days"
+    denominator_unit: "counts"
+    output_unit: "mean_duration"
+    legal_roles:
+      - "mean_LOS"
+    warnings: []
+
+  - id: "grams_over_counts"
+    status: "stable"
+    description: "Birth weight in grams divided by birth count."
+    numerator_unit: "grams"
+    denominator_unit: "counts"
+    output_unit: "mean_weight"
+    legal_roles:
+      - "mean_birth_weight"
+    warnings: []

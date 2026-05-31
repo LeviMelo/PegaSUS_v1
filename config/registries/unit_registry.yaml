@@ -15,9 +15,7 @@ entries:
       - "mortality_rate"
       - "hospitalization_rate"
       - "birth_rate"
-      - "capacity_density"
-      - "facility_density"
-      - "workforce_density"
+      - "fertility_rate"
     warnings: []
 
   - id: "counts_over_counts"
@@ -66,4 +64,45 @@ entries:
     output_unit: "mean_weight"
     legal_roles:
       - "mean_birth_weight"
+    warnings: []
+
+  - id: "beds_over_person_years"
+    status: "stable"
+    description: "Beds divided by population/person-years."
+    numerator_unit: "beds"
+    denominator_unit: "person_years"
+    output_unit: "capacity_density"
+    legal_roles:
+      - "capacity_density"
+    warnings: []
+
+  - id: "facilities_over_person_years"
+    status: "stable"
+    description: "Facilities divided by population/person-years."
+    numerator_unit: "facilities"
+    denominator_unit: "person_years"
+    output_unit: "facility_density"
+    legal_roles:
+      - "facility_density"
+    warnings: []
+
+  - id: "physicians_over_person_years"
+    status: "stable"
+    description: "Physicians divided by population/person-years."
+    numerator_unit: "physicians"
+    denominator_unit: "person_years"
+    output_unit: "workforce_density"
+    legal_roles:
+      - "workforce_density"
+    warnings: []
+
+  - id: "domiciles_over_domiciles"
+    status: "stable"
+    description: "Domiciles with a condition divided by total domiciles."
+    numerator_unit: "domiciles"
+    denominator_unit: "domiciles"
+    output_unit: "coverage"
+    legal_roles:
+      - "sanitation_coverage"
+      - "household_coverage"
     warnings: []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -14,6 +15,16 @@ from pegasus.sidra.models import SIDRAQuerySpec
 
 class SIDRAClientError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class SIDRAHTTPResult:
+    url: str
+    payload: Any
+    elapsed_seconds: float
+    download_bytes: int
+    status_code: int
+    attempts: int
 
 
 class SIDRAClient:
@@ -55,19 +66,31 @@ class SIDRAClient:
     def cache_key(self, spec: SIDRAQuerySpec) -> str:
         return sha256_json(spec.model_dump(mode="json"))
 
-    def fetch_json(self, spec: SIDRAQuerySpec) -> tuple[str, Any]:
+    def fetch_json(self, spec: SIDRAQuerySpec) -> SIDRAHTTPResult:
         url = self.build_url(spec)
         last_error: Exception | None = None
+        start = time.perf_counter()
 
         for attempt in range(self.max_retries + 1):
             try:
                 response = httpx.get(url, timeout=self.timeout_seconds)
+                elapsed = time.perf_counter() - start
+                download_bytes = len(response.content)
 
                 if response.status_code == 200:
                     try:
-                        return url, response.json()
+                        payload = response.json()
                     except json.JSONDecodeError as exc:
                         raise SIDRAClientError(f"SIDRA returned non-JSON response: {url}") from exc
+
+                    return SIDRAHTTPResult(
+                        url=url,
+                        payload=payload,
+                        elapsed_seconds=elapsed,
+                        download_bytes=download_bytes,
+                        status_code=response.status_code,
+                        attempts=attempt + 1,
+                    )
 
                 if response.status_code in {429, 500, 502, 503, 504}:
                     raise SIDRAClientError(
@@ -99,3 +122,10 @@ def write_raw_sidra_json(path: str | Path, payload: Any) -> None:
 
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def read_raw_sidra_json(path: str | Path) -> Any:
+    path = Path(path)
+
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)

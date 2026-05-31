@@ -26,8 +26,15 @@ class SIDRAFetchManifest(BaseModel):
     view: str
     url: str
     cache_key: str
+
+    cache_hit: bool
+    download_bytes: int | None = None
+    timings_seconds: dict[str, float] = Field(default_factory=dict)
+
     raw_json_path: str
     facts_path: str
+    manifest_path: str
+
     n_raw_top_level_items: int | None = None
     n_facts: int
     empty_result: bool

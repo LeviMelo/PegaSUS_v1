@@ -4,7 +4,7 @@ import json
 import platform
 import shutil
 from pathlib import Path
-
+import polars as pl
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -28,6 +28,8 @@ from pegasus.workflows.population import import_population_to_bundle
 from pegasus.workflows.local_smoke import run_local_sim_mortality_smoke
 
 from pegasus.sidra.workflow import fetch_sidra_query_to_disk
+
+from pegasus.sidra.population import write_sidra_population_denominator_table
 
 app = typer.Typer(help="PegaSUS epidemiological compiler CLI.")
 console = Console()
@@ -435,6 +437,11 @@ def sidra_fetch(
         "--allow-empty",
         help="Allow zero-fact SIDRA results without failing.",
     ),
+    no_cache: bool = typer.Option(
+        False,
+        "--no-cache",
+        help="Force HTTP request even when raw JSON cache exists.",
+    ),
 ) -> None:
     """Fetch a SIDRA query, persist raw JSON, normalize facts, and write manifest."""
     manifest = fetch_sidra_query_to_disk(
@@ -442,6 +449,7 @@ def sidra_fetch(
         spec_path=spec,
         out_root=out_root,
         allow_empty=allow_empty,
+        use_cache=not no_cache,
     )
 
     console.print("[green]SIDRA fetch complete.[/green]")
@@ -449,13 +457,71 @@ def sidra_fetch(
     console.print(f"periods: {manifest.periods}")
     console.print(f"variables: {manifest.variables}")
     console.print(f"view: {manifest.view}")
+    console.print(f"cache_hit: {manifest.cache_hit}")
+    console.print(f"download_bytes: {manifest.download_bytes}")
     console.print(f"n_raw_top_level_items: {manifest.n_raw_top_level_items}")
     console.print(f"n_facts: {manifest.n_facts}")
     console.print(f"url: {manifest.url}")
     console.print(f"raw_json: {manifest.raw_json_path}")
     console.print(f"facts: {manifest.facts_path}")
+    console.print(f"manifest: {manifest.manifest_path}")
+
+    if manifest.timings_seconds:
+        table = Table(title="SIDRA timings")
+        table.add_column("Stage")
+        table.add_column("Seconds", justify="right")
+
+        for stage, seconds in manifest.timings_seconds.items():
+            table.add_row(stage, f"{seconds:.6f}")
+
+        console.print(table)
 
     if manifest.warnings:
         console.print("[yellow]Warnings:[/yellow]")
         for warning in manifest.warnings:
             console.print(f"- {warning}")
+            
+            
+            
+@app.command("sidra-population-export")
+def sidra_population_export(
+    facts_path: Path = typer.Option(
+        ...,
+        "--facts",
+        help="SIDRA normalized facts Parquet.",
+    ),
+    output_path: Path = typer.Option(
+        ...,
+        "--output",
+        help="Output population denominator Parquet.",
+    ),
+    table_id: str | None = typer.Option(
+        None,
+        "--table-id",
+        help="Optional SIDRA table filter.",
+    ),
+    variable_id: str | None = typer.Option(
+        None,
+        "--variable-id",
+        help="Optional SIDRA variable filter.",
+    ),
+    source_label: str = typer.Option(
+        "SIDRA_population",
+        "--source-label",
+        help="Denominator source label.",
+    ),
+) -> None:
+    """Convert SIDRA population facts into a denominator table."""
+    out = write_sidra_population_denominator_table(
+        facts_path=facts_path,
+        output_path=output_path,
+        table_id=table_id,
+        variable_id=variable_id,
+        source_label=source_label,
+    )
+
+    df = pl.read_parquet(out)
+
+    console.print("[green]SIDRA population denominator exported.[/green]")
+    console.print(f"output: {out}")
+    console.print(f"rows: {df.height}")

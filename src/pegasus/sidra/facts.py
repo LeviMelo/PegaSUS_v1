@@ -8,7 +8,7 @@ from typing import Any
 import polars as pl
 
 from pegasus.core.hashing import content_hash
-from pegasus.sidra.schemas import SIDRAChunk, SIDRAFactRow
+from pegasus.sidra.schemas import SIDRAFactRow
 
 
 def utc_now() -> str:
@@ -45,7 +45,7 @@ def _tuple_from_pairs(value: Any) -> tuple[tuple[str, str], ...]:
     if value is None:
         return tuple()
     if isinstance(value, tuple):
-        return value
+        return tuple(tuple(map(str, x)) for x in value)
     if isinstance(value, list):
         return tuple(tuple(map(str, x)) for x in value)
     if isinstance(value, dict):
@@ -77,6 +77,10 @@ def normalize_flat_records_to_facts(
         if not variable_id:
             continue
 
+        unit = unit_by_variable.get(variable_id)
+        if unit is None and record.get("unit") is not None:
+            unit = str(record.get("unit"))
+
         facts.append(
             SIDRAFactRow(
                 table_id=str(record.get("table_id") or table_id),
@@ -89,7 +93,7 @@ def normalize_flat_records_to_facts(
                 value_raw=None if record.get("value") is None else str(record.get("value")),
                 value_numeric=value_numeric,
                 value_status=status,
-                unit=unit_by_variable.get(variable_id),
+                unit=unit,
                 request_hash=request_hash,
                 metadata_hash=metadata_hash,
                 fetched_at=fetched_at,

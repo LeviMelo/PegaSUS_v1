@@ -2,11 +2,31 @@ schema_version: '1.0'
 registry_version: v1.0
 created_at: '2026-06-06'
 updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for sidra_views.yaml; not a calibrated analytic
-  registry.
+provenance: Slice 2B SIDRA extraction view registry. Manual entries are extraction-policy
+  declarations, not official metadata truth.
 entries:
-- id: sidra_views
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: population_9606_total_2022_alagoas_smoke
+  status: stable
+  description: Smoke extraction view for table 9606 resident population, total sex/race/age
+    category, 2022, Maceió N6.
   warnings:
-  - scaffold_only
+  - view_is_extraction_policy_not_metadata_truth
+  - total_categories_for_denominator_anchor_only
+  table_id: '9606'
+  variables:
+  - '93'
+  periods:
+  - '2022'
+  locality_level: N6
+  localities:
+  - '2704302'
+  classifications:
+    '86':
+    - '95251'
+    '2':
+    - '6794'
+    '287':
+    - '100362'
+  view_mode: flat
+  category_policy: total_only
+  modeling_role: population_denominator_anchor

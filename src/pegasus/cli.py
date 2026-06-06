@@ -9,7 +9,7 @@ from pathlib import Path
 import typer
 from rich import print
 
-from pegasus.core.config import validate_config_tree
+from pegasus.core.config import load_yaml, validate_config_tree
 from pegasus.core.paths import ensure_data_lake
 from pegasus.datasus.cache import DatasusCache
 from pegasus.datasus.manifests import (
@@ -25,9 +25,19 @@ from pegasus.datasus.subprocess import DatasusConfig, fetch_datasus_chunk
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.validators import validate_registry_tree
+from pegasus.sidra.api import SidraClient, SidraClientConfig
+from pegasus.sidra.extract import extract_chunk_plan, read_chunk_plan, write_chunk_plan, write_extraction_log
 from pegasus.sidra.facts import normalize_fixture_json_to_facts
-from pegasus.sidra.metadata import fixture_sidra_metadata, write_normalized_metadata_tables
+from pegasus.sidra.metadata import (
+    fetch_official_metadata,
+    fixture_sidra_metadata,
+    metadata_dir_hash,
+    read_normalized_metadata_tables,
+    table_ids_from_seed,
+    write_normalized_metadata_tables,
+)
 from pegasus.sidra.plan import plan_sidra_chunks
+from pegasus.sidra.registry import request_from_view
 from pegasus.sidra.schemas import SIDRARequest
 from pegasus.workflows.build_efg import build_sim_fixture_efg_run
 
@@ -47,6 +57,11 @@ def _fail(errors: list[str]) -> None:
     for error in errors:
         print(f"[red]ERROR[/red] {error}")
     raise typer.Exit(1)
+
+
+def _sidra_runtime_config() -> dict:
+    data = load_yaml("config/sidra.yaml")
+    return data.get("sidra", data)
 
 
 @app.command()
@@ -113,11 +128,26 @@ def doctor() -> None:
     reg_errors = validate_registry_tree("config/registries")
     checks["registry_schema"] = "ok" if not reg_errors else f"{len(reg_errors)} errors"
 
+    try:
+        client = SidraClient(
+            config=SidraClientConfig.from_mapping(
+                {
+                    **_sidra_runtime_config(),
+                    "timeout_seconds": 5,
+                    "max_retries": 0,
+                }
+            )
+        )
+        response = client.ping()
+        checks["sidra_network"] = "ok" if response.status_code < 400 else f"HTTP {response.status_code}"
+    except Exception as exc:
+        checks["sidra_network"] = f"failed: {exc}"
+
     for key, value in checks.items():
         color = "green" if value not in {"missing", "False"} and not str(value).startswith("failed") else "yellow"
         print(f"[{color}]{key}[/] {value}")
 
-    print("[yellow]doctor is still light: no DATASUS/SIDRA ingestion is executed.[/yellow]")
+    print("[yellow]doctor is light: it checks connectivity but does not run heavy ingestion.[/yellow]")
 
 
 @datasus_app.command("ingest")
@@ -245,11 +275,7 @@ def sidra_plan_fixture(
         classifications=table.classifications,
     )
     chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=max_cells)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps([c.model_dump(mode="json") for c in chunks], indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    write_chunk_plan(chunks, output_path=output)
     print(f"[green]planned[/green] chunks={len(chunks)} output={output}")
 
 
@@ -268,21 +294,82 @@ def sidra_normalize_fixture(
 
 
 @sidra_app.command("metadata")
-def sidra_metadata(tables: Path = typer.Option(..., "--tables")) -> None:
-    print(f"[yellow]blocked[/yellow] live SIDRA metadata fetch is Slice 2B. Seed received: {tables}")
-    raise typer.Exit(2)
+def sidra_metadata(
+    tables: Path = typer.Option(..., "--tables"),
+    level: str = typer.Option("N6", "--level"),
+    output_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--output-dir"),
+    raw_dir: Path = typer.Option(Path("data/metadata/sidra/raw"), "--raw-dir"),
+) -> None:
+    table_ids = table_ids_from_seed(tables)
+    if not table_ids:
+        print("[red]ERROR[/red] no SIDRA table IDs found in seed.")
+        raise typer.Exit(1)
+
+    client = SidraClient()
+    metadata = fetch_official_metadata(
+        table_ids=table_ids,
+        client=client,
+        locality_level=level,
+        raw_dir=raw_dir,
+    )
+    outputs = write_normalized_metadata_tables(metadata, output_dir=output_dir)
+
+    print(f"[green]metadata rebuilt[/green] tables={len(table_ids)}")
+    for name, path in outputs.items():
+        print(f"[green]{name}[/green] {path}")
 
 
 @sidra_app.command("plan")
-def sidra_plan(view: str = typer.Option(..., "--view")) -> None:
-    print(f"[yellow]blocked[/yellow] live SIDRA planning is Slice 2B. View received: {view}")
-    raise typer.Exit(2)
+def sidra_plan(
+    view: str = typer.Option(..., "--view"),
+    metadata_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--metadata-dir"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    sidra_cfg = _sidra_runtime_config()
+    metadata = read_normalized_metadata_tables(metadata_dir)
+    request = request_from_view(view)
+    chunks = plan_sidra_chunks(
+        request,
+        metadata,
+        max_cells_per_request=int(sidra_cfg.get("max_cells_per_request", 49900)),
+    )
+    output = output or Path("data/manifests/sidra") / f"{view}.json"
+    write_chunk_plan(chunks, output_path=output)
+
+    print(f"[green]planned[/green] view={view} chunks={len(chunks)} output={output}")
 
 
 @sidra_app.command("extract")
-def sidra_extract(plan: Path = typer.Option(..., "--plan")) -> None:
-    print(f"[yellow]blocked[/yellow] live SIDRA extraction is Slice 2B. Plan received: {plan}")
-    raise typer.Exit(2)
+def sidra_extract(
+    plan: Path = typer.Option(..., "--plan"),
+    metadata_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--metadata-dir"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    concurrency: int | None = typer.Option(None, "--concurrency"),
+    log_path: Path | None = typer.Option(None, "--log"),
+) -> None:
+    sidra_cfg = _sidra_runtime_config()
+    chunks = read_chunk_plan(plan)
+    metadata_hash = metadata_dir_hash(metadata_dir)
+
+    if dry_run:
+        total = sum(c.estimated_cells for c in chunks)
+        print(f"[cyan]dry-run[/cyan] chunks={len(chunks)} estimated_cells={total} metadata_hash={metadata_hash}")
+        return
+
+    client = SidraClient()
+    results = extract_chunk_plan(
+        chunks,
+        client=client,
+        concurrency=concurrency or int(sidra_cfg.get("concurrency", 4)),
+        metadata_hash=metadata_hash,
+    )
+    log_path = log_path or Path("data/diagnostics/sidra") / f"{plan.stem}.extraction_log.json"
+    write_extraction_log(results, output_path=log_path)
+
+    failures = [r for r in results if r.status != "success"]
+    print(f"[green]extract complete[/green] chunks={len(results)} failures={len(failures)} log={log_path}")
+    if failures:
+        raise typer.Exit(1)
 
 
 @app.command()

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
+from pegasus.core.hashing import content_hash
+from pegasus.sidra.api import SidraClient
 from pegasus.sidra.schemas import SIDRAMetadata, SIDRATableMetadata
 
 
@@ -17,10 +20,17 @@ def load_table_seed(path: str | Path) -> list[dict]:
     return rows
 
 
+def table_ids_from_seed(path: str | Path) -> list[str]:
+    ids: set[str] = set()
+    for row in load_table_seed(path):
+        for key in ["table_id", "table_code", "agregado", "id"]:
+            if key in row and row[key] is not None:
+                ids.add(str(row[key]))
+                break
+    return sorted(ids, key=lambda x: int(x) if x.isdigit() else x)
+
+
 def fixture_sidra_metadata() -> SIDRAMetadata:
-    # Fixture metadata is deliberately broader than the tiny value fixture.
-    # It exists to test metadata validation, deterministic chunk splitting,
-    # and long-form SIDRA fact normalization without performing live HTTP.
     table = SIDRATableMetadata(
         table_id="9606",
         name="Population by municipality, period and classification fixture",
@@ -31,21 +41,196 @@ def fixture_sidra_metadata() -> SIDRAMetadata:
             "N6": ["270030", "270430", "270770"],
         },
         classifications={
-            # 2 = sexo in common SIDRA layouts. Keep total + binary categories
-            # in the fixture so large planner tests can validate normally.
             "2": ["0", "1", "2"],
-
-            # 58 = cor/raça in common SIDRA layouts. Include total and the
-            # usual category range used by population tables.
             "58": ["0", "1", "2", "3", "4", "5", "9"],
-
-            # 287 = idade/age grouping in the fixture. This remains partial;
-            # tests may extend it explicitly when stress-testing chunking.
             "287": ["0", "93070", "93084", "100000"],
         },
         units_by_variable={"93": "persons"},
     )
     return SIDRAMetadata(tables={"9606": table})
+
+
+def _as_list(payload: Any) -> list[Any]:
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ["items", "resultados", "periodos", "localidades"]:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+    return []
+
+
+def _id(item: Any) -> str | None:
+    if item is None:
+        return None
+    if isinstance(item, (str, int)):
+        return str(item)
+    if isinstance(item, dict):
+        for key in ["id", "codigo", "cod", "periodo", "localidade"]:
+            if key in item and item[key] is not None:
+                return str(item[key])
+    return None
+
+
+def _name(item: Any) -> str:
+    if isinstance(item, dict):
+        for key in ["nome", "name", "descricao", "label"]:
+            if key in item and item[key] is not None:
+                return str(item[key])
+    return ""
+
+
+def _first_metadata_obj(metadata_json: Any) -> dict[str, Any]:
+    if isinstance(metadata_json, list):
+        for item in metadata_json:
+            if isinstance(item, dict):
+                return item
+        return {}
+    if isinstance(metadata_json, dict):
+        return metadata_json
+    return {}
+
+
+def _extract_variables(meta: dict[str, Any]) -> tuple[list[str], dict[str, str | None]]:
+    candidates = meta.get("variaveis") or meta.get("variables") or []
+    variables: list[str] = []
+    units: dict[str, str | None] = {}
+    for item in _as_list(candidates):
+        vid = _id(item)
+        if vid is None:
+            continue
+        variables.append(vid)
+        if isinstance(item, dict):
+            units[vid] = (
+                item.get("unidade")
+                or item.get("unit")
+                or item.get("unidadeMedida")
+                or item.get("medida")
+            )
+        else:
+            units[vid] = None
+    return variables, units
+
+
+def _extract_classifications(meta: dict[str, Any]) -> dict[str, list[str]]:
+    classifications: dict[str, list[str]] = {}
+    candidates = meta.get("classificacoes") or meta.get("classifications") or []
+    for cls in _as_list(candidates):
+        if not isinstance(cls, dict):
+            continue
+        cid = _id(cls)
+        if cid is None:
+            continue
+        cats = []
+        for cat in _as_list(cls.get("categorias") or cls.get("categories") or []):
+            cat_id = _id(cat)
+            if cat_id is not None:
+                cats.append(cat_id)
+        classifications[cid] = cats
+    return classifications
+
+
+def _extract_periods(periods_json: Any) -> list[str]:
+    out: list[str] = []
+    for item in _as_list(periods_json):
+        pid = _id(item)
+        if pid is not None:
+            out.append(pid)
+    return sorted(set(out), key=lambda x: x)
+
+
+def _extract_localities(localities_json: Any) -> list[str]:
+    out: list[str] = []
+    for item in _as_list(localities_json):
+        lid = _id(item)
+        if lid is not None:
+            out.append(lid)
+    return sorted(set(out), key=lambda x: x)
+
+
+def normalize_official_table_metadata(
+    *,
+    table_id: str,
+    metadata_json: Any,
+    periods_json: Any,
+    localities_json: Any,
+    locality_level: str,
+) -> SIDRATableMetadata:
+    meta = _first_metadata_obj(metadata_json)
+    variables, units = _extract_variables(meta)
+    classifications = _extract_classifications(meta)
+    periods = _extract_periods(periods_json)
+    localities = _extract_localities(localities_json)
+
+    if not variables:
+        raise ValueError(f"SIDRA metadata for table {table_id} has no variables.")
+    if not periods:
+        raise ValueError(f"SIDRA periods for table {table_id} are empty.")
+    if not localities:
+        raise ValueError(f"SIDRA localities for table {table_id} at {locality_level} are empty.")
+
+    return SIDRATableMetadata(
+        table_id=table_id,
+        name=str(meta.get("nome") or meta.get("name") or f"SIDRA table {table_id}"),
+        variables=variables,
+        periods=periods,
+        locality_levels=[locality_level],
+        localities_by_level={locality_level: localities},
+        classifications=classifications,
+        units_by_variable=units,
+    )
+
+
+def fetch_official_metadata(
+    *,
+    table_ids: list[str],
+    client: SidraClient,
+    locality_level: str = "N6",
+    raw_dir: str | Path = "data/metadata/sidra/raw",
+) -> SIDRAMetadata:
+    raw_dir = Path(raw_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    tables: dict[str, SIDRATableMetadata] = {}
+
+    for table_id in table_ids:
+        meta = client.metadata(table_id)
+        periods = client.periods(table_id)
+        localities = client.localities(table_id, locality_level)
+
+        (raw_dir / f"{table_id}.metadata.json").write_text(
+            json.dumps(meta.payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (raw_dir / f"{table_id}.periods.json").write_text(
+            json.dumps(periods.payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (raw_dir / f"{table_id}.localities.{locality_level}.json").write_text(
+            json.dumps(localities.payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        if meta.status_code >= 400:
+            raise RuntimeError(f"SIDRA metadata request failed for {table_id}: HTTP {meta.status_code}")
+        if periods.status_code >= 400:
+            raise RuntimeError(f"SIDRA periods request failed for {table_id}: HTTP {periods.status_code}")
+        if localities.status_code >= 400:
+            raise RuntimeError(f"SIDRA localities request failed for {table_id}: HTTP {localities.status_code}")
+
+        table = normalize_official_table_metadata(
+            table_id=table_id,
+            metadata_json=meta.payload,
+            periods_json=periods.payload,
+            localities_json=localities.payload,
+            locality_level=locality_level,
+        )
+        tables[table_id] = table
+
+    return SIDRAMetadata(tables=tables)
 
 
 def write_normalized_metadata_tables(
@@ -121,3 +306,92 @@ def write_normalized_metadata_tables(
     pl.DataFrame(localities).write_parquet(outputs["sidra_localities"])
 
     return outputs
+
+
+def read_normalized_metadata_tables(input_dir: str | Path) -> SIDRAMetadata:
+    input_dir = Path(input_dir)
+
+    required = [
+        "sidra_tables.parquet",
+        "sidra_variables.parquet",
+        "sidra_classifications.parquet",
+        "sidra_categories.parquet",
+        "sidra_periods.parquet",
+        "sidra_localities.parquet",
+    ]
+    missing = [name for name in required if not (input_dir / name).exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing normalized SIDRA metadata tables: {missing}")
+
+    tables_df = pl.read_parquet(input_dir / "sidra_tables.parquet")
+    vars_df = pl.read_parquet(input_dir / "sidra_variables.parquet")
+    cls_df = pl.read_parquet(input_dir / "sidra_classifications.parquet")
+    cat_df = pl.read_parquet(input_dir / "sidra_categories.parquet")
+    periods_df = pl.read_parquet(input_dir / "sidra_periods.parquet")
+    locs_df = pl.read_parquet(input_dir / "sidra_localities.parquet")
+
+    tables: dict[str, SIDRATableMetadata] = {}
+
+    for row in tables_df.to_dicts():
+        tid = str(row["table_id"])
+        table_vars = vars_df.filter(pl.col("table_id") == tid).to_dicts()
+        table_periods = periods_df.filter(pl.col("table_id") == tid)["period"].cast(pl.Utf8).to_list()
+        table_locs = locs_df.filter(pl.col("table_id") == tid).to_dicts()
+
+        levels: dict[str, list[str]] = {}
+        for loc in table_locs:
+            levels.setdefault(str(loc["locality_level"]), []).append(str(loc["locality_id"]))
+
+        classifications: dict[str, list[str]] = {}
+        for cls_row in cls_df.filter(pl.col("table_id") == tid).to_dicts():
+            cid = str(cls_row["classification_id"])
+            cats = (
+                cat_df
+                .filter((pl.col("table_id") == tid) & (pl.col("classification_id") == cid))
+                ["category_id"]
+                .cast(pl.Utf8)
+                .to_list()
+            )
+            classifications[cid] = cats
+
+        tables[tid] = SIDRATableMetadata(
+            table_id=tid,
+            name=str(row["name"]),
+            variables=[str(x["variable_id"]) for x in table_vars],
+            periods=[str(x) for x in table_periods],
+            locality_levels=sorted(levels),
+            localities_by_level={k: sorted(v) for k, v in levels.items()},
+            classifications=classifications,
+            units_by_variable={str(x["variable_id"]): x.get("unit") for x in table_vars},
+        )
+
+    return SIDRAMetadata(tables=tables)
+
+
+
+def metadata_dir_hash(input_dir: str | Path) -> str:
+    import hashlib
+
+    input_dir = Path(input_dir)
+    required = [
+        "sidra_tables.parquet",
+        "sidra_variables.parquet",
+        "sidra_classifications.parquet",
+        "sidra_categories.parquet",
+        "sidra_periods.parquet",
+        "sidra_localities.parquet",
+    ]
+
+    missing = [name for name in required if not (input_dir / name).exists()]
+    if missing:
+        raise FileNotFoundError(f"Cannot hash SIDRA metadata directory; missing files: {missing}")
+
+    h = hashlib.sha256()
+    for name in required:
+        path = input_dir / name
+        h.update(name.encode("utf-8"))
+        h.update(b"\0")
+        h.update(path.read_bytes())
+        h.update(b"\0")
+
+    return h.hexdigest()

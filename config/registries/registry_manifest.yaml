@@ -69,7 +69,7 @@ registries:
   sidra_views:
     path: sidra_views.yaml
     schema_version: '1.0'
-    sha256: 4b4197b593d3cbef6106da022e6fd7a5c5bf182e54bacf8631213affdc0134e1
+    sha256: 233b820e6d041fb1c23473bc6395c75cffef46ac71ad62a7880b82303704c5ba
   sidra_category_maps:
     path: sidra_category_maps.yaml
     schema_version: '1.0'

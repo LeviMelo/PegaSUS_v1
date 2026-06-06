@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -24,6 +25,10 @@ from pegasus.datasus.subprocess import DatasusConfig, fetch_datasus_chunk
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.validators import validate_registry_tree
+from pegasus.sidra.facts import normalize_fixture_json_to_facts
+from pegasus.sidra.metadata import fixture_sidra_metadata, write_normalized_metadata_tables
+from pegasus.sidra.plan import plan_sidra_chunks
+from pegasus.sidra.schemas import SIDRARequest
 from pegasus.workflows.build_efg import build_sim_fixture_efg_run
 
 app = typer.Typer(no_args_is_help=True)
@@ -214,21 +219,69 @@ def efg_build_sim_fixture(
     print(f"[green]sim fixture EFG bundle valid[/green] {output}")
 
 
+@sidra_app.command("metadata-fixture")
+def sidra_metadata_fixture(
+    output_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--output-dir"),
+) -> None:
+    metadata = fixture_sidra_metadata()
+    outputs = write_normalized_metadata_tables(metadata, output_dir=output_dir)
+    for name, path in outputs.items():
+        print(f"[green]{name}[/green] {path}")
+
+
+@sidra_app.command("plan-fixture")
+def sidra_plan_fixture(
+    output: Path = typer.Option(Path("data/manifests/sidra/fixture_plan.json"), "--output"),
+    max_cells: int = typer.Option(49900, "--max-cells"),
+) -> None:
+    metadata = fixture_sidra_metadata()
+    table = metadata.tables["9606"]
+    request = SIDRARequest(
+        table_id="9606",
+        variables=table.variables,
+        periods=table.periods,
+        locality_level="N6",
+        localities=table.localities_by_level["N6"],
+        classifications=table.classifications,
+    )
+    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=max_cells)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps([c.model_dump(mode="json") for c in chunks], indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"[green]planned[/green] chunks={len(chunks)} output={output}")
+
+
+@sidra_app.command("normalize-fixture")
+def sidra_normalize_fixture(
+    input_path: Path = typer.Option(..., "--input"),
+    output_path: Path = typer.Option(Path("data/processed/sidra/facts/9606/fixture.parquet"), "--output"),
+) -> None:
+    output = normalize_fixture_json_to_facts(
+        input_path=input_path,
+        output_path=output_path,
+        table_id="9606",
+        unit_by_variable={"93": "persons"},
+    )
+    print(f"[green]sidra facts normalized[/green] {output}")
+
+
 @sidra_app.command("metadata")
 def sidra_metadata(tables: Path = typer.Option(..., "--tables")) -> None:
-    print(f"[yellow]blocked[/yellow] SIDRA metadata is Slice 2. Seed received: {tables}")
+    print(f"[yellow]blocked[/yellow] live SIDRA metadata fetch is Slice 2B. Seed received: {tables}")
     raise typer.Exit(2)
 
 
 @sidra_app.command("plan")
 def sidra_plan(view: str = typer.Option(..., "--view")) -> None:
-    print(f"[yellow]blocked[/yellow] SIDRA planning is Slice 2. View received: {view}")
+    print(f"[yellow]blocked[/yellow] live SIDRA planning is Slice 2B. View received: {view}")
     raise typer.Exit(2)
 
 
 @sidra_app.command("extract")
 def sidra_extract(plan: Path = typer.Option(..., "--plan")) -> None:
-    print(f"[yellow]blocked[/yellow] SIDRA extraction is Slice 2. Plan received: {plan}")
+    print(f"[yellow]blocked[/yellow] live SIDRA extraction is Slice 2B. Plan received: {plan}")
     raise typer.Exit(2)
 
 

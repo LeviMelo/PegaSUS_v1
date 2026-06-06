@@ -1,0 +1,42 @@
+[
+  {
+    "table_id": "9606",
+    "variable_id": "93",
+    "period": "2022",
+    "locality_level": "N6",
+    "locality_id": "270430",
+    "classification_tuple": [["2", "Sexo"], ["58", "Cor ou raça"], ["287", "Idade"]],
+    "category_tuple": [["2", "0"], ["58", "0"], ["287", "0"]],
+    "value": "1025360"
+  },
+  {
+    "table_id": "9606",
+    "variable_id": "93",
+    "period": "2022",
+    "locality_level": "N6",
+    "locality_id": "270030",
+    "classification_tuple": [["2", "Sexo"], ["58", "Cor ou raça"], ["287", "Idade"]],
+    "category_tuple": [["2", "0"], ["58", "0"], ["287", "0"]],
+    "value": "234185"
+  },
+  {
+    "table_id": "9606",
+    "variable_id": "93",
+    "period": "2022",
+    "locality_level": "N6",
+    "locality_id": "270770",
+    "classification_tuple": [["2", "Sexo"], ["58", "Cor ou raça"], ["287", "Idade"]],
+    "category_tuple": [["2", "0"], ["58", "0"], ["287", "0"]],
+    "value": "-"
+  },
+  {
+    "table_id": "9606",
+    "variable_id": "93",
+    "period": "2023",
+    "locality_level": "N6",
+    "locality_id": "270430",
+    "classification_tuple": [["2", "Sexo"], ["58", "Cor ou raça"], ["287", "Idade"]],
+    "category_tuple": [["2", "0"], ["58", "0"], ["287", "0"]],
+    "value": "1.031.597"
+  }
+]

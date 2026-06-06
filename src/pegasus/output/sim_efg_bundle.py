@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 
 from pegasus.core.enums import FieldState, MaterializationState
 from pegasus.core.schemas import FailedBranch, FieldNode, QState, WarningRecord
+from pegasus.datasus.icd_groups import ICDGroup, block_for_icd, chapter_for_icd
 from pegasus.efg.declaration import OperatorSpec
 from pegasus.efg.legality import evaluate_delta, make_failed_branch
 from pegasus.efg.lineage import make_lineage
@@ -60,7 +61,10 @@ def _field_row(field: FieldNode) -> dict[str, Any]:
 
 
 def _q_row(q: QState) -> dict[str, Any]:
-    return q.model_dump(mode="json")
+    row = q.model_dump(mode="json")
+    row["warnings"] = _json(row["warnings"])
+    row["dashboard_safe"] = str(row["dashboard_safe"])
+    return row
 
 
 def _warning_row(w: WarningRecord) -> dict[str, Any]:
@@ -93,6 +97,9 @@ def _variable_dictionary_row(field: FieldNode) -> dict[str, Any]:
     axes = field.axes or {}
     diagnostic_role = axes.get("diagnostic_role")
     topology = axes.get("topology")
+    position = axes.get("position")
+    icd_group_kind = axes.get("icd_group_kind")
+    icd_group_id = axes.get("icd_group_id")
     race_axis = axes.get("race_axis_type") or axes.get("race_axis")
 
     if field.name == "SIMAdministrativeRaceDeaths":
@@ -101,6 +108,18 @@ def _variable_dictionary_row(field: FieldNode) -> dict[str, Any]:
     elif field.name == "IBGESelfDeclaredPopulationPlaceholder":
         estimand = "synthetic_fixture_denominator_placeholder"
         warning = "Placeholder used only to exercise declaration gate; not an official denominator."
+    elif field.name == "FixturePopulation":
+        estimand = "synthetic_fixture_population_offset"
+        warning = "Synthetic fixture denominator; not dashboard-safe."
+    elif "Mortality" in field.name:
+        estimand = "fixture_mortality_rate_metadata"
+        warning = "Fixture-only RN field. Validates carrier/unit/declaration mechanics but is not a production epidemiological estimate."
+    elif "TerminalChain" in field.name:
+        estimand = "terminal_chain_mention_observer_share"
+        warning = "Terminal-chain mention field is observer/exploratory, not cause-specific mortality."
+    elif "AssociatedCondition" in field.name:
+        estimand = "associated_condition_mention_observer_share"
+        warning = "Associated-condition mention field is observer/covariate, not cause-specific mortality."
     else:
         estimand = "event_count"
         warning = "Fixture-derived metadata field; not a production epidemiological estimate."
@@ -121,13 +140,417 @@ def _variable_dictionary_row(field: FieldNode) -> dict[str, Any]:
                 "race_axis": race_axis,
                 "diagnostic_role": diagnostic_role,
                 "topology": topology,
+                "position": position,
+                "icd_group_kind": icd_group_kind,
+                "icd_group_id": icd_group_id,
             }
         ),
         "provenance_description": _json(field.provenance),
         "state": field.state.value,
         "dashboard_safe": str(field.dashboard_safe),
         "interpretation_warning": warning,
+        "diagnostic_role": diagnostic_role,
+        "topology": topology,
+        "position": position,
+        "icd_group_kind": icd_group_kind,
+        "icd_group_id": icd_group_id,
     }
+
+
+def _base_support(
+    *,
+    years: list[int],
+    municipalities: list[str],
+    n_events: int | float | None = None,
+    n_denom: int | float | None = None,
+    missingness: float = 0.0,
+    denom_fragility: float = 1.0,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    out = {
+        "support": "municipality_year",
+        "years": years,
+        "municipalities": municipalities,
+        "cov_S": float(len(municipalities)),
+        "cov_T": float(len(years)),
+        "missingness": float(missingness),
+        "denom_fragility": float(denom_fragility),
+    }
+    if n_events is not None:
+        out["n_events"] = float(n_events)
+        out["n_eff"] = float(n_events)
+    if n_denom is not None:
+        out["n_denom"] = float(n_denom)
+        out.setdefault("n_eff", float(n_denom))
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _make_population_field(
+    *,
+    years: list[int],
+    municipalities: list[str],
+    registry_versions: dict[str, str],
+) -> FieldNode:
+    lineage = make_lineage(
+        parent_ids=[],
+        operator_type="fixture_placeholder",
+        operator_params={"source": "fixture", "selection": "population_person_years"},
+        registry_versions=registry_versions,
+        source_manifest_hashes=[],
+    )
+    return make_field_node(
+        name="FixturePopulation",
+        kind="extensive_measure",
+        carrier="Population",
+        unit="person_years",
+        support=_base_support(
+            years=years,
+            municipalities=municipalities,
+            n_denom=10000.0,
+            missingness=0.0,
+            denom_fragility=0.0,
+            extra={"fixture_denominator": True},
+        ),
+        axes={
+            "time": "year",
+            "geography": "municipality",
+            "race_axis_type": None,
+        },
+        aggregation="additive",
+        role=["demographic", "exposure_offset"],
+        source=["fixture"],
+        operator="fixture_placeholder",
+        provenance=["synthetic"],
+        state=FieldState.quarantined_descriptive,
+        warnings=["synthetic_fixture_denominator", "not_allowed_for_production_rates"],
+        lineage=lineage,
+        materialization_state=MaterializationState.metadata_only,
+        path=None,
+        dashboard_safe=False,
+    )
+
+
+def _make_rate_field(
+    *,
+    name: str,
+    numerator: FieldNode,
+    denominator: FieldNode,
+    support_extra: dict[str, Any],
+    axes_extra: dict[str, Any],
+    registry_versions: dict[str, str],
+    source_hashes: list[str],
+    warnings: list[str],
+) -> FieldNode:
+    lineage = make_lineage(
+        parent_ids=[numerator.id, denominator.id],
+        operator_type="RN",
+        operator_params={"role": "mortality_rate", "fixture_rate": True},
+        registry_versions=registry_versions,
+        source_manifest_hashes=source_hashes,
+    )
+    support = dict(numerator.support)
+    support.update(
+        {
+            "n_denom": denominator.support.get("n_denom"),
+            "denom_fragility": 1.0,
+            "fixture_rate": True,
+        }
+    )
+    support.update(support_extra)
+
+    return make_field_node(
+        name=name,
+        kind="intensive_density",
+        carrier="Deaths/Population",
+        unit="rate",
+        support=support,
+        axes={
+            **numerator.axes,
+            **axes_extra,
+        },
+        aggregation="non_aggregable",
+        role=["outcome", "model_only"],
+        source=["SIM-DO", "fixture"],
+        operator="RN",
+        provenance=["official", "synthetic"],
+        state=FieldState.quarantined_descriptive,
+        warnings=warnings + ["synthetic_fixture_denominator", "dashboard_unsafe_fixture_rate"],
+        lineage=lineage,
+        materialization_state=MaterializationState.metadata_only,
+        path=numerator.path,
+        dashboard_safe=False,
+    )
+
+
+def _valid_underlying_df(df: pl.DataFrame) -> pl.DataFrame:
+    return df.filter(
+        (pl.col("underlying_icd_parse_state") == "valid")
+        & pl.col("underlying_icd_norm").is_not_null()
+    )
+
+
+def _dominant_group(
+    df: pl.DataFrame,
+    *,
+    group_kind: str,
+) -> ICDGroup | None:
+    groups: list[ICDGroup] = []
+    for code in df["underlying_icd_norm"].drop_nulls().to_list():
+        group = chapter_for_icd(code) if group_kind == "chapter" else block_for_icd(code)
+        if group is not None:
+            groups.append(group)
+
+    if not groups:
+        return None
+
+    counts: dict[str, tuple[ICDGroup, int]] = {}
+    for group in groups:
+        old = counts.get(group.id)
+        counts[group.id] = (group, 1 if old is None else old[1] + 1)
+
+    return sorted(counts.values(), key=lambda x: (-x[1], x[0].id))[0][0]
+
+
+def _group_count(df: pl.DataFrame, group: ICDGroup) -> int:
+    count = 0
+    for code in df["underlying_icd_norm"].drop_nulls().to_list():
+        mapped = chapter_for_icd(code) if group.kind == "chapter" else block_for_icd(code)
+        if mapped is not None and mapped.id == group.id:
+            count += 1
+    return count
+
+
+def _make_underlying_group_nodes(
+    *,
+    df: pl.DataFrame,
+    population: FieldNode,
+    years: list[int],
+    municipalities: list[str],
+    registry_versions: dict[str, str],
+    source_hashes: list[str],
+    sim_events_path: Path,
+    group_kind: str,
+) -> list[FieldNode]:
+    valid_df = _valid_underlying_df(df)
+    group = _dominant_group(valid_df, group_kind=group_kind)
+    if group is None:
+        return []
+
+    n = _group_count(valid_df, group)
+    lineage = make_lineage(
+        parent_ids=[],
+        operator_type="sigma_C",
+        operator_params={
+            "source": "SIM-DO",
+            "diagnostic_role": "underlying_cause",
+            "topology": "single_underlying",
+            "icd_group_kind": group.kind,
+            "icd_group_id": group.id,
+            "icd_group_label": group.label,
+        },
+        registry_versions=registry_versions,
+        source_manifest_hashes=source_hashes,
+    )
+
+    count_node = make_field_node(
+        name=f"SIMUnderlyingICD{group.kind.title()}Deaths",
+        kind="extensive_measure",
+        carrier="Deaths",
+        unit="counts",
+        support=_base_support(
+            years=years,
+            municipalities=municipalities,
+            n_events=n,
+            missingness=0.0,
+            denom_fragility=1.0,
+            extra={"icd_group_id": group.id, "icd_group_label": group.label},
+        ),
+        axes={
+            "time": "year",
+            "geography": "mun_residence_cod6",
+            "health": group.id,
+            "diagnostic_role": "underlying_cause",
+            "topology": "single_underlying",
+            "position": None,
+            "icd_group_kind": group.kind,
+            "icd_group_id": group.id,
+            "icd_group_label": group.label,
+            "race_axis_type": None,
+        },
+        aggregation="additive",
+        role=["outcome"],
+        source=["SIM-DO"],
+        operator="sigma_C",
+        provenance=["official"],
+        state=FieldState.quarantined_descriptive,
+        warnings=["fixture_small_n", "underlying_cause_topology_preserved"],
+        lineage=lineage,
+        materialization_state=MaterializationState.metadata_only,
+        path=str(sim_events_path),
+        dashboard_safe=False,
+    )
+
+    rate_node = _make_rate_field(
+        name=f"SIMUnderlyingICD{group.kind.title()}Mortality",
+        numerator=count_node,
+        denominator=population,
+        support_extra={"icd_group_id": group.id, "icd_group_label": group.label},
+        axes_extra={
+            "health": group.id,
+            "diagnostic_role": "underlying_cause",
+            "topology": "single_underlying",
+            "position": None,
+            "icd_group_kind": group.kind,
+            "icd_group_id": group.id,
+            "icd_group_label": group.label,
+        },
+        registry_versions=registry_versions,
+        source_hashes=source_hashes,
+        warnings=["fixture_small_n", "underlying_cause_mortality_fixture"],
+    )
+
+    return [count_node, rate_node]
+
+
+def _make_terminal_chain_observer(
+    *,
+    df: pl.DataFrame,
+    all_deaths: FieldNode,
+    years: list[int],
+    municipalities: list[str],
+    registry_versions: dict[str, str],
+    source_hashes: list[str],
+    sim_events_path: Path,
+) -> FieldNode:
+    mention_count = 0
+    for raw in df["cause_chain_norm"].drop_nulls().to_list():
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            continue
+        if any(v is not None for v in payload.values()):
+            mention_count += 1
+
+    lineage = make_lineage(
+        parent_ids=[all_deaths.id],
+        operator_type="pi_chain_to_mention/RN",
+        operator_params={
+            "source": "SIM-DO",
+            "diagnostic_role": "terminal_chain",
+            "topology": "ordered_terminal_chain",
+            "projection": "position_erasing_mention_share",
+            "downgrade_role": "observer_exploratory",
+        },
+        registry_versions=registry_versions,
+        source_manifest_hashes=source_hashes,
+    )
+
+    return make_field_node(
+        name="SIMTerminalChainMentionShare",
+        kind="observer_proxy",
+        carrier="Deaths",
+        unit="proportion",
+        support=_base_support(
+            years=years,
+            municipalities=municipalities,
+            n_events=mention_count,
+            n_denom=float(df.height),
+            missingness=0.0,
+            denom_fragility=1.0,
+            extra={"topology_projection": "chain_position_erased_to_mention"},
+        ),
+        axes={
+            "time": "year",
+            "geography": "mun_residence_cod6",
+            "diagnostic_role": "terminal_chain",
+            "topology": "ordered_terminal_chain",
+            "position": "erased_by_projection",
+            "race_axis_type": None,
+        },
+        aggregation="statistical_functional",
+        role=["observer", "exploratory"],
+        source=["SIM-DO"],
+        operator="pi_chain_to_mention/RN",
+        provenance=["official"],
+        state=FieldState.quarantined_descriptive,
+        warnings=[
+            "fixture_small_n",
+            "terminal_chain_projection_observer_only",
+            "not_cause_specific_mortality",
+        ],
+        lineage=lineage,
+        materialization_state=MaterializationState.metadata_only,
+        path=str(sim_events_path),
+        dashboard_safe=False,
+    )
+
+
+def _make_associated_condition_observer(
+    *,
+    df: pl.DataFrame,
+    all_deaths: FieldNode,
+    years: list[int],
+    municipalities: list[str],
+    registry_versions: dict[str, str],
+    source_hashes: list[str],
+    sim_events_path: Path,
+) -> FieldNode:
+    mention_count = int(
+        df.filter(pl.col("associated_conditions_parse_states") == "valid").height
+    )
+
+    lineage = make_lineage(
+        parent_ids=[all_deaths.id],
+        operator_type="associated_condition_mention/RN",
+        operator_params={
+            "source": "SIM-DO",
+            "diagnostic_role": "associated_condition",
+            "topology": "unordered_associated_set",
+            "downgrade_role": "observer_covariate",
+        },
+        registry_versions=registry_versions,
+        source_manifest_hashes=source_hashes,
+    )
+
+    return make_field_node(
+        name="SIMAssociatedConditionMentionShare",
+        kind="observer_proxy",
+        carrier="Deaths",
+        unit="proportion",
+        support=_base_support(
+            years=years,
+            municipalities=municipalities,
+            n_events=mention_count,
+            n_denom=float(df.height),
+            missingness=0.0,
+            denom_fragility=1.0,
+        ),
+        axes={
+            "time": "year",
+            "geography": "mun_residence_cod6",
+            "diagnostic_role": "associated_condition",
+            "topology": "unordered_associated_set",
+            "position": None,
+            "race_axis_type": None,
+        },
+        aggregation="statistical_functional",
+        role=["observer", "covariate", "exploratory"],
+        source=["SIM-DO"],
+        operator="associated_condition_mention/RN",
+        provenance=["official"],
+        state=FieldState.quarantined_descriptive,
+        warnings=[
+            "fixture_small_n",
+            "associated_condition_observer_only",
+            "not_cause_specific_mortality",
+        ],
+        lineage=lineage,
+        materialization_state=MaterializationState.metadata_only,
+        path=str(sim_events_path),
+        dashboard_safe=False,
+    )
 
 
 def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNode], list[FailedBranch], list[WarningRecord]]:
@@ -149,6 +572,8 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
         "unit_registry": "v1.0",
         "quality_permissions": "v1.0",
         "race_axis_registry": "v1.0",
+        "diagnostic_topology": "v1.0",
+        "icd_catalog": "fixture_minimal_v1",
     }
 
     all_deaths_lineage = make_lineage(
@@ -163,17 +588,13 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
         kind="extensive_measure",
         carrier="Deaths",
         unit="counts",
-        support={
-            "support": "municipality_year",
-            "years": years,
-            "municipalities": municipalities,
-            "n_events": float(n_events),
-            "n_eff": float(n_events),
-            "cov_S": float(len(municipalities)),
-            "cov_T": float(len(years)),
-            "missingness": 0.0,
-            "denom_fragility": 1.0,
-        },
+        support=_base_support(
+            years=years,
+            municipalities=municipalities,
+            n_events=n_events,
+            missingness=0.0,
+            denom_fragility=1.0,
+        ),
         axes={
             "time": "year",
             "geography": "mun_residence_cod6",
@@ -194,6 +615,27 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
         dashboard_safe=False,
     )
 
+    population = _make_population_field(
+        years=years,
+        municipalities=municipalities,
+        registry_versions=registry_versions,
+    )
+
+    crude_mortality = _make_rate_field(
+        name="SIMCrudeMortalityFixture",
+        numerator=all_deaths,
+        denominator=population,
+        support_extra={},
+        axes_extra={
+            "diagnostic_role": "all_deaths",
+            "topology": "none",
+            "race_axis_type": None,
+        },
+        registry_versions=registry_versions,
+        source_hashes=source_hashes,
+        warnings=["fixture_small_n", "crude_mortality_fixture"],
+    )
+
     race_lineage = make_lineage(
         parent_ids=[all_deaths.id],
         operator_type="sigma_C",
@@ -206,18 +648,17 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
         kind="extensive_measure",
         carrier="Deaths",
         unit="counts",
-        support={
-            "support": "municipality_year_admin_race",
-            "years": years,
-            "municipalities": municipalities,
-            "n_events": float(n_events),
-            "n_eff": float(n_events),
-            "cov_S": float(len(municipalities)),
-            "cov_T": float(len(years)),
-            "missingness": missing_race_share,
-            "missing_race_share": missing_race_share,
-            "denom_fragility": 1.0,
-        },
+        support=_base_support(
+            years=years,
+            municipalities=municipalities,
+            n_events=n_events,
+            missingness=missing_race_share,
+            denom_fragility=1.0,
+            extra={
+                "support": "municipality_year_admin_race",
+                "missing_race_share": missing_race_share,
+            },
+        ),
         axes={
             "time": "year",
             "geography": "mun_residence_cod6",
@@ -251,17 +692,14 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
         kind="extensive_measure",
         carrier="Population",
         unit="person_years",
-        support={
-            "support": "municipality_year_self_declared_race",
-            "years": years,
-            "municipalities": municipalities,
-            "n_denom": 10000.0,
-            "n_eff": 10000.0,
-            "cov_S": float(len(municipalities)),
-            "cov_T": float(len(years)),
-            "missingness": 0.0,
-            "denom_fragility": 0.0,
-        },
+        support=_base_support(
+            years=years,
+            municipalities=municipalities,
+            n_denom=10000.0,
+            missingness=0.0,
+            denom_fragility=0.0,
+            extra={"support": "municipality_year_self_declared_race"},
+        ),
         axes={
             "time": "year",
             "geography": "municipality",
@@ -279,6 +717,51 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
         materialization_state=MaterializationState.metadata_only,
         path=None,
         dashboard_safe=False,
+    )
+
+    group_nodes: list[FieldNode] = []
+    group_nodes.extend(
+        _make_underlying_group_nodes(
+            df=df,
+            population=population,
+            years=years,
+            municipalities=municipalities,
+            registry_versions=registry_versions,
+            source_hashes=source_hashes,
+            sim_events_path=sim_events_path,
+            group_kind="chapter",
+        )
+    )
+    group_nodes.extend(
+        _make_underlying_group_nodes(
+            df=df,
+            population=population,
+            years=years,
+            municipalities=municipalities,
+            registry_versions=registry_versions,
+            source_hashes=source_hashes,
+            sim_events_path=sim_events_path,
+            group_kind="block",
+        )
+    )
+
+    terminal_chain_observer = _make_terminal_chain_observer(
+        df=df,
+        all_deaths=all_deaths,
+        years=years,
+        municipalities=municipalities,
+        registry_versions=registry_versions,
+        source_hashes=source_hashes,
+        sim_events_path=sim_events_path,
+    )
+    associated_observer = _make_associated_condition_observer(
+        df=df,
+        all_deaths=all_deaths,
+        years=years,
+        municipalities=municipalities,
+        registry_versions=registry_versions,
+        source_hashes=source_hashes,
+        sim_events_path=sim_events_path,
     )
 
     operator = OperatorSpec(name="RN", role="mortality_rate", output_kind="intensive_density")
@@ -308,6 +791,26 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
             created_at=_now(),
         ),
         WarningRecord(
+            warning_id="fixture_rates_dashboard_unsafe",
+            field_id=crude_mortality.id,
+            source="pegasus.output.sim_efg_bundle",
+            severity="downgrade",
+            code="fixture_rates_dashboard_unsafe",
+            message="Fixture mortality rates use synthetic denominator and are dashboard-unsafe.",
+            inherited_from=[],
+            created_at=_now(),
+        ),
+        WarningRecord(
+            warning_id="diagnostic_topology_preserved",
+            field_id=None,
+            source="pegasus.output.sim_efg_bundle",
+            severity="info",
+            code="diagnostic_topology_preserved",
+            message="Underlying cause, terminal chain, and associated-condition fields were emitted as distinct topology-specific objects.",
+            inherited_from=[],
+            created_at=_now(),
+        ),
+        WarningRecord(
             warning_id="race_axis_declaration_incommensurable",
             field_id=admin_race_deaths.id,
             source="pegasus.efg.declaration",
@@ -319,7 +822,18 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
         ),
     ]
 
-    return [all_deaths, admin_race_deaths, ibge_population], [failed_branch], warnings
+    fields = [
+        all_deaths,
+        population,
+        crude_mortality,
+        admin_race_deaths,
+        ibge_population,
+        *group_nodes,
+        terminal_chain_observer,
+        associated_observer,
+    ]
+
+    return fields, [failed_branch], warnings
 
 
 def write_sim_fixture_efg_bundle(
@@ -414,13 +928,7 @@ def write_sim_fixture_efg_bundle(
         ("computed_at", pa.string()),
         ("q_schema_version", pa.string()),
     ])
-    q_rows = []
-    for q in q_states:
-        row = _q_row(q)
-        row["warnings"] = _json(row["warnings"])
-        row["dashboard_safe"] = str(row["dashboard_safe"])
-        q_rows.append(row)
-    _write_table(run_dir / "Q_tensor.parquet", q_rows, q_schema)
+    _write_table(run_dir / "Q_tensor.parquet", [_q_row(q) for q in q_states], q_schema)
 
     warning_schema = pa.schema([
         ("warning_id", pa.string()),
@@ -461,6 +969,11 @@ def write_sim_fixture_efg_bundle(
         ("state", pa.string()),
         ("dashboard_safe", pa.string()),
         ("interpretation_warning", pa.string()),
+        ("diagnostic_role", pa.string()),
+        ("topology", pa.string()),
+        ("position", pa.string()),
+        ("icd_group_kind", pa.string()),
+        ("icd_group_id", pa.string()),
     ])
     _write_table(run_dir / "VariableDictionary.parquet", [_variable_dictionary_row(f) for f in fields], vd_schema)
 
@@ -529,7 +1042,7 @@ def write_sim_fixture_efg_bundle(
         _json(
             {
                 "frozen": True,
-                "intent_source": "sim_fixture_efg_slice1d",
+                "intent_source": "sim_fixture_efg_slice1e",
                 "population_mode": "synthetic_test_fixture",
                 "warning": "fixture_only_not_production_rate",
             }
@@ -540,8 +1053,8 @@ def write_sim_fixture_efg_bundle(
         _json(
             {
                 "frozen": True,
-                "slice": "1D",
-                "workflow": "sim_fixture_efg",
+                "slice": "1E",
+                "workflow": "sim_fixture_efg_icd_expansion",
                 "sim_events_path": str(sim_events_path),
             }
         ),
@@ -593,7 +1106,11 @@ def write_sim_fixture_efg_bundle(
             "microdatasus_version": None,
             "read_dbc_version": None,
         },
-        "registry_hashes": {f.name: "v1.0" for f in fields},
+        "registry_hashes": {
+            "registry_set": "v1.0",
+            "diagnostic_topology": "v1.0",
+            "icd_catalog": "fixture_minimal_v1",
+        },
         "source_manifest_hashes": [],
         "random_seeds": {},
         "telemetry": {
@@ -611,7 +1128,7 @@ def write_sim_fixture_efg_bundle(
                 "peak_rss_mb": None,
                 "peak_vram_mb": None,
                 "duckdb_temp_bytes": None,
-                "rows_read": {"sim_events": len(fields)},
+                "rows_read": {"sim_events": int(pl.read_parquet(sim_events_path).height)},
                 "rows_written": {"V_fields": len(fields), "FailedBranches": len(failed_branches)},
                 "parquet_bytes_written": 0,
             },

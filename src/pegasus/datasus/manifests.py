@@ -1,12 +1,261 @@
-"""
-Slice 0 scaffold module: datasus/manifests.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
-from pegasus.core.exceptions import BlockedModuleError
+from pegasus.core.config import load_yaml
+from pegasus.core.hashing import content_hash
+from pegasus.core.schemas import DATASUSRequestManifest
 
 
-def blocked(*, module: str = "datasus/manifests.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+ALLOWED_SYSTEMS = {"SIM-DO", "SINASC", "SIH-RD", "CNES-ST"}
+UF_RE = re.compile(r"^[A-Z]{2}$")
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_system(system: str) -> str:
+    value = system.strip().upper()
+    aliases = {
+        "SIM": "SIM-DO",
+        "SIM_DO": "SIM-DO",
+        "SIM-DO": "SIM-DO",
+        "DO": "SIM-DO",
+        "SINASC": "SINASC",
+        "SIH": "SIH-RD",
+        "SIH_RD": "SIH-RD",
+        "SIH-RD": "SIH-RD",
+        "RD": "SIH-RD",
+        "CNES": "CNES-ST",
+        "CNES_ST": "CNES-ST",
+        "CNES-ST": "CNES-ST",
+        "ST": "CNES-ST",
+    }
+    if value not in aliases:
+        raise ValueError(f"Unsupported DATASUS system: {system}")
+    return aliases[value]
+
+
+def normalize_uf(uf: str) -> str:
+    value = uf.strip().upper()
+    if not UF_RE.fullmatch(value):
+        raise ValueError(f"Invalid UF code: {uf}")
+    return value
+
+
+def parse_years(years: str) -> list[int]:
+    result: set[int] = set()
+
+    for part in years.split(","):
+        token = part.strip()
+        if not token:
+            continue
+
+        if "-" in token:
+            left, right = [x.strip() for x in token.split("-", 1)]
+            start = int(left)
+            end = int(right)
+            if end < start:
+                raise ValueError(f"Invalid descending year range: {token}")
+            result.update(range(start, end + 1))
+        else:
+            result.add(int(token))
+
+    if not result:
+        raise ValueError("No years were parsed.")
+
+    for year in result:
+        if year < 1970 or year > 2100:
+            raise ValueError(f"Suspicious DATASUS year: {year}")
+
+    return sorted(result)
+
+
+def period_label(
+    *,
+    year_start: int,
+    year_end: int,
+    month_start: int | None = None,
+    month_end: int | None = None,
+) -> str:
+    ms = "NA" if month_start is None else f"{month_start:02d}"
+    me = "NA" if month_end is None else f"{month_end:02d}"
+    return f"{year_start}_{ms}__{year_end}_{me}"
+
+
+def load_datasus_config(path: str | Path = "config/datasus.yaml") -> dict[str, Any]:
+    data = load_yaml(path)
+    return data.get("datasus", data)
+
+
+def _request_identity(
+    *,
+    system: str,
+    uf: str,
+    year_start: int,
+    year_end: int,
+    month_start: int | None,
+    month_end: int | None,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "backend": config.get("backend", "microdatasus"),
+        "system": system,
+        "uf": uf,
+        "year_start": year_start,
+        "year_end": year_end,
+        "month_start": month_start,
+        "month_end": month_end,
+        "information_system": system,
+        "fetch_function": "fetch_datasus",
+        "process_function": "process_datasus",
+    }
+
+
+def build_datasus_request_manifest(
+    *,
+    system: str,
+    uf: str,
+    year_start: int,
+    year_end: int,
+    month_start: int | None = None,
+    month_end: int | None = None,
+    config: dict[str, Any] | None = None,
+    data_root: str | Path = "data",
+) -> DATASUSRequestManifest:
+    config = config or load_datasus_config()
+    system = normalize_system(system)
+    uf = normalize_uf(uf)
+
+    identity = _request_identity(
+        system=system,
+        uf=uf,
+        year_start=year_start,
+        year_end=year_end,
+        month_start=month_start,
+        month_end=month_end,
+        config=config,
+    )
+    request_hash = content_hash(identity)
+    period = period_label(
+        year_start=year_start,
+        year_end=year_end,
+        month_start=month_start,
+        month_end=month_end,
+    )
+
+    data_root = Path(data_root)
+
+    raw_dir = data_root / "raw" / "datasus" / system / f"uf={uf}" / f"period={period}" / request_hash
+    processed_dir = data_root / "processed" / "datasus" / system / f"uf={uf}" / f"period={period}" / request_hash
+
+    now = utc_now()
+
+    return DATASUSRequestManifest(
+        system=system,
+        uf=uf,
+        year_start=year_start,
+        month_start=month_start,
+        year_end=year_end,
+        month_end=month_end,
+        information_system=identity["information_system"],
+        fetch_function=identity["fetch_function"],
+        process_function=identity["process_function"],
+        raw_path=str(raw_dir / "raw.rds"),
+        processed_path=str(processed_dir / "processed.parquet"),
+        raw_sha256="",
+        processed_sha256="",
+        row_counts={},
+        column_lists={},
+        started_at=now,
+        ended_at=now,
+        duration_seconds=0.0,
+        rscript_path=str(config.get("rscript_path", "Rscript")),
+        r_version=None,
+        microdatasus_version=None,
+        read_dbc_version=None,
+        stdout_path=str(raw_dir / "stdout.log"),
+        stderr_path=str(raw_dir / "stderr.log"),
+        heartbeat_path=str(raw_dir / "heartbeat.json"),
+        exit_code=41,
+        status="blocked",
+        error_message="not_executed",
+        request_hash=request_hash,
+    )
+
+
+def build_datasus_manifests(
+    *,
+    system: str,
+    uf: str,
+    years: str,
+    config: dict[str, Any] | None = None,
+    data_root: str | Path = "data",
+) -> list[DATASUSRequestManifest]:
+    config = config or load_datasus_config()
+    system = normalize_system(system)
+    uf = normalize_uf(uf)
+    parsed_years = parse_years(years)
+
+    # Slice 1B implements deterministic UF × year manifests.
+    # SIH-RD and CNES-ST month-level chunking will be introduced when their
+    # source-specific slices require it.
+    return [
+        build_datasus_request_manifest(
+            system=system,
+            uf=uf,
+            year_start=year,
+            year_end=year,
+            month_start=None,
+            month_end=None,
+            config=config,
+            data_root=data_root,
+        )
+        for year in parsed_years
+    ]
+
+
+def manifest_output_path(
+    manifest: DATASUSRequestManifest,
+    *,
+    root: str | Path = "data/manifests/datasus",
+) -> Path:
+    period = period_label(
+        year_start=manifest.year_start,
+        year_end=manifest.year_end,
+        month_start=manifest.month_start,
+        month_end=manifest.month_end,
+    )
+    return (
+        Path(root)
+        / manifest.system
+        / f"uf={manifest.uf}"
+        / f"period={period}"
+        / manifest.request_hash
+        / "manifest.json"
+    )
+
+
+def write_request_manifest(
+    manifest: DATASUSRequestManifest,
+    *,
+    root: str | Path = "data/manifests/datasus",
+) -> Path:
+    path = manifest_output_path(manifest, root=root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return path
+
+
+def read_request_manifest(path: str | Path) -> DATASUSRequestManifest:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return DATASUSRequestManifest.model_validate(payload)

@@ -24,6 +24,7 @@ from pegasus.datasus.schema_compare import compare_profiles
 from pegasus.datasus.subprocess import DatasusConfig, fetch_datasus_chunk
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
+from pegasus.output.sidra_denominator_anchor import attach_sidra_population_anchor_to_run
 from pegasus.registries.validators import validate_registry_tree
 from pegasus.sidra.api import SidraClient, SidraClientConfig
 from pegasus.sidra.extract import extract_chunk_plan, read_chunk_plan, write_chunk_plan, write_extraction_log
@@ -247,6 +248,21 @@ def efg_build_sim_fixture(
     if not result.ok:
         _fail(result.errors)
     print(f"[green]sim fixture EFG bundle valid[/green] {output}")
+
+
+@efg_app.command("attach-sidra-denominator")
+def efg_attach_sidra_denominator(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    sidra_facts: Path = typer.Option(..., "--sidra-facts"),
+) -> None:
+    output = attach_sidra_population_anchor_to_run(
+        run_dir=run_dir,
+        sidra_facts_path=sidra_facts,
+    )
+    result = validate_output_bundle(run_dir=str(output))
+    if not result.ok:
+        _fail(result.errors)
+    print(f"[green]SIDRA denominator anchor attached and run bundle valid[/green] {output}")
 
 
 @sidra_app.command("metadata-fixture")

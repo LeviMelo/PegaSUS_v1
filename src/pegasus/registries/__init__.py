@@ -1,1 +1,1 @@
-
+"""PegaSUS registries package."""

@@ -1,22 +1,19 @@
-﻿compute:
+compute:
   data_backend: "duckdb_polars_arrow"
+  production_pandas_allowed: false
   numerical_backend: "pytorch"
-
   rapids_enabled: false
-  cudf_enabled: false
-  polars_gpu_enabled: false
   wsl_required: false
 
   cuda:
-    dtype: "float32"
-    max_vram_fraction: 0.80
-
-    required_for_region_modules:
-      - "hsic_nystrom"
+    enabled_for:
+      - "pirs_hsic_exact"
+      - "pirs_hsic_nystrom"
+      - "pirs_hsic_rff"
       - "race_bridge_posterior"
       - "race_bridge_tensor_embedded"
-      - "stdfm"
-
-    preferred_for_modules:
+      - "stdfm_solver"
       - "population_tensor_kernels"
-      - "large_q_tensor_metrics"
+    require_cuda_for_region_hsic: true
+    dtype: "float32"
+    max_vram_fraction: 0.80

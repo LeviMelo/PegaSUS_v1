@@ -1,26 +1,12 @@
-from __future__ import annotations
+"""
+Slice 0 scaffold module: core/constants.py
 
-OUTPUT_BUNDLE_KEYS: tuple[str, ...] = (
-    "V_fields",
-    "E_DAG",
-    "Q_tensor",
-    "P_vector",
-    "UserIntent",
-    "Warnings",
-    "ModelAssociations",
-    "ResidualAssociations",
-    "Hypotheses",
-    "Tables",
-    "Maps",
-    "VariableDictionary",
-    "FailedBranches",
-    "QuarantinedFields",
-    "ForcedFields",
-    "RunConfig",
-    "ReproducibilityManifest",
-)
+This module intentionally contains no domain logic. Future implementation slices
+must replace blocked stubs through typed contracts.
+"""
 
-SIDRA_MAX_CELLS_PER_REQUEST = 49_900
+from pegasus.core.exceptions import BlockedModuleError
 
-PROJECT_NAME = "PegaSUS"
-PACKAGE_NAME = "pegasus"
+
+def blocked(*, module: str = "core/constants.py", reason: str = "slice0_scaffold_only") -> None:
+    raise BlockedModuleError(module=module, reason=reason)

@@ -1,35 +1,26 @@
 {
-  "name": "alagoas_smoke",
-  "description": "First PegaSUS smoke run: architecture-valid bundle, SIM-DO target pending ingestion.",
   "geography": {
-    "type": "state",
-    "uf": "AL",
-    "municipalities": []
+    "level": "UF",
+    "codes": [
+      "27"
+    ],
+    "uf": [
+      "AL"
+    ]
   },
   "time": {
     "start_year": 2022,
     "end_year": 2022
   },
-  "health_seeds": [
-    "ICD10_CHAPTER_ALL"
-  ],
-  "mandatory_fields": [
-    "CrudeMortality"
-  ],
-  "system_weights": {
-    "SIM": 1.0,
-    "SIH": 0.0,
-    "SINASC": 0.0,
-    "CNES": 0.0,
-    "SIDRA": 1.0
-  },
-  "context_policy": [
-    "demographics",
-    "observer"
-  ],
+  "health_seeds": [],
+  "mandatory_fields": [],
+  "system_weights": {},
+  "context_policy": [],
   "budget": "fast",
   "geo_mode": "native",
-  "race_tensor_mode": "decoupled",
   "force_selectors": [],
-  "exclude_systems": []
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "race_tensor_mode": "decoupled",
+  "population_mode": "official_sidra_anchor"
 }

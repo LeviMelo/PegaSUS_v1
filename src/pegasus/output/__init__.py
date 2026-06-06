@@ -1,1 +1,1 @@
-
+"""PegaSUS output package."""

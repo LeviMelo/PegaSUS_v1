@@ -1,53 +1,12 @@
-﻿schema_version: "1.0"
-registry_version: "v1.0.2"
-created_at: "2026-05-31"
-updated_at: "2026-05-31"
-provenance: "PegaSUS v1.0 production contract"
-
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for aggregation_registry.yaml; not a calibrated
+  analytic registry.
 entries:
-  - id: "additive_count"
-    status: "stable"
-    description: "Additive measure such as deaths, births, admissions, beds."
-    aggregation: "additive"
-    allowed_pushforward: true
-    allowed_pullback: false
-    rate_handling: "requires_numerator_denominator"
-    warnings: []
-
-  - id: "weighted_mean"
-    status: "stable"
-    description: "Mean that can be aggregated only through numerator/weight recovery."
-    aggregation: "weighted_mean"
-    allowed_pushforward: true
-    allowed_pullback: false
-    rate_handling: "requires_weight"
-    warnings: []
-
-  - id: "statistical_functional"
-    status: "stable"
-    description: "Median, quantile, variance, or other statistical functional."
-    aggregation: "statistical_functional"
-    allowed_pushforward: false
-    allowed_pullback: false
-    rate_handling: "non_aggregable_without_distributional_model"
-    warnings:
-      - "non_aggregable_without_distributional_model"
-
-  - id: "compositional"
-    status: "stable"
-    description: "Simplex/compositional field."
-    aggregation: "compositional"
-    allowed_pushforward: true
-    allowed_pullback: false
-    rate_handling: "requires_compositional_operator"
-    warnings: []
-
-  - id: "non_aggregable"
-    status: "stable"
-    description: "Field that cannot be safely aggregated/disaggregated by default."
-    aggregation: "non_aggregable"
-    allowed_pushforward: false
-    allowed_pullback: false
-    rate_handling: "forbidden"
-    warnings:
-      - "non_aggregable"
+- id: aggregation_registry
+  status: deferred
+  description: Slice 0 placeholder registry.
+  warnings:
+  - scaffold_only

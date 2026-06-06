@@ -1,159 +1,108 @@
 from __future__ import annotations
 
-from pegasus.core.exceptions import RegistryError
-from pegasus.registries.loader import LoadedRegistrySet
-from pegasus.registries.schemas import (
-    AggregationRegistry,
-    CarrierRegistry,
-    QualityPermissionsRegistry,
-    RaceAxisRegistry,
-    SourceFieldsRegistry,
-    UnitRegistry,
-)
+import json
+from pathlib import Path
+
+import yaml
 
 
-def _assert_unique_ids(name: str, ids: list[str]) -> None:
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-
-    for item in ids:
-        if item in seen:
-            duplicates.add(item)
-        seen.add(item)
-
-    if duplicates:
-        raise RegistryError(f"Registry '{name}' has duplicate ids: {sorted(duplicates)}")
+REQUIRED_REGISTRY_KEYS = {
+    "schema_version",
+    "registry_version",
+    "created_at",
+    "updated_at",
+    "provenance",
+    "entries",
+}
 
 
-def validate_registry_set(registry_set: LoadedRegistrySet) -> list[str]:
-    warnings: list[str] = []
+def validate_registry_file(path: str | Path) -> list[str]:
+    path = Path(path)
+    errors: list[str] = []
 
-    required = {
-        "source_fields",
-        "carrier_registry",
-        "unit_registry",
-        "aggregation_registry",
-        "provenance_registry",
-        "quality_permissions",
-        "race_axis_registry",
-    }
+    if path.name == "registry_manifest.yaml":
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if "registry_set" not in data:
+            errors.append("registry_manifest missing registry_set")
+        if "registries" not in data:
+            errors.append("registry_manifest missing registries")
+        return errors
 
-    missing = required - set(registry_set.registries)
-    if missing:
-        raise RegistryError(f"Missing required registries: {sorted(missing)}")
+    if path.suffix == ".jsonl":
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                json.loads(line)
+            except json.JSONDecodeError as exc:
+                errors.append(f"{path.name}:{i}: invalid jsonl: {exc}")
+        return errors
 
-    for name, loaded in registry_set.registries.items():
-        payload = loaded.payload
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
 
-        if hasattr(payload, "entries"):
-            ids = [entry.id for entry in payload.entries]  # type: ignore[attr-defined]
-            _assert_unique_ids(name, ids)
+    if not isinstance(data, dict):
+        return [f"{path.name}: registry is not a mapping"]
 
-    _validate_source_fields(registry_set)
-    _validate_carrier_and_unit_roles(registry_set)
-    _validate_quality_permissions(registry_set)
-    _validate_race_axes(registry_set)
+    missing = REQUIRED_REGISTRY_KEYS - set(data)
+    for key in sorted(missing):
+        errors.append(f"{path.name}: missing {key}")
 
-    return warnings
+    if "entries" in data and not isinstance(data["entries"], list):
+        errors.append(f"{path.name}: entries is not a list")
 
+    for idx, entry in enumerate(data.get("entries", [])):
+        if not isinstance(entry, dict):
+            errors.append(f"{path.name}: entry {idx} is not a mapping")
+            continue
+        for key in ["id", "status", "description", "warnings"]:
+            if key not in entry:
+                errors.append(f"{path.name}: entry {idx} missing {key}")
 
-def _validate_source_fields(registry_set: LoadedRegistrySet) -> None:
-    source = registry_set.registries["source_fields"].payload
-    if not isinstance(source, SourceFieldsRegistry):
-        raise RegistryError("source_fields registry has wrong type.")
-
-    if not source.entries:
-        raise RegistryError("source_fields registry must not be empty.")
-
-    ids = {entry.id for entry in source.entries}
-
-    required_first_slice = {
-        "SIM-DO.DTOBITO",
-        "SIM-DO.IDADE",
-        "SIM-DO.SEXO",
-        "SIM-DO.RACACOR",
-        "SIM-DO.CODMUNRES",
-        "SIM-DO.CAUSABAS",
-    }
-
-    missing = required_first_slice - ids
-    if missing:
-        raise RegistryError(
-            "source_fields registry is missing first-slice SIM-DO fields: "
-            f"{sorted(missing)}"
-        )
+    return errors
 
 
-def _validate_carrier_and_unit_roles(registry_set: LoadedRegistrySet) -> None:
-    carrier = registry_set.registries["carrier_registry"].payload
-    unit = registry_set.registries["unit_registry"].payload
-
-    if not isinstance(carrier, CarrierRegistry):
-        raise RegistryError("carrier_registry has wrong type.")
-    if not isinstance(unit, UnitRegistry):
-        raise RegistryError("unit_registry has wrong type.")
-
-    carrier_roles = {entry.role for entry in carrier.entries if entry.legal}
-    unit_roles = {role for entry in unit.entries for role in entry.legal_roles}
-
-    missing_roles = carrier_roles - unit_roles
-    if missing_roles:
-        raise RegistryError(
-            "Carrier roles missing compatible unit rules: "
-            f"{sorted(missing_roles)}"
-        )
-
-
-def _validate_quality_permissions(registry_set: LoadedRegistrySet) -> None:
-    quality = registry_set.registries["quality_permissions"].payload
-    if not isinstance(quality, QualityPermissionsRegistry):
-        raise RegistryError("quality_permissions has wrong type.")
-
-    states = {entry.state for entry in quality.entries}
-    required_states = {
-        "verified",
-        "fragile",
-        "forced_fragile",
-        "quarantined_descriptive",
-        "quarantined_nochildren",
-        "illegal_excluded",
-        "blocked_solver_pending",
-    }
-
-    missing = required_states - states
-    if missing:
-        raise RegistryError(
-            f"quality_permissions is missing required states: {sorted(missing)}"
-        )
-
-
-def _validate_race_axes(registry_set: LoadedRegistrySet) -> None:
-    race_axis = registry_set.registries["race_axis_registry"].payload
-    if not isinstance(race_axis, RaceAxisRegistry):
-        raise RegistryError("race_axis_registry has wrong type.")
-
-    by_source = {entry.source_system: entry for entry in race_axis.entries}
-
-    for source in ("IBGE", "SIM-DO", "SIH-RD", "SINASC"):
-        if source not in by_source:
-            raise RegistryError(f"race_axis_registry missing source: {source}")
-
-    if by_source["IBGE"].race_axis != "self_declared":
-        raise RegistryError("IBGE race axis must be self_declared.")
-
-    for source in ("SIM-DO", "SIH-RD", "SINASC"):
-        entry = by_source[source]
-        if entry.denominator_compatible:
-            raise RegistryError(
-                f"{source} race axis must not be denominator-compatible by default."
-            )
-        if entry.required_bridge_to_self_declared != "Bridge_R":
-            raise RegistryError(
-                f"{source} must require Bridge_R to align with self-declared denominators."
-            )
-
-
-def validate_aggregation_registry(registry_set: LoadedRegistrySet) -> None:
-    agg = registry_set.registries["aggregation_registry"].payload
-    if not isinstance(agg, AggregationRegistry):
-        raise RegistryError("aggregation_registry has wrong type.")
+def validate_registry_tree(root: str | Path = "config/registries") -> list[str]:
+    root = Path(root)
+    errors: list[str] = []
+    required = [
+        "registry_manifest.yaml",
+        "source_fields.yaml",
+        "composite_decoders.yaml",
+        "carrier_registry.yaml",
+        "unit_registry.yaml",
+        "aggregation_registry.yaml",
+        "provenance_registry.yaml",
+        "quality_permissions.yaml",
+        "race_axis_registry.yaml",
+        "race_bridge_priors.yaml",
+        "icd_catalog.yaml",
+        "icd_quality_groups.yaml",
+        "diagnostic_topology.yaml",
+        "clinical_event_definitions.yaml",
+        "cnes_capacity_registry.yaml",
+        "sih_cost_registry.yaml",
+        "sidra_table_seed.jsonl",
+        "sidra_views.yaml",
+        "sidra_category_maps.yaml",
+        "sidra_stitching.yaml",
+        "sidra_regime_registry.yaml",
+        "municipality_crosswalk_sources.yaml",
+        "join_affordances.yaml",
+        "bridge_grammars.yaml",
+        "stdfm_registry.yaml",
+        "population_solver_registry.yaml",
+        "model_registry.yaml",
+        "residual_registry.yaml",
+        "hsic_registry.yaml",
+        "null_registry.yaml",
+        "output_schema.yaml",
+    ]
+    for name in required:
+        path = root / name
+        if not path.exists():
+            errors.append(f"missing registry: {name}")
+        else:
+            errors.extend(validate_registry_file(path))
+    return errors

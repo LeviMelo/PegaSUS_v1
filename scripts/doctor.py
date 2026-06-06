@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from pegasus.cli import app
+from pegasus.cli import doctor
 
 if __name__ == "__main__":
-    app()
+    doctor()

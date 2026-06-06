@@ -1,40 +1,17 @@
-﻿name: pegasus
-
+name: pegasus
 channels:
-  - pytorch
-  - nvidia
   - conda-forge
   - defaults
-
 dependencies:
   - python=3.11
   - pip
-  - pytorch
-  - pytorch-cuda=12.1
-  - numpy
-  - scipy
-  - pandas
+  - duckdb
   - polars
   - pyarrow
-  - duckdb
-  - pydantic>=2
-  - pydantic-settings
+  - pydantic
   - typer
-  - rich
   - pyyaml
-  - httpx
-  - aiofiles
-  - tenacity
-  - orjson
-  - loguru
-  - tqdm
-  - networkx
-  - geopandas
-  - shapely
-  - pyproj
+  - rich
   - pytest
-  - ruff
-  - mypy
-
   - pip:
-      - python-dotenv
+      - -e .[dev]

@@ -1,9 +1,10 @@
-﻿datasus:
+datasus:
   backend: "microdatasus"
   rscript_path: "Rscript"
-
   preserve_raw: true
   preserve_processed: true
+  r_timeout_seconds: 7200
+  heartbeat_timeout_seconds: 900
 
   systems:
     - "SIM-DO"
@@ -11,7 +12,10 @@
     - "SIH-RD"
     - "CNES-ST"
 
-  optional_ftp_discovery: false
+  chunking:
+    SIM-DO: "uf_year"
+    SINASC: "uf_year"
+    SIH-RD: "uf_year_or_month_by_size"
+    CNES-ST: "uf_month_or_year_by_source"
 
-  r_timeout_seconds: 7200
-  heartbeat_timeout_seconds: 900
+  optional_ftp_discovery: false

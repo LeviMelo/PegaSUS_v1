@@ -1,0 +1,24 @@
+{
+  "geography": {
+    "level": "country",
+    "codes": [
+      "BR"
+    ],
+    "uf": []
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022
+  },
+  "health_seeds": [],
+  "mandatory_fields": [],
+  "system_weights": {},
+  "context_policy": [],
+  "budget": "deep",
+  "geo_mode": "AMC",
+  "force_selectors": [],
+  "exclude_systems": [],
+  "execution_scale": "national_blocked",
+  "race_tensor_mode": "embedded_posteriorC",
+  "population_mode": "blocked_missing"
+}

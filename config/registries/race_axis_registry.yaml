@@ -1,44 +1,23 @@
-﻿schema_version: "1.0"
-registry_version: "v1.0.2"
-created_at: "2026-05-31"
-updated_at: "2026-05-31"
-provenance: "PegaSUS v1.0.2 race-axis addendum"
-
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for race_axis_registry.yaml; not a calibrated
+  analytic registry.
 entries:
-  - id: "IBGE.self_declared"
-    status: "stable"
-    description: "IBGE census or population denominator race/color axis."
-    source_system: "IBGE"
-    race_axis: "self_declared"
-    denominator_compatible: true
-    warnings: []
-
-  - id: "SIM-DO.administrative_death_declaration"
-    status: "stable"
-    description: "SIM-DO administrative death declaration race/color axis."
-    source_system: "SIM-DO"
-    race_axis: "administrative_death_declaration"
-    denominator_compatible: false
-    required_bridge_to_self_declared: "Bridge_R"
-    warnings:
-      - "race_axis_noncommensurability"
-
-  - id: "SIH-RD.billing_record"
-    status: "stable"
-    description: "SIH-RD billing/administrative race/color axis."
-    source_system: "SIH-RD"
-    race_axis: "billing_record"
-    denominator_compatible: false
-    required_bridge_to_self_declared: "Bridge_R"
-    warnings:
-      - "race_axis_noncommensurability"
-
-  - id: "SINASC.administrative_mixed"
-    status: "stable"
-    description: "SINASC mixed administrative/birth declaration race/color axis."
-    source_system: "SINASC"
-    race_axis: "administrative_mixed"
-    denominator_compatible: false
-    required_bridge_to_self_declared: "Bridge_R"
-    warnings:
-      - "race_axis_noncommensurability"
+- id: IBGE.self_declared
+  status: stable
+  description: IBGE self-declared race axis.
+  warnings: []
+- id: SIM-DO.administrative_death_declaration
+  status: stable
+  description: SIM death declaration race axis.
+  warnings: []
+- id: SIH-RD.billing_record
+  status: stable
+  description: SIH billing race axis.
+  warnings: []
+- id: SINASC.administrative_mixed
+  status: stable
+  description: SINASC administrative mixed race axis.
+  warnings: []

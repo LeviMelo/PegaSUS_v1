@@ -1,29 +1,23 @@
-from __future__ import annotations
-
-
 class PegasusError(Exception):
-    """Base class for PegaSUS errors."""
+    """Base PegaSUS exception."""
 
 
-class ConfigurationError(PegasusError):
-    """Raised when project configuration is invalid."""
+class ConfigError(PegasusError):
+    """Configuration failure."""
 
 
-class RegistryError(PegasusError):
-    """Raised when registry loading or validation fails."""
+class RegistryValidationError(PegasusError):
+    """Registry validation failure."""
 
 
-class DataContractError(PegasusError):
-    """Raised when a data artifact violates its contract."""
+class OutputValidationError(PegasusError):
+    """Output bundle validation failure."""
 
 
-class ExternalToolError(PegasusError):
-    """Raised when an external tool such as Rscript fails."""
+class BlockedModuleError(PegasusError):
+    """Raised when an architecturally visible but inactive module is invoked."""
 
-
-class ModuleBlockedError(PegasusError):
-    """Raised when a blueprint-locked module is present but intentionally blocked."""
-
-
-class IllegalTransformationError(PegasusError):
-    """Raised when a transformation violates the legality predicate."""
+    def __init__(self, *, module: str, reason: str = "blocked_state"):
+        self.module = module
+        self.reason = reason
+        super().__init__(f"{module} is blocked: {reason}")

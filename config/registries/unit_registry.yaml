@@ -1,108 +1,12 @@
-﻿schema_version: "1.0"
-registry_version: "v1.0.2"
-created_at: "2026-05-31"
-updated_at: "2026-05-31"
-provenance: "PegaSUS v1.0 production contract"
-
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for unit_registry.yaml; not a calibrated analytic
+  registry.
 entries:
-  - id: "counts_over_person_years"
-    status: "stable"
-    description: "Count numerator divided by person-years."
-    numerator_unit: "counts"
-    denominator_unit: "person_years"
-    output_unit: "rate"
-    legal_roles:
-      - "mortality_rate"
-      - "hospitalization_rate"
-      - "birth_rate"
-      - "fertility_rate"
-    warnings: []
-
-  - id: "counts_over_counts"
-    status: "stable"
-    description: "Count numerator divided by count denominator."
-    numerator_unit: "counts"
-    denominator_unit: "counts"
-    output_unit: "proportion"
-    legal_roles:
-      - "infant_mortality"
-      - "neonatal_mortality"
-      - "postneonatal_mortality"
-      - "maternal_mortality"
-      - "inpatient_mortality"
-      - "icu_use_share"
-      - "birth_outcome_share"
-      - "delivery_share"
-      - "anomaly_prevalence"
-    warnings: []
-
-  - id: "currency_over_counts"
-    status: "stable"
-    description: "Currency divided by event count."
-    numerator_unit: "currency_real"
-    denominator_unit: "counts"
-    output_unit: "mean_cost"
-    legal_roles:
-      - "mean_cost"
-    warnings: []
-
-  - id: "days_over_counts"
-    status: "stable"
-    description: "Hospital-days divided by admission count."
-    numerator_unit: "days"
-    denominator_unit: "counts"
-    output_unit: "mean_duration"
-    legal_roles:
-      - "mean_LOS"
-    warnings: []
-
-  - id: "grams_over_counts"
-    status: "stable"
-    description: "Birth weight in grams divided by birth count."
-    numerator_unit: "grams"
-    denominator_unit: "counts"
-    output_unit: "mean_weight"
-    legal_roles:
-      - "mean_birth_weight"
-    warnings: []
-
-  - id: "beds_over_person_years"
-    status: "stable"
-    description: "Beds divided by population/person-years."
-    numerator_unit: "beds"
-    denominator_unit: "person_years"
-    output_unit: "capacity_density"
-    legal_roles:
-      - "capacity_density"
-    warnings: []
-
-  - id: "facilities_over_person_years"
-    status: "stable"
-    description: "Facilities divided by population/person-years."
-    numerator_unit: "facilities"
-    denominator_unit: "person_years"
-    output_unit: "facility_density"
-    legal_roles:
-      - "facility_density"
-    warnings: []
-
-  - id: "physicians_over_person_years"
-    status: "stable"
-    description: "Physicians divided by population/person-years."
-    numerator_unit: "physicians"
-    denominator_unit: "person_years"
-    output_unit: "workforce_density"
-    legal_roles:
-      - "workforce_density"
-    warnings: []
-
-  - id: "domiciles_over_domiciles"
-    status: "stable"
-    description: "Domiciles with a condition divided by total domiciles."
-    numerator_unit: "domiciles"
-    denominator_unit: "domiciles"
-    output_unit: "coverage"
-    legal_roles:
-      - "sanitation_coverage"
-      - "household_coverage"
-    warnings: []
+- id: unit_registry
+  status: deferred
+  description: Slice 0 placeholder registry.
+  warnings:
+  - scaffold_only

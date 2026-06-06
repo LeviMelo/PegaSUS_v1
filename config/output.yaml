@@ -1,0 +1,4 @@
+output:
+  exact_first_class_keys: 17
+  require_global_telemetry: true
+  write_partial_telemetry_on_abort: true

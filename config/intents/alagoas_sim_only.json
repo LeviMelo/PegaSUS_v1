@@ -1,0 +1,35 @@
+{
+  "geography": {
+    "level": "UF",
+    "codes": [
+      "27"
+    ],
+    "uf": [
+      "AL"
+    ]
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022
+  },
+  "health_seeds": [],
+  "mandatory_fields": [
+    "V_M01"
+  ],
+  "system_weights": {
+    "SIM-DO": 1.0
+  },
+  "context_policy": [],
+  "budget": "fast",
+  "geo_mode": "native",
+  "force_selectors": [],
+  "exclude_systems": [
+    "SIH-RD",
+    "SINASC",
+    "CNES-ST",
+    "SIDRA"
+  ],
+  "execution_scale": "smoke",
+  "race_tensor_mode": "decoupled",
+  "population_mode": "blocked_missing"
+}

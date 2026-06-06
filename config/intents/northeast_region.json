@@ -1,0 +1,24 @@
+{
+  "geography": {
+    "level": "region",
+    "codes": [
+      "2"
+    ],
+    "uf": []
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022
+  },
+  "health_seeds": [],
+  "mandatory_fields": [],
+  "system_weights": {},
+  "context_policy": [],
+  "budget": "standard",
+  "geo_mode": "AMC",
+  "force_selectors": [],
+  "exclude_systems": [],
+  "execution_scale": "region",
+  "race_tensor_mode": "downstream_bridge",
+  "population_mode": "official_sidra_anchor"
+}

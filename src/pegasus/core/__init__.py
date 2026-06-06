@@ -1,1 +1,1 @@
-
+"""PegaSUS core package."""

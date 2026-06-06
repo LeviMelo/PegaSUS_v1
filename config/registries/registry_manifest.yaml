@@ -1,29 +1,128 @@
-﻿registry_set:
-  name: "PegaSUS_core"
-  version: "v1.0.2"
-  created_at: "2026-05-31"
-  owner: "PegaSUS"
+registry_set:
+  name: PegaSUS_core
+  version: v1.0
+  created_at: '2026-06-06'
+  owner: local
+  git_commit: uninitialized
   dirty_allowed: false
-
 registries:
   source_fields:
-    path: "source_fields.yaml"
-    schema_version: "1.0"
+    path: source_fields.yaml
+    schema_version: '1.0'
+    sha256: e2b2df59406fb78c92e3283c4176c18abd12c1445e4dbc80b4470b85b0b7cca3
+  composite_decoders:
+    path: composite_decoders.yaml
+    schema_version: '1.0'
+    sha256: 0b4adddcba1cacde074210186b4dabd8f41ef83d01767490838f38e357c60bbf
   carrier_registry:
-    path: "carrier_registry.yaml"
-    schema_version: "1.0"
+    path: carrier_registry.yaml
+    schema_version: '1.0'
+    sha256: 102c0bf918933b8209024870ff9ee3922dad757b89c1c1c9415f71c0937d8f57
   unit_registry:
-    path: "unit_registry.yaml"
-    schema_version: "1.0"
+    path: unit_registry.yaml
+    schema_version: '1.0'
+    sha256: 6b68f7ea975f9ad502ecb735fddc6cc3a36da9fcfb1860d35a5d302ed8bd2865
   aggregation_registry:
-    path: "aggregation_registry.yaml"
-    schema_version: "1.0"
+    path: aggregation_registry.yaml
+    schema_version: '1.0'
+    sha256: b880c52f01ccbdd5158b898b1eb676fa7816a471c8828ad1a74b5911975c6f20
   provenance_registry:
-    path: "provenance_registry.yaml"
-    schema_version: "1.0"
+    path: provenance_registry.yaml
+    schema_version: '1.0'
+    sha256: 1ec966f3ef60082e3f3d53bd2eb334d62d7863c53874412ee76e218fa4383196
   quality_permissions:
-    path: "quality_permissions.yaml"
-    schema_version: "1.0"
+    path: quality_permissions.yaml
+    schema_version: '1.0'
+    sha256: b7ad09ed865f11114c1b3b759f318e16a47d6d034c6532e9d4abcce162101320
   race_axis_registry:
-    path: "race_axis_registry.yaml"
-    schema_version: "1.0"
+    path: race_axis_registry.yaml
+    schema_version: '1.0'
+    sha256: e7d3dd08abcf81752905ff36bf32d05b5d94d3fb90898ed7ca7d4cd30411d532
+  race_bridge_priors:
+    path: race_bridge_priors.yaml
+    schema_version: '1.0'
+    sha256: fe0e630f8ffe20e5ae637e179288a6ee2c0eb97d98505798d10bf2629a4ae346
+  icd_catalog:
+    path: icd_catalog.yaml
+    schema_version: '1.0'
+    sha256: 239a5370b3058fa48f310a80d7bcad06f38516aa6b2ad793530179afcc682e2d
+  icd_quality_groups:
+    path: icd_quality_groups.yaml
+    schema_version: '1.0'
+    sha256: 8f69b40a58dec98a03981b730bdc5f9c5daa652c9870f08b750e2dfc94d52a60
+  diagnostic_topology:
+    path: diagnostic_topology.yaml
+    schema_version: '1.0'
+    sha256: f0fe4e8bca75e028a05e1ac123a25f6cebda70b12c44dc0479e8393516213095
+  clinical_event_definitions:
+    path: clinical_event_definitions.yaml
+    schema_version: '1.0'
+    sha256: 36f113b4d3010ada168c25cd2bb78ca11ee1ca6fc2196c4bccf1c55dee9ff723
+  cnes_capacity_registry:
+    path: cnes_capacity_registry.yaml
+    schema_version: '1.0'
+    sha256: 13c190a0379342cd558121f331c03b68bb723fa488bb3fbac0611d2cef50c2b6
+  sih_cost_registry:
+    path: sih_cost_registry.yaml
+    schema_version: '1.0'
+    sha256: 36e50f70058b5c1467c501195252a8ca72ce6f6b51c8d2ae1ae04dc123d753b9
+  sidra_views:
+    path: sidra_views.yaml
+    schema_version: '1.0'
+    sha256: 4b4197b593d3cbef6106da022e6fd7a5c5bf182e54bacf8631213affdc0134e1
+  sidra_category_maps:
+    path: sidra_category_maps.yaml
+    schema_version: '1.0'
+    sha256: d2a14e33afa33b9cfbc1650e575e2ccfbd64da1984c1a2ddc6917e184ef13694
+  sidra_stitching:
+    path: sidra_stitching.yaml
+    schema_version: '1.0'
+    sha256: 8bfe581dab813c7275f34505398d3a43ca9d81b6db8bdc0d67061ba5208fece4
+  sidra_regime_registry:
+    path: sidra_regime_registry.yaml
+    schema_version: '1.0'
+    sha256: 18b7bd44708668d49c63112b8d47ed7adbe93cb9ab0da4837e1f2fe9c614dc4b
+  municipality_crosswalk_sources:
+    path: municipality_crosswalk_sources.yaml
+    schema_version: '1.0'
+    sha256: 5d29ea9439c9b89a3c54205353f2dec5d868d4bba4ba4d56f6ed5d1b576de709
+  join_affordances:
+    path: join_affordances.yaml
+    schema_version: '1.0'
+    sha256: f190bf630d9406d7d79170254dca08b5602822d5618c9b498370e6e4233d6eec
+  bridge_grammars:
+    path: bridge_grammars.yaml
+    schema_version: '1.0'
+    sha256: 0c4199384a6315f3664918a59dd1625d72e47701899bd7e1d02a953691999364
+  stdfm_registry:
+    path: stdfm_registry.yaml
+    schema_version: '1.0'
+    sha256: 5e5c12ddfe3862d6ff2b777b60550bc1ef7fb178b448e779202b075a43795957
+  population_solver_registry:
+    path: population_solver_registry.yaml
+    schema_version: '1.0'
+    sha256: fd55cca8a7e1b42816326bbba31cbb44b3b9b041b63aad0584e871176cc7301c
+  model_registry:
+    path: model_registry.yaml
+    schema_version: '1.0'
+    sha256: 29cf00b60aab3e8faac642f5671e727fd0b886a1662f8e62d5850a689ed5222d
+  residual_registry:
+    path: residual_registry.yaml
+    schema_version: '1.0'
+    sha256: 01ea54cc472014fec9a76ecb6f46c8c26a4a9a6de367c942fab7a216d5a2f14d
+  hsic_registry:
+    path: hsic_registry.yaml
+    schema_version: '1.0'
+    sha256: 15839eb3819b7f955b7092f3880fa06e8834c1ccc155c49f3346e794d12fc799
+  null_registry:
+    path: null_registry.yaml
+    schema_version: '1.0'
+    sha256: b611de28579445961b97b0a717afea6d61fdb279c539eb8b3c9dcc5406dcae9d
+  output_schema:
+    path: output_schema.yaml
+    schema_version: '1.0'
+    sha256: 99ff619d94dfb7c6b5851c233fa096c766bfd60b3aa686f9b232dee58f12e4f9
+  sidra_table_seed:
+    path: sidra_table_seed.jsonl
+    schema_version: '1.0'
+    sha256: a7bcfc6b9e364fa8bdbf3ed3a570b3229088ea0acd2b2a8a202e58e09a5eedd6

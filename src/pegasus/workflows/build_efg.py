@@ -1,12 +1,16 @@
-"""
-Slice 0 scaffold module: workflows/build_efg.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from pathlib import Path
 
-from pegasus.core.exceptions import BlockedModuleError
+from pegasus.output.sim_efg_bundle import write_sim_fixture_efg_bundle
 
 
-def blocked(*, module: str = "workflows/build_efg.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def build_sim_fixture_efg_run(
+    *,
+    sim_events_path: str | Path,
+    run_dir: str | Path,
+) -> Path:
+    return write_sim_fixture_efg_bundle(
+        sim_events_path=sim_events_path,
+        run_dir=run_dir,
+    )

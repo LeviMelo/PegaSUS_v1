@@ -17,21 +17,25 @@ from pegasus.datasus.manifests import (
     read_request_manifest,
     write_request_manifest,
 )
+from pegasus.datasus.normalize import normalize_sim_do_events
 from pegasus.datasus.profile import profile_table
 from pegasus.datasus.schema_compare import compare_profiles
 from pegasus.datasus.subprocess import DatasusConfig, fetch_datasus_chunk
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.validators import validate_registry_tree
+from pegasus.workflows.build_efg import build_sim_fixture_efg_run
 
 app = typer.Typer(no_args_is_help=True)
 registries_app = typer.Typer(no_args_is_help=True)
 sidra_app = typer.Typer(no_args_is_help=True)
 datasus_app = typer.Typer(no_args_is_help=True)
+efg_app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(registries_app, name="registries")
 app.add_typer(sidra_app, name="sidra")
 app.add_typer(datasus_app, name="datasus")
+app.add_typer(efg_app, name="efg")
 
 
 def _fail(errors: list[str]) -> None:
@@ -179,6 +183,35 @@ def datasus_profile(manifest: Path = typer.Option(..., "--manifest")) -> None:
     print(f"[green]raw profile[/green] {raw_profile_path}")
     print(f"[green]processed profile[/green] {processed_profile_path}")
     print(f"[green]schema comparison[/green] {compare_path}")
+
+
+@datasus_app.command("normalize-sim")
+def datasus_normalize_sim(
+    input_path: Path = typer.Option(..., "--input"),
+    output_path: Path = typer.Option(..., "--output"),
+    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+) -> None:
+    result = normalize_sim_do_events(
+        input_path=input_path,
+        output_path=output_path,
+        source_manifest_hash=source_manifest_hash,
+    )
+    print(f"[green]sim normalized[/green] rows={result['row_count']} output={result['output_path']}")
+
+
+@efg_app.command("build-sim-fixture")
+def efg_build_sim_fixture(
+    sim_events: Path = typer.Option(..., "--sim-events"),
+    run_dir: Path = typer.Option(..., "--run-dir"),
+) -> None:
+    output = build_sim_fixture_efg_run(
+        sim_events_path=sim_events,
+        run_dir=run_dir,
+    )
+    result = validate_output_bundle(run_dir=str(output))
+    if not result.ok:
+        _fail(result.errors)
+    print(f"[green]sim fixture EFG bundle valid[/green] {output}")
 
 
 @sidra_app.command("metadata")

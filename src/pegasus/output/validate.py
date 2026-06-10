@@ -2,29 +2,131 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pyarrow.parquet as pq
 
+from pegasus.output.reproducibility import COMPILE_TELEMETRY_STAGES, TERMINAL_STAGE_STATUSES
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES, OutputSchemaRegistry, OutputValidationResult
+
+REQUIRED_V_FIELDS_COLUMNS = {
+    "field_id",
+    "name",
+    "kind",
+    "carrier",
+    "unit",
+    "aggregation",
+    "role",
+    "source",
+    "support_json",
+    "axes_json",
+    "operator",
+    "provenance",
+    "state",
+    "dashboard_safe",
+    "warnings",
+    "lineage_hash",
+    "registry_hash",
+    "materialization_state",
+    "path",
+}
+
+REQUIRED_E_DAG_COLUMNS = {
+    "edge_id",
+    "parent_field_id",
+    "child_field_id",
+    "operator",
+    "operator_params_json",
+    "registry_versions_json",
+    "created_at",
+}
+
+REQUIRED_Q_TENSOR_COLUMNS = {
+    "field_id",
+    "n_events",
+    "n_denom",
+    "n_eff",
+    "cov_S",
+    "cov_T",
+    "missingness",
+    "zero_inflation",
+    "denom_fragility",
+    "provenance_risk",
+    "state",
+    "dashboard_safe",
+    "warnings",
+    "computed_at",
+    "q_schema_version",
+}
+
+REQUIRED_VARIABLE_DICTIONARY_COLUMNS = {
+    "field_id",
+    "display_name",
+    "technical_name",
+    "definition",
+    "estimand_label",
+    "source_systems",
+    "carrier",
+    "unit",
+    "support_description",
+    "axis_description",
+    "provenance_description",
+    "state",
+    "dashboard_safe",
+    "interpretation_warning",
+}
+
+FIELD_REFERENCE_COLUMNS = {
+    "field_id",
+    "parent_field_id",
+    "child_field_id",
+    "outcome_field_id",
+    "covariate_field_id",
+    "residual_field_id",
+}
 
 
 def _read(path: Path):
     return pq.read_table(path)
 
 
-def validate_output_bundle(
-    *,
-    run_dir: str,
-    schema_registry: OutputSchemaRegistry | None = None,
-) -> OutputValidationResult:
-    schema_registry = schema_registry or OutputSchemaRegistry()
-    root = Path(run_dir)
-    errors: list[str] = []
-    warnings: list[str] = []
+def _column_values(table, column: str) -> list[Any]:
+    if column not in table.column_names:
+        return []
+    return table.column(column).to_pylist()
 
-    if not root.exists():
-        return OutputValidationResult(ok=False, errors=[f"run_dir does not exist: {root}"], warnings=[])
 
+def _nonnull(values: list[Any]) -> set[Any]:
+    return {value for value in values if value is not None and value != ""}
+
+
+def _load_json_file(path: Path, *, errors: list[str], name: str) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        errors.append(f"invalid {name}: {exc}")
+        return None
+
+
+def _load_json_cell(value: Any, *, errors: list[str], context: str) -> Any:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value))
+    except Exception as exc:
+        errors.append(f"invalid JSON cell at {context}: {exc}")
+        return None
+
+
+def _require_columns(*, table_name: str, actual: set[str], required: set[str], errors: list[str]) -> None:
+    missing = sorted(required - actual)
+    if missing:
+        errors.append(f"{table_name} missing required columns: {missing}")
+
+
+def _validate_first_class_keys(root: Path, schema_registry: OutputSchemaRegistry, errors: list[str]) -> None:
     expected_names = {OUTPUT_BUNDLE_FILES[key] for key in schema_registry.required_keys}
     found_names = {p.name for p in root.iterdir()}
 
@@ -36,54 +138,216 @@ def validate_output_bundle(
     for name in sorted(extra):
         errors.append(f"extra first-class artifact: {name}")
 
-    if errors:
-        return OutputValidationResult(ok=False, errors=errors, warnings=warnings)
+    for key, name in OUTPUT_BUNDLE_FILES.items():
+        if key not in schema_registry.required_keys:
+            continue
+        path = root / name
+        if not path.exists():
+            continue
+        if key in {"Tables", "Maps"}:
+            if not path.is_dir():
+                errors.append(f"first-class artifact is not a directory: {name}")
+        elif not path.is_file():
+            errors.append(f"first-class artifact is not a file: {name}")
 
+
+def _validate_manifest_and_config(
+    *,
+    root: Path,
+    errors: list[str],
+    warnings: list[str],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    user_intent = _load_json_file(root / "UserIntent.json", errors=errors, name="UserIntent.json")
+    run_config = _load_json_file(root / "RunConfig.json", errors=errors, name="RunConfig.json")
+    manifest = _load_json_file(root / "ReproducibilityManifest.json", errors=errors, name="ReproducibilityManifest.json")
+    p_vector = _load_json_file(root / "P_vector.json", errors=errors, name="P_vector.json")
+
+    if not isinstance(user_intent, dict):
+        errors.append("UserIntent.json is not a frozen JSON object")
+        user_intent = {}
+    if not isinstance(run_config, dict):
+        errors.append("RunConfig.json is not a frozen JSON object")
+        run_config = {}
+    if not isinstance(manifest, dict):
+        errors.append("ReproducibilityManifest.json is not a JSON object")
+        manifest = {}
+    if not isinstance(p_vector, (dict, list)):
+        errors.append("P_vector.json must be a JSON object or list")
+
+    compile_mode = run_config.get("compile_mode") or manifest.get("compile_mode")
+    is_compile_run = bool(compile_mode)
+
+    source_hashes = manifest.get("source_hashes")
+    registry_hashes = manifest.get("registry_hashes")
+
+    if is_compile_run:
+        if not isinstance(source_hashes, dict) or not source_hashes:
+            errors.append("ReproducibilityManifest.json missing nonempty source_hashes for compile run")
+        if not isinstance(registry_hashes, dict) or not registry_hashes:
+            errors.append("ReproducibilityManifest.json missing nonempty registry_hashes for compile run")
+        if not isinstance(run_config.get("source_hashes"), dict) or not run_config.get("source_hashes"):
+            errors.append("RunConfig.json missing nonempty source_hashes for compile run")
+        if not isinstance(run_config.get("registry_hashes"), dict) or not run_config.get("registry_hashes"):
+            errors.append("RunConfig.json missing nonempty registry_hashes for compile run")
+    else:
+        if not isinstance(source_hashes, dict) or not source_hashes:
+            warnings.append("ReproducibilityManifest.json has empty or missing source_hashes on non-compile run")
+        if not isinstance(registry_hashes, dict) or not registry_hashes:
+            warnings.append("ReproducibilityManifest.json has empty or missing registry_hashes on non-compile run")
+
+    _validate_telemetry(manifest=manifest, is_compile_run=is_compile_run, errors=errors)
+    return user_intent, run_config, manifest
+
+
+def _validate_telemetry(*, manifest: dict[str, Any], is_compile_run: bool, errors: list[str]) -> None:
+    telemetry = manifest.get("telemetry")
+    if not isinstance(telemetry, dict):
+        errors.append("ReproducibilityManifest.json missing global telemetry object")
+        return
+
+    total_wall_seconds = telemetry.get("total_wall_seconds")
+    if not isinstance(total_wall_seconds, (int, float)) or total_wall_seconds < 0:
+        errors.append("telemetry.total_wall_seconds missing or negative")
+
+    stage_status = telemetry.get("stage_status")
+    stage_wall_seconds = telemetry.get("stage_wall_seconds")
+    if not isinstance(stage_status, dict):
+        errors.append("telemetry.stage_status missing or not a mapping")
+        stage_status = {}
+    if not isinstance(stage_wall_seconds, dict):
+        errors.append("telemetry.stage_wall_seconds missing or not a mapping")
+        stage_wall_seconds = {}
+
+    if is_compile_run:
+        missing_status = sorted(set(COMPILE_TELEMETRY_STAGES) - set(stage_status))
+        missing_duration = sorted(set(COMPILE_TELEMETRY_STAGES) - set(stage_wall_seconds))
+        if missing_status:
+            errors.append(f"telemetry.stage_status missing compile stages: {missing_status}")
+        if missing_duration:
+            errors.append(f"telemetry.stage_wall_seconds missing compile stages: {missing_duration}")
+
+    for stage, status in stage_status.items():
+        if status not in TERMINAL_STAGE_STATUSES:
+            errors.append(f"invalid telemetry stage status: {stage}={status}")
+
+    for stage, duration in stage_wall_seconds.items():
+        if not isinstance(duration, (int, float)) or duration < 0:
+            errors.append(f"invalid telemetry stage duration: {stage}={duration}")
+
+
+def _validate_parquet_contracts(
+    *,
+    root: Path,
+    errors: list[str],
+) -> None:
     try:
         v = _read(root / "V_fields.parquet")
         q = _read(root / "Q_tensor.parquet")
         vd = _read(root / "VariableDictionary.parquet")
         edges = _read(root / "E_DAG.parquet")
         warnings_table = _read(root / "Warnings.parquet")
+        failed_branches = _read(root / "FailedBranches.parquet")
+        quarantined = _read(root / "QuarantinedFields.parquet")
+        forced = _read(root / "ForcedFields.parquet")
+        model_assoc = _read(root / "ModelAssociations.parquet")
+        residual_assoc = _read(root / "ResidualAssociations.parquet")
+        hypotheses = _read(root / "Hypotheses.parquet")
     except Exception as exc:
-        return OutputValidationResult(ok=False, errors=[f"parquet read failure: {exc}"], warnings=warnings)
+        errors.append(f"parquet read failure: {exc}")
+        return
+
+    _require_columns(table_name="V_fields", actual=set(v.column_names), required=REQUIRED_V_FIELDS_COLUMNS, errors=errors)
+    _require_columns(table_name="E_DAG", actual=set(edges.column_names), required=REQUIRED_E_DAG_COLUMNS, errors=errors)
+    _require_columns(table_name="Q_tensor", actual=set(q.column_names), required=REQUIRED_Q_TENSOR_COLUMNS, errors=errors)
+    _require_columns(table_name="VariableDictionary", actual=set(vd.column_names), required=REQUIRED_VARIABLE_DICTIONARY_COLUMNS, errors=errors)
 
     if q.num_rows == 0:
         errors.append("Q_tensor is empty")
 
-    v_ids = set(v.column("field_id").to_pylist()) if "field_id" in v.column_names else set()
-    vd_ids = set(vd.column("field_id").to_pylist()) if "field_id" in vd.column_names else set()
+    v_ids = _nonnull(_column_values(v, "field_id"))
+    q_ids = _nonnull(_column_values(q, "field_id"))
+    vd_ids = _nonnull(_column_values(vd, "field_id"))
 
+    if not v_ids:
+        errors.append("V_fields has no field_id values")
     if not v_ids.issubset(vd_ids):
-        errors.append("VariableDictionary does not cover all V_fields")
+        errors.append(f"VariableDictionary does not cover all V_fields: {sorted(v_ids - vd_ids)}")
+    if not v_ids.issubset(q_ids):
+        errors.append(f"Q_tensor does not cover all V_fields: {sorted(v_ids - q_ids)}")
 
     if edges.num_rows:
         for col in ["parent_field_id", "child_field_id"]:
-            if col in edges.column_names:
-                bad = set(edges.column(col).to_pylist()) - v_ids
-                if bad:
-                    errors.append(f"E_DAG {col} contains IDs absent from V_fields: {sorted(bad)}")
+            bad = _nonnull(_column_values(edges, col)) - v_ids
+            if bad:
+                errors.append(f"E_DAG {col} contains IDs absent from V_fields: {sorted(bad)}")
 
     if warnings_table.num_rows and "field_id" in warnings_table.column_names:
         bad_warnings = {
-            x for x in warnings_table.column("field_id").to_pylist()
-            if x is not None and x not in v_ids
+            x
+            for x in warnings_table.column("field_id").to_pylist()
+            if x is not None and x not in {"", "run"} and x not in v_ids
         }
         if bad_warnings:
             errors.append(f"Warnings link to invalid field IDs: {sorted(bad_warnings)}")
 
-    try:
-        manifest = json.loads((root / "ReproducibilityManifest.json").read_text(encoding="utf-8"))
-        telemetry = manifest["telemetry"]
-        if telemetry.get("total_wall_seconds") is None or telemetry["total_wall_seconds"] < 0:
-            errors.append("telemetry.total_wall_seconds missing or negative")
-        for stage, status in telemetry.get("stage_status", {}).items():
-            if status not in {"success", "skipped", "blocked", "failed"}:
-                errors.append(f"invalid telemetry stage status: {stage}={status}")
-        for stage, duration in telemetry.get("stage_wall_seconds", {}).items():
-            if duration is None or duration < 0:
-                errors.append(f"invalid telemetry stage duration: {stage}={duration}")
-    except Exception as exc:
-        errors.append(f"invalid ReproducibilityManifest.json telemetry: {exc}")
+    if failed_branches.num_rows and "parent_field_ids" in failed_branches.column_names:
+        for idx, raw in enumerate(failed_branches.column("parent_field_ids").to_pylist()):
+            parents = _load_json_cell(raw, errors=errors, context=f"FailedBranches.parent_field_ids[{idx}]")
+            if parents is None:
+                continue
+            if not isinstance(parents, list):
+                errors.append(f"FailedBranches.parent_field_ids[{idx}] is not a JSON list")
+                continue
+            bad = {x for x in parents if x not in v_ids}
+            if bad:
+                errors.append(f"FailedBranches parent IDs absent from V_fields at row {idx}: {sorted(bad)}")
+
+    illegal_ids = set()
+    if "state" in v.column_names and "field_id" in v.column_names:
+        field_ids = v.column("field_id").to_pylist()
+        states = v.column("state").to_pylist()
+        illegal_ids = {fid for fid, state in zip(field_ids, states, strict=False) if state == "illegal_excluded"}
+
+    for table_name, table in [
+        ("ModelAssociations", model_assoc),
+        ("ResidualAssociations", residual_assoc),
+        ("Hypotheses", hypotheses),
+    ]:
+        if not illegal_ids:
+            break
+        for col in FIELD_REFERENCE_COLUMNS & set(table.column_names):
+            bad = _nonnull(_column_values(table, col)) & illegal_ids
+            if bad:
+                errors.append(f"{table_name}.{col} references illegal_excluded fields: {sorted(bad)}")
+
+    for table_name, table in [("QuarantinedFields", quarantined), ("ForcedFields", forced)]:
+        for col in FIELD_REFERENCE_COLUMNS & set(table.column_names):
+            bad = _nonnull(_column_values(table, col)) - v_ids
+            if bad:
+                errors.append(f"{table_name}.{col} contains IDs absent from V_fields: {sorted(bad)}")
+
+
+def validate_output_bundle(
+    *,
+    run_dir: str,
+    schema_registry: OutputSchemaRegistry | None = None,
+) -> OutputValidationResult:
+    """Validate exact 17-key output bundle and mandatory cross-references."""
+    schema_registry = schema_registry or OutputSchemaRegistry()
+    root = Path(run_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not root.exists():
+        return OutputValidationResult(ok=False, errors=[f"run_dir does not exist: {root}"], warnings=[])
+    if not root.is_dir():
+        return OutputValidationResult(ok=False, errors=[f"run_dir is not a directory: {root}"], warnings=[])
+
+    _validate_first_class_keys(root, schema_registry, errors)
+    if errors:
+        return OutputValidationResult(ok=False, errors=errors, warnings=warnings)
+
+    _validate_manifest_and_config(root=root, errors=errors, warnings=warnings)
+    _validate_parquet_contracts(root=root, errors=errors)
 
     return OutputValidationResult(ok=not errors, errors=errors, warnings=warnings)

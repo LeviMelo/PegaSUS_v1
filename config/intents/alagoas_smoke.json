@@ -1,21 +1,26 @@
 {
   "geography": {
-    "level": "UF",
-    "codes": [
-      "27"
-    ],
-    "uf": [
-      "AL"
-    ]
+    "level": "municipality",
+    "codes": ["2704302"],
+    "uf": ["AL"]
   },
   "time": {
     "start_year": 2022,
-    "end_year": 2022
+    "end_year": 2022,
+    "start_month": null,
+    "end_month": null
   },
-  "health_seeds": [],
-  "mandatory_fields": [],
-  "system_weights": {},
-  "context_policy": [],
+  "health_seeds": ["all_cause_mortality", "icd_chapter", "icd_block"],
+  "mandatory_fields": [
+    "SIMDeathsAll",
+    "SIMCrudeMortalitySIDRAOfficial",
+    "SIDRAPopulationTotalAnchor"
+  ],
+  "system_weights": {
+    "SIM-DO": 1.0,
+    "SIDRA": 1.0
+  },
+  "context_policy": ["compile_smoke", "maceio_fixture", "official_sidra_anchor"],
   "budget": "fast",
   "geo_mode": "native",
   "force_selectors": [],

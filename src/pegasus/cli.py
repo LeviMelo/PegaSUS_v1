@@ -13,6 +13,7 @@ from pegasus.core.paths import ensure_data_lake
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.validators import validate_registry_tree
+from pegasus.workflows.compile import run_compile
 from pegasus.sidra.api import SidraClient, SidraClientConfig
 from pegasus.workflows.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
 from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
@@ -292,6 +293,16 @@ def sidra_extract(
 
 
 @app.command()
-def compile(intent: Path = typer.Option(..., "--intent")) -> None:
-    print(f"[yellow]blocked[/yellow] compile workflow requires later slices. Intent: {intent}")
-    raise typer.Exit(2)
+def compile(
+    intent: Path = typer.Option(..., "--intent"),
+    run_dir: Path | None = typer.Option(None, "--run-dir"),
+) -> None:
+    try:
+        result = run_compile(intent_path=intent, run_dir=run_dir)
+    except ValueError as exc:
+        print(f"[red]ERROR[/red] {exc}")
+        raise typer.Exit(1) from exc
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]compile complete[/green] run={result['run_dir']}")

@@ -1,0 +1,128 @@
+project_name: PegaSUS
+
+required_paths:
+  - src/pegasus/
+  - src/pegasus/core/
+  - src/pegasus/registries/
+  - src/pegasus/storage/
+  - src/pegasus/datasus/
+  - src/pegasus/sidra/
+  - src/pegasus/geo/
+  - src/pegasus/she/
+  - src/pegasus/she/population/
+  - src/pegasus/she/stdfm/
+  - src/pegasus/efg/
+  - src/pegasus/pirs/
+  - src/pegasus/compute/
+  - src/pegasus/output/
+  - src/pegasus/dashboard/
+  - src/pegasus/workflows/
+  - config/registries/
+  - config/intents/
+  - tests/
+
+forbidden_paths:
+  - problem1/
+  - problem2/
+  - problem3/
+  - notebooks/production/
+
+forbidden_terms_in_paths:
+  - miniPegaSUS
+  - problem1
+  - problem2
+  - problem3
+
+required_cli_commands:
+  - pegasus init
+  - pegasus doctor
+  - pegasus validate-config
+  - pegasus registries validate
+  - pegasus sidra metadata
+  - pegasus sidra plan
+  - pegasus sidra extract
+  - pegasus datasus ingest
+  - pegasus datasus profile
+  - pegasus datasus normalize-sim
+  - pegasus efg build-sim-fixture
+  - pegasus efg attach-sidra-denominator
+  - pegasus compile
+  - pegasus validate-run
+
+required_output_bundle_keys:
+  - V_fields
+  - E_DAG
+  - Q_tensor
+  - P_vector
+  - UserIntent
+  - Warnings
+  - ModelAssociations
+  - ResidualAssociations
+  - Hypotheses
+  - Tables
+  - Maps
+  - VariableDictionary
+  - FailedBranches
+  - QuarantinedFields
+  - ForcedFields
+  - RunConfig
+  - ReproducibilityManifest
+
+layer_rules:
+  - name: dashboard_read_only
+    from: src/pegasus/dashboard/
+    forbidden_imports:
+      - pegasus.sidra.extract
+      - pegasus.datasus.subprocess
+      - pegasus.pirs
+      - pegasus.she.population.solver
+      - pegasus.compute.cuda
+
+  - name: cli_thin_wrapper
+    from: src/pegasus/cli.py
+    warning_forbidden_imports:
+      - pegasus.sidra.extract.extract_chunk_plan
+      - pegasus.sidra.extract.read_chunk_plan
+      - pegasus.sidra.extract.write_chunk_plan
+      - pegasus.sidra.extract.write_extraction_log
+      - pegasus.datasus.normalize.normalize_sim_do_events
+      - pegasus.output.sidra_denominator_anchor.attach_sidra_population_anchor_to_run
+
+  - name: scripts_do_not_own_production_logic
+    from: scripts/
+    allowed_behaviors:
+      - calls_package_services
+    warning_patterns:
+      - "def normalize"
+      - "def extract"
+      - "class .*Client"
+      - "pl.read_parquet"
+      - "requests.get"
+
+  - name: production_no_pandas
+    from: src/
+    forbidden_imports:
+      - pandas
+
+  - name: sidra_boundary
+    from: src/pegasus/sidra/
+    expected_modules:
+      - api.py
+      - cache.py
+      - metadata.py
+      - registry.py
+      - plan.py
+      - extract.py
+      - normalize.py
+      - facts.py
+      - category_maps.py
+      - projection.py
+      - stitching.py
+      - regime.py
+      - quality.py
+
+notes:
+  - compile may remain blocked until Slice 2D, but the CLI command must exist.
+  - output/ may serialize and mutate output bundles, but workflow orchestration should live under workflows/.
+  - SIDRA 9606 high-dimensional facts must enter EFG only through bounded legal marginals such as Population(s,t).
+  - Any RN field joining SIM and SIDRA must prove time/geography support alignment or fail before field creation.

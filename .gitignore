@@ -49,3 +49,6 @@ data/diagnostics/**
 *.log
 *.tmp
 *.bak
+
+#CBL
+.codecontext/

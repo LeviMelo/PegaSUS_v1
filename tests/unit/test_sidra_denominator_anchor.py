@@ -1,8 +1,11 @@
 from pathlib import Path
+import json
 
 import polars as pl
+import pytest
 
 from pegasus.datasus.normalize import normalize_sim_do_events
+from pegasus.geo.support import SupportAlignmentError
 from pegasus.output.sidra_denominator_anchor import attach_sidra_population_anchor_to_run
 from pegasus.output.validate import validate_output_bundle
 from pegasus.sidra.facts import write_facts_parquet
@@ -82,6 +85,16 @@ def _sidra_facts(tmp_path: Path) -> Path:
     return path
 
 
+def _normalized_sim_events(tmp_path: Path) -> Path:
+    sim_events = tmp_path / "sim_events.parquet"
+    normalize_sim_do_events(
+        input_path="tests/fixtures/datasus/sim_do_fixture.csv",
+        output_path=sim_events,
+        source_manifest_hash="fixture_manifest_hash",
+    )
+    return sim_events
+
+
 def test_total_population_anchor_loader(tmp_path: Path):
     facts_path = _sidra_facts(tmp_path)
     anchor = load_sidra_population_total_anchor(facts_path)
@@ -95,17 +108,35 @@ def test_total_population_anchor_loader(tmp_path: Path):
     assert anchor.metadata_hash == "a" * 64
 
 
-def test_attach_sidra_anchor_to_valid_run_bundle(tmp_path: Path):
-    sim_events = tmp_path / "sim_events.parquet"
-    run_dir = tmp_path / "run"
+def test_attach_rejects_unaligned_fixture_denominator(tmp_path: Path):
+    sim_events = _normalized_sim_events(tmp_path)
+    run_dir = tmp_path / "run_unfiltered"
     sidra_facts = _sidra_facts(tmp_path)
 
-    normalize_sim_do_events(
-        input_path="tests/fixtures/datasus/sim_do_fixture.csv",
-        output_path=sim_events,
-        source_manifest_hash="fixture_manifest_hash",
-    )
     build_sim_fixture_efg_run(sim_events_path=sim_events, run_dir=run_dir)
+
+    with pytest.raises(SupportAlignmentError, match="municipality_support_mismatch"):
+        attach_sidra_population_anchor_to_run(
+            run_dir=run_dir,
+            sidra_facts_path=sidra_facts,
+        )
+
+    result = validate_output_bundle(run_dir=str(run_dir))
+    assert result.ok, result.errors
+    v = pl.read_parquet(run_dir / "V_fields.parquet")
+    assert "SIMCrudeMortalitySIDRAOfficial" not in set(v["name"].to_list())
+
+
+def test_attach_sidra_anchor_to_valid_run_bundle_after_support_filter(tmp_path: Path):
+    sim_events = _normalized_sim_events(tmp_path)
+    run_dir = tmp_path / "run_maceio"
+    sidra_facts = _sidra_facts(tmp_path)
+
+    build_sim_fixture_efg_run(
+        sim_events_path=sim_events,
+        run_dir=run_dir,
+        municipality_cod6="270430",
+    )
 
     attach_sidra_population_anchor_to_run(
         run_dir=run_dir,
@@ -128,8 +159,13 @@ def test_attach_sidra_anchor_to_valid_run_bundle(tmp_path: Path):
     assert pop["source"] == '["SIDRA"]'
     assert "bounded_total_category_anchor" in pop["provenance"]
 
+    rate_support = json.loads(rate["support_json"])
     assert rate["carrier"] == "Deaths/Population"
     assert "SIDRA" in rate["source"]
+    assert rate_support["municipalities"] == ["2704302"]
+    assert rate_support["support_alignment"]["aligned"] is True
+    assert rate_support["support_alignment"]["numerator_municipalities_source"] == ["270430"]
+    assert rate_support["support_alignment"]["denominator_municipalities_source"] == ["2704302"]
 
     e = pl.read_parquet(run_dir / "E_DAG.parquet")
     assert rate["field_id"] in set(e["child_field_id"].to_list())

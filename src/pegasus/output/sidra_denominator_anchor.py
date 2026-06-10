@@ -8,6 +8,7 @@ from typing import Any
 import polars as pl
 
 from pegasus.core.hashing import content_hash
+from pegasus.geo.support import SupportAlignmentResult, assert_municipality_year_support_aligned
 from pegasus.output.validate import validate_output_bundle
 from pegasus.she.population.sidra_anchor import SidraPopulationAnchor, load_sidra_population_total_anchor
 
@@ -83,6 +84,7 @@ def _population_v_field(anchor: SidraPopulationAnchor, facts_path: Path) -> dict
         "total_category_policy": anchor.total_category_policy,
         "source_category_tuple": anchor.category_tuple,
         "source_classification_tuple": anchor.classification_tuple,
+        "municipality_code_system": "IBGE/SIDRA cod7",
     }
 
     axes = {
@@ -141,7 +143,13 @@ def _population_v_field(anchor: SidraPopulationAnchor, facts_path: Path) -> dict
     }
 
 
-def _rate_v_field(*, all_deaths: dict[str, Any], anchor: SidraPopulationAnchor, facts_path: Path) -> dict[str, Any]:
+def _rate_v_field(
+    *,
+    all_deaths: dict[str, Any],
+    anchor: SidraPopulationAnchor,
+    facts_path: Path,
+    support_alignment: SupportAlignmentResult,
+) -> dict[str, Any]:
     death_support = _load_json_field(all_deaths["support_json"])
     n_events = float(death_support.get("n_events", 0.0))
 
@@ -152,27 +160,31 @@ def _rate_v_field(*, all_deaths: dict[str, Any], anchor: SidraPopulationAnchor, 
             "operator": "RN",
             "sidra_metadata_hash": anchor.metadata_hash,
             "sidra_request_hash": anchor.request_hash,
+            "support_alignment": support_alignment.model(),
         }
     )
 
     support = {
         "support": "municipality_year",
         "years": [int(anchor.period) if anchor.period.isdigit() else anchor.period],
-        "municipalities": [anchor.locality_id],
+        "municipalities": support_alignment.numerator_municipalities_ibge_cod7,
+        "municipality_code_system": "IBGE/SIDRA cod7",
         "n_events": n_events,
         "n_denom": anchor.value,
         "n_eff": n_events,
-        "cov_S": 1.0,
-        "cov_T": 1.0,
+        "cov_S": float(len(support_alignment.numerator_municipalities_ibge_cod7)),
+        "cov_T": float(len(support_alignment.numerator_years)),
         "missingness": float(death_support.get("missingness", 0.0)),
         "denom_fragility": 0.0,
         "sidra_population_anchor_field_id": anchor.field_id,
+        "support_alignment": support_alignment.model(),
+        "municipality_crosswalk": "datasus_cod6_to_ibge_cod7",
         "fixture_rate": True,
     }
 
     axes = {
         "time": "year",
-        "geography": "municipality",
+        "geography": "municipality_ibge_cod7",
         "diagnostic_role": "all_deaths",
         "topology": "none",
         "race_axis_type": None,
@@ -194,7 +206,7 @@ def _rate_v_field(*, all_deaths: dict[str, Any], anchor: SidraPopulationAnchor, 
         "provenance": _json(["official", "sidra_denominator_anchor", "sim_fixture_numerator"]),
         "state": "quarantined_descriptive",
         "dashboard_safe": "False",
-        "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor", "dashboard_unsafe_fixture_rate"]),
+        "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor", "dashboard_unsafe_fixture_rate", "support_aligned_by_municipality_crosswalk"]),
         "lineage_hash": field_id,
         "registry_hash": _json(
             {
@@ -208,7 +220,7 @@ def _rate_v_field(*, all_deaths: dict[str, Any], anchor: SidraPopulationAnchor, 
     }
 
 
-def _q_rows(*, population_row: dict[str, Any], rate_row: dict[str, Any], anchor: SidraPopulationAnchor) -> list[dict[str, Any]]:
+def _q_rows(*, population_row: dict[str, Any], rate_row: dict[str, Any]) -> list[dict[str, Any]]:
     pop_support = _load_json_field(population_row["support_json"])
     rate_support = _load_json_field(rate_row["support_json"])
 
@@ -246,8 +258,8 @@ def _q_rows(*, population_row: dict[str, Any], rate_row: dict[str, Any], anchor:
             "n_events": float(rate_support["n_events"]),
             "n_denom": float(rate_support["n_denom"]),
             "n_eff": float(rate_support["n_eff"]),
-            "cov_S": 1.0,
-            "cov_T": 1.0,
+            "cov_S": float(rate_support["cov_S"]),
+            "cov_T": float(rate_support["cov_T"]),
             "missingness": float(rate_support["missingness"]),
             "zero_inflation": 0.0,
             "denom_fragility": 0.0,
@@ -265,14 +277,14 @@ def _q_rows(*, population_row: dict[str, Any], rate_row: dict[str, Any], anchor:
             "bridge_mode": None,
             "state": "quarantined_descriptive",
             "dashboard_safe": "False",
-            "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor"]),
+            "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor", "support_aligned_by_municipality_crosswalk"]),
             "computed_at": _now(),
             "q_schema_version": "1.0",
         },
     ]
 
 
-def _vd_rows(*, vd_columns: list[str], population_row: dict[str, Any], rate_row: dict[str, Any], anchor: SidraPopulationAnchor) -> list[dict[str, Any]]:
+def _vd_rows(*, vd_columns: list[str], population_row: dict[str, Any], rate_row: dict[str, Any]) -> list[dict[str, Any]]:
     pop_support = _load_json_field(population_row["support_json"])
     pop_axes = _load_json_field(population_row["axes_json"])
     rate_support = _load_json_field(rate_row["support_json"])
@@ -309,7 +321,7 @@ def _vd_rows(*, vd_columns: list[str], population_row: dict[str, Any], rate_row:
                 "field_id": rate_row["field_id"],
                 "display_name": "SIMCrudeMortalitySIDRAOfficial",
                 "technical_name": "SIMCrudeMortalitySIDRAOfficial",
-                "definition": "SIM fixture all-deaths numerator divided by official SIDRA total resident population denominator.",
+                "definition": "SIM fixture all-deaths numerator divided by official SIDRA total resident population denominator after municipality-year support alignment.",
                 "estimand_label": "fixture_crude_mortality_with_official_sidra_denominator",
                 "source_systems": _json(["SIM-DO", "SIDRA"]),
                 "carrier": "Deaths/Population",
@@ -319,7 +331,7 @@ def _vd_rows(*, vd_columns: list[str], population_row: dict[str, Any], rate_row:
                 "provenance_description": _json(["official", "sidra_denominator_anchor", "sim_fixture_numerator"]),
                 "state": "quarantined_descriptive",
                 "dashboard_safe": "False",
-                "interpretation_warning": "Uses official SIDRA denominator but fixture SIM numerator; not a production analytic rate.",
+                "interpretation_warning": "Uses official SIDRA denominator and explicit municipality-year support alignment, but SIM numerator remains fixture-derived.",
                 "diagnostic_role": "all_deaths",
                 "topology": "none",
                 "position": None,
@@ -356,24 +368,33 @@ def attach_sidra_population_anchor_to_run(
     all_deaths = _get_field_by_name(v, "SIMDeathsAll")
 
     population_row = _population_v_field(anchor, sidra_facts_path)
-    rate_row = _rate_v_field(all_deaths=all_deaths, anchor=anchor, facts_path=sidra_facts_path)
+    support_alignment = assert_municipality_year_support_aligned(
+        numerator_support=_load_json_field(all_deaths["support_json"]),
+        numerator_axes=_load_json_field(all_deaths["axes_json"]),
+        denominator_support=_load_json_field(population_row["support_json"]),
+        denominator_axes=_load_json_field(population_row["axes_json"]),
+    )
+    rate_row = _rate_v_field(
+        all_deaths=all_deaths,
+        anchor=anchor,
+        facts_path=sidra_facts_path,
+        support_alignment=support_alignment,
+    )
 
     new_field_ids = {population_row["field_id"], rate_row["field_id"]}
     new_names = {"SIDRAPopulationTotalAnchor", "SIMCrudeMortalitySIDRAOfficial"}
 
-    # V_fields
     v_clean = v.filter(~pl.col("name").is_in(sorted(new_names)))
     v_clean.write_parquet(v_path)
     _append_rows(v_path, [population_row, rate_row], remove_column="field_id", remove_values=new_field_ids)
 
-    # E_DAG: only the new rate has parents.
     edge_rows = [
         {
             "edge_id": f"{all_deaths['field_id']}->{rate_row['field_id']}",
             "parent_field_id": all_deaths["field_id"],
             "child_field_id": rate_row["field_id"],
             "operator": "RN",
-            "operator_params_json": _json({"role": "mortality_rate", "denominator": "SIDRA_9606_total_population_anchor"}),
+            "operator_params_json": _json({"role": "mortality_rate", "denominator": "SIDRA_9606_total_population_anchor", "support_alignment": support_alignment.model()}),
             "registry_versions_json": _json({"sidra_metadata_hash": anchor.metadata_hash}),
             "created_at": _now(),
         },
@@ -382,7 +403,7 @@ def attach_sidra_population_anchor_to_run(
             "parent_field_id": population_row["field_id"],
             "child_field_id": rate_row["field_id"],
             "operator": "RN",
-            "operator_params_json": _json({"role": "mortality_rate", "denominator": "SIDRA_9606_total_population_anchor"}),
+            "operator_params_json": _json({"role": "mortality_rate", "denominator": "SIDRA_9606_total_population_anchor", "support_alignment": support_alignment.model()}),
             "registry_versions_json": _json({"sidra_metadata_hash": anchor.metadata_hash}),
             "created_at": _now(),
         },
@@ -392,17 +413,14 @@ def attach_sidra_population_anchor_to_run(
     e.write_parquet(e_path)
     _append_rows(e_path, edge_rows)
 
-    # Q tensor
-    _append_rows(q_path, _q_rows(population_row=population_row, rate_row=rate_row, anchor=anchor), remove_column="field_id", remove_values=new_field_ids)
+    _append_rows(q_path, _q_rows(population_row=population_row, rate_row=rate_row), remove_column="field_id", remove_values=new_field_ids)
 
-    # Variable dictionary
     vd = pl.read_parquet(vd_path)
     vd_columns = vd.columns
     vd = vd.filter(~pl.col("field_id").is_in(sorted(new_field_ids)))
     vd.write_parquet(vd_path)
-    _append_rows(vd_path, _vd_rows(vd_columns=vd_columns, population_row=population_row, rate_row=rate_row, anchor=anchor))
+    _append_rows(vd_path, _vd_rows(vd_columns=vd_columns, population_row=population_row, rate_row=rate_row))
 
-    # Warnings
     warning_rows = [
         {
             "warning_id": "sidra_total_category_anchor",
@@ -420,8 +438,18 @@ def attach_sidra_population_anchor_to_run(
             "source": "pegasus.output.sidra_denominator_anchor",
             "severity": "info",
             "code": "official_sidra_denominator_anchor",
-            "message": "SIM fixture crude mortality now has an official SIDRA total-population denominator variant.",
+            "message": "SIM fixture crude mortality has an official SIDRA total-population denominator after support alignment.",
             "inherited_from": _json([population_row["field_id"]]),
+            "created_at": _now(),
+        },
+        {
+            "warning_id": "support_aligned_by_municipality_crosswalk",
+            "field_id": rate_row["field_id"],
+            "source": "pegasus.geo.support",
+            "severity": "info",
+            "code": "support_aligned_by_municipality_crosswalk",
+            "message": "DATASUS six-digit municipality support was aligned to SIDRA seven-digit support by explicit crosswalk before RN field creation.",
+            "inherited_from": _json([all_deaths["field_id"], population_row["field_id"]]),
             "created_at": _now(),
         },
     ]
@@ -432,7 +460,6 @@ def attach_sidra_population_anchor_to_run(
         remove_values={row["warning_id"] for row in warning_rows},
     )
 
-    # Quarantine metadata remains conservative because this is still a fixture numerator.
     qf_rows = [
         {
             "field_id": population_row["field_id"],
@@ -444,12 +471,11 @@ def attach_sidra_population_anchor_to_run(
             "field_id": rate_row["field_id"],
             "state": "quarantined_descriptive",
             "reason": "sim_fixture_numerator",
-            "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor"]),
+            "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor", "support_aligned_by_municipality_crosswalk"]),
         },
     ]
     _append_rows(qf_path, qf_rows, remove_column="field_id", remove_values=new_field_ids)
 
-    # P_vector provenance.
     p = json.loads(p_path.read_text(encoding="utf-8"))
     p.setdefault("provenance", {})
     p["provenance"][population_row["field_id"]] = ["official", "sidra_9606", "bounded_total_category_anchor"]

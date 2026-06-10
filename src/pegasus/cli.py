@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import shutil
 import sys
 from pathlib import Path
@@ -9,38 +8,23 @@ from pathlib import Path
 import typer
 from rich import print
 
-from pegasus.core.config import load_yaml, validate_config_tree
+from pegasus.core.config import validate_config_tree
 from pegasus.core.paths import ensure_data_lake
-from pegasus.datasus.cache import DatasusCache
-from pegasus.datasus.manifests import (
-    build_datasus_manifests,
-    load_datasus_config,
-    read_request_manifest,
-    write_request_manifest,
-)
-from pegasus.datasus.normalize import normalize_sim_do_events
-from pegasus.datasus.profile import profile_table
-from pegasus.datasus.schema_compare import compare_profiles
-from pegasus.datasus.subprocess import DatasusConfig, fetch_datasus_chunk
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
-from pegasus.output.sidra_denominator_anchor import attach_sidra_population_anchor_to_run
 from pegasus.registries.validators import validate_registry_tree
 from pegasus.sidra.api import SidraClient, SidraClientConfig
-from pegasus.sidra.extract import extract_chunk_plan, read_chunk_plan, write_chunk_plan, write_extraction_log
-from pegasus.sidra.facts import normalize_fixture_json_to_facts
-from pegasus.sidra.metadata import (
-    fetch_official_metadata,
-    fixture_sidra_metadata,
-    metadata_dir_hash,
-    read_normalized_metadata_tables,
-    table_ids_from_seed,
-    write_normalized_metadata_tables,
+from pegasus.workflows.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
+from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
+from pegasus.workflows.sidra import (
+    run_sidra_extract,
+    run_sidra_metadata,
+    run_sidra_metadata_fixture,
+    run_sidra_normalize_fixture,
+    run_sidra_plan,
+    run_sidra_plan_fixture,
+    sidra_runtime_config,
 )
-from pegasus.sidra.plan import plan_sidra_chunks
-from pegasus.sidra.registry import request_from_view
-from pegasus.sidra.schemas import SIDRARequest
-from pegasus.workflows.build_efg import build_sim_fixture_efg_run
 
 app = typer.Typer(no_args_is_help=True)
 registries_app = typer.Typer(no_args_is_help=True)
@@ -58,11 +42,6 @@ def _fail(errors: list[str]) -> None:
     for error in errors:
         print(f"[red]ERROR[/red] {error}")
     raise typer.Exit(1)
-
-
-def _sidra_runtime_config() -> dict:
-    data = load_yaml("config/sidra.yaml")
-    return data.get("sidra", data)
 
 
 @app.command()
@@ -133,7 +112,7 @@ def doctor() -> None:
         client = SidraClient(
             config=SidraClientConfig.from_mapping(
                 {
-                    **_sidra_runtime_config(),
+                    **sidra_runtime_config(),
                     "timeout_seconds": 5,
                     "max_retries": 0,
                 }
@@ -158,67 +137,31 @@ def datasus_ingest(
     years: str = typer.Option(..., "--years"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan and persist manifests without invoking R."),
 ) -> None:
-    cfg_payload = load_datasus_config()
-    cfg = DatasusConfig.from_mapping(cfg_payload)
-    manifests = build_datasus_manifests(system=system, uf=uf, years=years, config=cfg_payload)
-
-    cache = DatasusCache()
-    blocked = False
-    failed = False
-
-    for manifest in manifests:
-        planned_path = write_request_manifest(manifest)
+    result = run_datasus_ingest(system=system, uf=uf, years=years, dry_run=dry_run)
+    for manifest, planned_path in result["planned"]:
         print(f"[cyan]planned[/cyan] {manifest.system} {manifest.uf} {manifest.year_start}: {planned_path}")
-
-        if dry_run:
-            continue
-
-        executed = fetch_datasus_chunk(
-            manifest,
-            config=cfg,
-            cache=cache,
-            timeout_seconds=cfg.r_timeout_seconds,
-            heartbeat_timeout_seconds=cfg.heartbeat_timeout_seconds,
-        )
-        executed_path = write_request_manifest(executed)
-
-        if executed.status == "success":
-            print(f"[green]success[/green] {executed.system} {executed.uf} {executed.year_start}: {executed_path}")
-        elif executed.status == "blocked":
-            blocked = True
-            print(f"[yellow]blocked[/yellow] {executed.system} {executed.uf} {executed.year_start}: {executed.error_message}")
+    for manifest, executed_path in result["executed"]:
+        if manifest.status == "success":
+            print(f"[green]success[/green] {manifest.system} {manifest.uf} {manifest.year_start}: {executed_path}")
+        elif manifest.status == "blocked":
+            print(f"[yellow]blocked[/yellow] {manifest.system} {manifest.uf} {manifest.year_start}: {manifest.error_message}")
         else:
-            failed = True
-            print(f"[red]{executed.status}[/red] {executed.system} {executed.uf} {executed.year_start}: {executed.error_message}")
-
-    if failed:
+            print(f"[red]{manifest.status}[/red] {manifest.system} {manifest.uf} {manifest.year_start}: {manifest.error_message}")
+    if result["failed"]:
         raise typer.Exit(1)
-    if blocked:
+    if result["blocked"]:
         raise typer.Exit(2)
 
 
 @datasus_app.command("profile")
 def datasus_profile(manifest: Path = typer.Option(..., "--manifest")) -> None:
-    request = read_request_manifest(manifest)
-
-    raw_path = Path(request.raw_path)
-    processed_path = Path(request.processed_path)
-
-    if not raw_path.exists() or not processed_path.exists():
+    result = run_datasus_profile(manifest=manifest)
+    if result["status"] == "blocked":
         print("[yellow]blocked[/yellow] raw/processed artifacts are missing; cannot profile this manifest.")
         raise typer.Exit(2)
-
-    raw_profile_path = Path("data/metadata/datasus/profiles") / request.system / request.request_hash / "raw_profile.json"
-    processed_profile_path = Path("data/metadata/datasus/profiles") / request.system / request.request_hash / "processed_profile.json"
-    compare_path = Path("data/metadata/datasus/schema_compare") / request.system / request.request_hash / "schema_compare.json"
-
-    raw_profile = profile_table(raw_path, output_path=raw_profile_path)
-    processed_profile = profile_table(processed_path, output_path=processed_profile_path)
-    compare_profiles(raw_profile, processed_profile, output_path=compare_path)
-
-    print(f"[green]raw profile[/green] {raw_profile_path}")
-    print(f"[green]processed profile[/green] {processed_profile_path}")
-    print(f"[green]schema comparison[/green] {compare_path}")
+    print(f"[green]raw profile[/green] {result['raw_profile_path']}")
+    print(f"[green]processed profile[/green] {result['processed_profile_path']}")
+    print(f"[green]schema comparison[/green] {result['compare_path']}")
 
 
 @datasus_app.command("normalize-sim")
@@ -227,7 +170,7 @@ def datasus_normalize_sim(
     output_path: Path = typer.Option(..., "--output"),
     source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
 ) -> None:
-    result = normalize_sim_do_events(
+    result = run_datasus_normalize_sim(
         input_path=input_path,
         output_path=output_path,
         source_manifest_hash=source_manifest_hash,
@@ -239,15 +182,17 @@ def datasus_normalize_sim(
 def efg_build_sim_fixture(
     sim_events: Path = typer.Option(..., "--sim-events"),
     run_dir: Path = typer.Option(..., "--run-dir"),
+    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
 ) -> None:
-    output = build_sim_fixture_efg_run(
+    result = run_build_sim_fixture(
         sim_events_path=sim_events,
         run_dir=run_dir,
+        municipality_cod6=municipality_cod6,
     )
-    result = validate_output_bundle(run_dir=str(output))
-    if not result.ok:
-        _fail(result.errors)
-    print(f"[green]sim fixture EFG bundle valid[/green] {output}")
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]sim fixture EFG bundle valid[/green] {result['run_dir']}")
 
 
 @efg_app.command("attach-sidra-denominator")
@@ -255,22 +200,21 @@ def efg_attach_sidra_denominator(
     run_dir: Path = typer.Option(..., "--run-dir"),
     sidra_facts: Path = typer.Option(..., "--sidra-facts"),
 ) -> None:
-    output = attach_sidra_population_anchor_to_run(
+    result = run_attach_sidra_denominator(
         run_dir=run_dir,
         sidra_facts_path=sidra_facts,
     )
-    result = validate_output_bundle(run_dir=str(output))
-    if not result.ok:
-        _fail(result.errors)
-    print(f"[green]SIDRA denominator anchor attached and run bundle valid[/green] {output}")
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]SIDRA denominator anchor attached and run bundle valid[/green] {result['run_dir']}")
 
 
 @sidra_app.command("metadata-fixture")
 def sidra_metadata_fixture(
     output_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--output-dir"),
 ) -> None:
-    metadata = fixture_sidra_metadata()
-    outputs = write_normalized_metadata_tables(metadata, output_dir=output_dir)
+    outputs = run_sidra_metadata_fixture(output_dir=output_dir)
     for name, path in outputs.items():
         print(f"[green]{name}[/green] {path}")
 
@@ -280,19 +224,8 @@ def sidra_plan_fixture(
     output: Path = typer.Option(Path("data/manifests/sidra/fixture_plan.json"), "--output"),
     max_cells: int = typer.Option(49900, "--max-cells"),
 ) -> None:
-    metadata = fixture_sidra_metadata()
-    table = metadata.tables["9606"]
-    request = SIDRARequest(
-        table_id="9606",
-        variables=table.variables,
-        periods=table.periods,
-        locality_level="N6",
-        localities=table.localities_by_level["N6"],
-        classifications=table.classifications,
-    )
-    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=max_cells)
-    write_chunk_plan(chunks, output_path=output)
-    print(f"[green]planned[/green] chunks={len(chunks)} output={output}")
+    result = run_sidra_plan_fixture(output=output, max_cells=max_cells)
+    print(f"[green]planned[/green] chunks={len(result['chunks'])} output={result['output']}")
 
 
 @sidra_app.command("normalize-fixture")
@@ -300,12 +233,7 @@ def sidra_normalize_fixture(
     input_path: Path = typer.Option(..., "--input"),
     output_path: Path = typer.Option(Path("data/processed/sidra/facts/9606/fixture.parquet"), "--output"),
 ) -> None:
-    output = normalize_fixture_json_to_facts(
-        input_path=input_path,
-        output_path=output_path,
-        table_id="9606",
-        unit_by_variable={"93": "persons"},
-    )
+    output = run_sidra_normalize_fixture(input_path=input_path, output_path=output_path)
     print(f"[green]sidra facts normalized[/green] {output}")
 
 
@@ -316,22 +244,13 @@ def sidra_metadata(
     output_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--output-dir"),
     raw_dir: Path = typer.Option(Path("data/metadata/sidra/raw"), "--raw-dir"),
 ) -> None:
-    table_ids = table_ids_from_seed(tables)
-    if not table_ids:
-        print("[red]ERROR[/red] no SIDRA table IDs found in seed.")
-        raise typer.Exit(1)
-
-    client = SidraClient()
-    metadata = fetch_official_metadata(
-        table_ids=table_ids,
-        client=client,
-        locality_level=level,
-        raw_dir=raw_dir,
-    )
-    outputs = write_normalized_metadata_tables(metadata, output_dir=output_dir)
-
-    print(f"[green]metadata rebuilt[/green] tables={len(table_ids)}")
-    for name, path in outputs.items():
+    try:
+        result = run_sidra_metadata(tables=tables, level=level, output_dir=output_dir, raw_dir=raw_dir)
+    except ValueError as exc:
+        print(f"[red]ERROR[/red] {exc}")
+        raise typer.Exit(1) from exc
+    print(f"[green]metadata rebuilt[/green] tables={len(result['table_ids'])}")
+    for name, path in result["outputs"].items():
         print(f"[green]{name}[/green] {path}")
 
 
@@ -341,18 +260,8 @@ def sidra_plan(
     metadata_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--metadata-dir"),
     output: Path | None = typer.Option(None, "--output"),
 ) -> None:
-    sidra_cfg = _sidra_runtime_config()
-    metadata = read_normalized_metadata_tables(metadata_dir)
-    request = request_from_view(view)
-    chunks = plan_sidra_chunks(
-        request,
-        metadata,
-        max_cells_per_request=int(sidra_cfg.get("max_cells_per_request", 49900)),
-    )
-    output = output or Path("data/manifests/sidra") / f"{view}.json"
-    write_chunk_plan(chunks, output_path=output)
-
-    print(f"[green]planned[/green] view={view} chunks={len(chunks)} output={output}")
+    result = run_sidra_plan(view=view, metadata_dir=metadata_dir, output=output)
+    print(f"[green]planned[/green] view={view} chunks={len(result['chunks'])} output={result['output']}")
 
 
 @sidra_app.command("extract")
@@ -363,27 +272,21 @@ def sidra_extract(
     concurrency: int | None = typer.Option(None, "--concurrency"),
     log_path: Path | None = typer.Option(None, "--log"),
 ) -> None:
-    sidra_cfg = _sidra_runtime_config()
-    chunks = read_chunk_plan(plan)
-    metadata_hash = metadata_dir_hash(metadata_dir)
-
-    if dry_run:
-        total = sum(c.estimated_cells for c in chunks)
-        print(f"[cyan]dry-run[/cyan] chunks={len(chunks)} estimated_cells={total} metadata_hash={metadata_hash}")
-        return
-
-    client = SidraClient()
-    results = extract_chunk_plan(
-        chunks,
-        client=client,
-        concurrency=concurrency or int(sidra_cfg.get("concurrency", 4)),
-        metadata_hash=metadata_hash,
+    result = run_sidra_extract(
+        plan=plan,
+        metadata_dir=metadata_dir,
+        dry_run=dry_run,
+        concurrency=concurrency,
+        log_path=log_path,
     )
-    log_path = log_path or Path("data/diagnostics/sidra") / f"{plan.stem}.extraction_log.json"
-    write_extraction_log(results, output_path=log_path)
-
-    failures = [r for r in results if r.status != "success"]
-    print(f"[green]extract complete[/green] chunks={len(results)} failures={len(failures)} log={log_path}")
+    if result["status"] == "dry_run":
+        print(
+            f"[cyan]dry-run[/cyan] chunks={len(result['chunks'])} "
+            f"estimated_cells={result['estimated_cells']} metadata_hash={result['metadata_hash']}"
+        )
+        return
+    failures = result["failures"]
+    print(f"[green]extract complete[/green] chunks={len(result['results'])} failures={len(failures)} log={result['log_path']}")
     if failures:
         raise typer.Exit(1)
 

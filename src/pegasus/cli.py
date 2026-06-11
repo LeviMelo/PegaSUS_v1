@@ -37,6 +37,7 @@ efg_app = typer.Typer(no_args_is_help=True)
 population_app = typer.Typer(no_args_is_help=True)
 pirs_app = typer.Typer(no_args_is_help=True)
 acceptance_app = typer.Typer(no_args_is_help=True)
+source_artifacts_app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(registries_app, name="registries")
 app.add_typer(sidra_app, name="sidra")
@@ -45,6 +46,7 @@ app.add_typer(efg_app, name="efg")
 app.add_typer(population_app, name="population")
 app.add_typer(pirs_app, name="pirs")
 app.add_typer(acceptance_app, name="acceptance")
+app.add_typer(source_artifacts_app, name="source-artifacts")
 
 
 def _fail(errors: list[str]) -> None:
@@ -597,3 +599,51 @@ def acceptance_check_run(
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
     if not result.get("ok", False):
         raise typer.Exit(1)
+
+
+# Slice 12A source artifact reality gate commands
+@source_artifacts_app.command("inspect")
+def source_artifacts_inspect(
+    path: Path = typer.Option(..., "--path"),
+    source_system: str = typer.Option(..., "--source-system"),
+    artifact_role: str = typer.Option(..., "--role"),
+    provenance_mode: str = typer.Option("fixture", "--provenance-mode"),
+    output: Path | None = typer.Option(None, "--output"),
+    source_manifest_hash: str | None = typer.Option(None, "--source-manifest-hash"),
+) -> None:
+    from pegasus.workflows.source_artifacts import run_source_artifact_inspect
+
+    result = run_source_artifact_inspect(
+        path=path,
+        source_system=source_system,
+        artifact_role=artifact_role,
+        provenance_mode=provenance_mode,
+        output=output,
+        source_manifest_hash=source_manifest_hash,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@source_artifacts_app.command("validate-manifest")
+def source_artifacts_validate_manifest(
+    manifest: Path = typer.Option(..., "--manifest"),
+    require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
+) -> None:
+    from pegasus.workflows.source_artifacts import run_source_manifest_validate
+
+    result = run_source_manifest_validate(
+        manifest=manifest,
+        require_materialized_external=require_materialized_external,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+    if not result["ok"]:
+        raise typer.Exit(1)
+
+
+@source_artifacts_app.command("summary")
+def source_artifacts_summary(
+    manifest: Path = typer.Option(..., "--manifest"),
+) -> None:
+    from pegasus.workflows.source_artifacts import run_source_manifest_summary
+
+    typer.echo(json.dumps(run_source_manifest_summary(manifest=manifest), indent=2, sort_keys=True))

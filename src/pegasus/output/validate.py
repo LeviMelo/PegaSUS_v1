@@ -206,6 +206,9 @@ def _validate_race_bridge_contract(*, root: Path, v, q, run_config: dict[str, An
 CNES_CAPACITY_METADATA_KEYS = {"capacity_vector_index", "capacity_family", "generic_beds_forbidden"}
 SIH_COST_METADATA_KEYS = {"cost_component", "economic_component_id", "generic_sih_cost_forbidden"}
 RUN_CONFIG_CNES_SIH_KEYS = {"schema_version", "source_systems", "attach_stage", "cnes", "sih"}
+POPULATION_TENSOR_SUPPORT_KEYS = {"PopulationTensorMode", "SolverBackend", "SolverID", "SparseJacobian", "DenominatorFeedbackWarning", "population_tensor_diagnostics"}
+POPULATION_TENSOR_AXIS_KEYS = {"geography_axis", "time_axis", "population_strata_axis", "population_tensor_mode"}
+RUN_CONFIG_POPULATION_TENSOR_KEYS = {"schema_version", "source_systems", "attach_stage", "field_id", "tensor_id", "mode", "solver_id", "solver_backend", "denominator_feedback_warning", "independent_denominator_mode", "sim_feedback_warning", "source_hashes"}
 
 
 def _validate_cnes_sih_contract(*, root: Path, v, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
@@ -278,6 +281,78 @@ def _validate_cnes_sih_contract(*, root: Path, v, q, run_config: dict[str, Any],
             errors.append(f"SIH cost field missing Q_tensor row: {fid}")
 
 
+
+def _validate_population_tensor_contract(*, root: Path, v, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
+    rows = v.to_pylist()
+    q_rows = {str(row.get("field_id")): row for row in q.to_pylist() if row.get("field_id") is not None}
+    population_rows = [row for row in rows if str(row.get("field_id", "")).startswith("population_tensor_")]
+    if not population_rows and "population_tensor" not in run_config and "population_tensor" not in manifest:
+        return
+
+    run_meta = run_config.get("population_tensor")
+    manifest_meta = manifest.get("population_tensor")
+    if not isinstance(run_meta, dict):
+        errors.append("RunConfig.json missing population_tensor metadata while population tensor is present")
+        run_meta = {}
+    if not isinstance(manifest_meta, dict):
+        errors.append("ReproducibilityManifest.json missing population_tensor metadata while population tensor is present")
+        manifest_meta = {}
+
+    missing_run_keys = sorted(RUN_CONFIG_POPULATION_TENSOR_KEYS - set(run_meta))
+    if missing_run_keys:
+        errors.append(f"RunConfig.population_tensor missing keys: {missing_run_keys}")
+    if run_meta.get("source_systems") != ["SIDRA"]:
+        errors.append("RunConfig.population_tensor.source_systems must equal ['SIDRA']")
+    if run_meta.get("attach_stage") not in {"population_solver", "standalone_population_tensor"}:
+        errors.append("RunConfig.population_tensor.attach_stage must be population_solver or standalone_population_tensor")
+    if manifest_meta.get("field_id") and run_meta.get("field_id") and manifest_meta.get("field_id") != run_meta.get("field_id"):
+        errors.append("RunConfig.population_tensor.field_id and ReproducibilityManifest.population_tensor.field_id disagree")
+    if not (root / "Tables" / "population_tensor_diagnostics.parquet").exists():
+        errors.append("population tensor metadata exists but Tables/population_tensor_diagnostics.parquet is missing")
+
+    for row in population_rows:
+        fid = str(row.get("field_id"))
+        support = _load_json_cell(row.get("support_json"), errors=errors, context=f"V_fields.support_json[{fid}]")
+        axes = _load_json_cell(row.get("axes_json"), errors=errors, context=f"V_fields.axes_json[{fid}]")
+        provenance_cell = row.get("provenance_json")
+        if provenance_cell in (None, ""):
+            provenance_cell = row.get("provenance")
+        warnings_source_cell = row.get("warnings_json")
+        if warnings_source_cell in (None, ""):
+            warnings_source_cell = row.get("warnings")
+        provenance = _load_json_cell(provenance_cell, errors=errors, context=f"V_fields.provenance[{fid}]")
+        warnings_cell = _load_json_cell(warnings_source_cell, errors=errors, context=f"V_fields.warnings[{fid}]")
+
+        if not isinstance(support, dict):
+            errors.append(f"population tensor field support_json is not an object: {fid}")
+            support = {}
+        if not isinstance(axes, dict):
+            errors.append(f"population tensor field axes_json is not an object: {fid}")
+            axes = {}
+        if not isinstance(provenance, list) or "population_tensor" not in provenance:
+            errors.append(f"population tensor field provenance must include population_tensor: {fid}")
+
+        missing_support = sorted(POPULATION_TENSOR_SUPPORT_KEYS - set(support))
+        if missing_support:
+            errors.append(f"population tensor field missing support metadata: {fid} {missing_support}")
+        missing_axes = sorted(POPULATION_TENSOR_AXIS_KEYS - set(axes))
+        if missing_axes:
+            errors.append(f"population tensor field missing axes metadata: {fid} {missing_axes}")
+        if axes.get("population_tensor_mode") != support.get("PopulationTensorMode"):
+            errors.append(f"population tensor support/axes mode mismatch: {fid}")
+        if q_rows.get(fid) is None:
+            errors.append(f"population tensor field missing Q_tensor row: {fid}")
+
+        sim_feedback = bool(support.get("DenominatorFeedbackWarning"))
+        if sim_feedback:
+            if row.get("dashboard_safe") in {True, "true", "True"}:
+                errors.append(f"SIM-informed population tensor field cannot be dashboard_safe=true: {fid}")
+            if row.get("state") not in {"fragile", "experimental", "blocked", "quarantined"}:
+                errors.append(f"SIM-informed population tensor field must be fragile/experimental or worse: {fid}")
+            if isinstance(warnings_cell, list) and "sim_informed_population_feedback_risk" not in warnings_cell:
+                errors.append(f"SIM-informed population tensor field missing feedback-risk warning: {fid}")
+
+
 def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
     try:
         v = _read(root / "V_fields.parquet")
@@ -347,6 +422,7 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
             if bad:
                 errors.append(f"{table_name}.{col} contains IDs absent from V_fields: {sorted(bad)}")
     _validate_cnes_sih_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
+    _validate_population_tensor_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_race_bridge_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
 
 

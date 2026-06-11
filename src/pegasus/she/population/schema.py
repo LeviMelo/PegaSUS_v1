@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -110,9 +111,13 @@ class PopulationTensorResult:
     def as_manifest(self) -> dict[str, Any]:
         return {
             "tensor_id": self.tensor_id,
+            "mode": self.mode,
             "PopulationTensorMode": self.mode,
+            "solver_backend": self.solver_backend,
             "SolverBackend": self.solver_backend,
+            "solver_id": self.solver_id,
             "SolverID": self.solver_id,
+            "sparse_jacobian": self.sparse_jacobian,
             "SparseJacobian": self.sparse_jacobian,
             "value": self.value,
             "unit": self.unit,
@@ -124,6 +129,7 @@ class PopulationTensorResult:
             "source_request_hash": self.source_request_hash,
             "source_metadata_hash": self.source_metadata_hash,
             "reconstruction_uncertainty": self.reconstruction_uncertainty,
+            "denominator_feedback_warning": self.denominator_feedback_warning,
             "DenominatorFeedbackWarning": self.denominator_feedback_warning,
             "state": self.state,
             "warnings": list(self.warnings),

@@ -39,6 +39,7 @@ def _write_rows_like(path: Path, rows: list[dict[str, Any]]) -> None:
     pq.write_table(table, path)
 
 
+
 def _field(result: PopulationTensorResult) -> dict[str, Any]:
     support = {
         "PopulationTensorMode": result.mode,
@@ -61,6 +62,10 @@ def _field(result: PopulationTensorResult) -> dict[str, Any]:
         "population_strata_axis": "total",
         "population_tensor_mode": result.mode,
     }
+    role = ["population_denominator_tensor", result.mode]
+    source = ["SIDRA", "population_tensor"]
+    provenance = ["official_sidra_anchor", "population_tensor", result.solver_id]
+    warnings = list(result.warnings)
     return {
         "field_id": f"population_tensor_{result.mode}",
         "name": "PopulationTensorOfficialSIDRAIndependent" if result.mode == "independent_denominator" else "PopulationTensorSIMInformedWarningScaffold",
@@ -70,12 +75,16 @@ def _field(result: PopulationTensorResult) -> dict[str, Any]:
         "support_json": _compact(support),
         "axes_json": _compact(axes),
         "aggregation": "additive",
-        "role_json": _compact(["population_denominator_tensor", result.mode]),
-        "source_json": _compact(["SIDRA", "population_tensor"]),
+        "role": _compact(role),
+        "role_json": _compact(role),
+        "source": _compact(source),
+        "source_json": _compact(source),
         "operator": "PopulationTensor/IndependentSIDRAAnchor" if result.mode == "independent_denominator" else "PopulationTensor/SIMInformedWarningScaffold",
-        "provenance_json": _compact(["official_sidra_anchor", "population_tensor", result.solver_id]),
+        "provenance": _compact(provenance),
+        "provenance_json": _compact(provenance),
         "state": result.state,
-        "warnings_json": _compact(list(result.warnings)),
+        "warnings": _compact(warnings),
+        "warnings_json": _compact(warnings),
         "lineage_json": _compact({"parent_ids": [result.source_anchor_field_id], "operator": "population_tensor_solver", "created_at": _now(), "tensor_id": result.tensor_id}),
         "materialization_state": "materialized",
         "path": "Tables/population_tensor_diagnostics.parquet",
@@ -84,6 +93,7 @@ def _field(result: PopulationTensorResult) -> dict[str, Any]:
 
 
 def _q_row(field: dict[str, Any], result: PopulationTensorResult) -> dict[str, Any]:
+    warnings = list(result.warnings)
     return {
         "field_id": field["field_id"],
         "n_events": result.value,
@@ -108,11 +118,11 @@ def _q_row(field: dict[str, Any], result: PopulationTensorResult) -> dict[str, A
         "bridge_mode": None,
         "state": result.state,
         "dashboard_safe": field["dashboard_safe"],
-        "warnings_json": _compact(list(result.warnings)),
+        "warnings": _compact(warnings),
+        "warnings_json": _compact(warnings),
         "computed_at": _now(),
         "q_schema_version": "1.0",
     }
-
 
 def _vd_row(field: dict[str, Any], result: PopulationTensorResult) -> dict[str, Any]:
     return {
@@ -234,6 +244,21 @@ def write_population_tensor_fixture_bundle(
     }
 
     population_manifest = result.as_manifest()
+    population_manifest.update(
+        {
+            "schema_version": "1.0",
+            "source_systems": ["SIDRA"],
+            "attach_stage": "standalone_population_tensor",
+            "field_id": field["field_id"],
+            "field_name": field["name"],
+            "source_hashes": {"sidra_facts": sha256_file(sidra_facts_path)},
+            "independent_denominator_mode": result.mode == "independent_denominator",
+            "sim_feedback_warning": bool(result.denominator_feedback_warning),
+            "dashboard_safe": field.get("dashboard_safe"),
+            "materialization_state": field.get("materialization_state"),
+            "table_paths": {"diagnostics": "Tables/population_tensor_diagnostics.parquet"},
+        }
+    )
     user_intent = {
         "workflow": "slice6a_population_tensor_fixture",
         "population_tensor_mode": mode,

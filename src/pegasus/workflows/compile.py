@@ -13,6 +13,7 @@ from pegasus.core.schemas import UserIntent
 from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
 from pegasus.output.cnes_sih_compile_attach import attach_cnes_sih_compile_fields
 from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
+from pegasus.output.population_tensor_compile_attach import attach_population_tensor_compile_fields
 from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_manifest
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
@@ -155,6 +156,13 @@ def _context_policy_enabled(intent: UserIntent, token: str) -> bool:
     return token in set(intent.context_policy)
 
 
+def _compile_population_tensor_mode(intent: UserIntent) -> str | None:
+    if intent.population_mode == "independent_population_tensor":
+        return "independent_denominator"
+    if intent.population_mode == "sim_informed_population_tensor":
+        return "sim_informed_denominator"
+    return None
+
 def run_compile(
     *,
     intent_path: str | Path,
@@ -166,6 +174,7 @@ def run_compile(
     intent_payload, intent = _load_intent(intent_path)
     municipality_cod6 = _smoke_municipality_cod6(intent)
     include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
+    population_tensor_mode = _compile_population_tensor_mode(intent)
 
     try:
         race_bridge_plan = resolve_race_bridge_plan(intent=intent, municipality_cod6=municipality_cod6)
@@ -278,6 +287,7 @@ def run_compile(
         )
 
     cnes_sih_metadata: dict[str, Any] | None = None
+    population_tensor_metadata: dict[str, Any] | None = None
     with telemetry.stage("she_build"):
         run_attach_sidra_denominator(
             run_dir=run_dir,
@@ -302,6 +312,23 @@ def run_compile(
             cnes_sih_metadata = cnes_sih_result["cnes_sih"]
             source_hashes.update(cnes_sih_metadata.get("source_hashes", {}))
 
+    if population_tensor_mode is not None:
+        with telemetry.stage("population_solver"):
+            population_tensor_metadata = attach_population_tensor_compile_fields(
+                run_dir=run_dir,
+                sidra_facts_path=sidra_facts_path,
+                mode=population_tensor_mode,
+            )
+            source_hashes.update(
+                {
+                    f"population_tensor_{key}": value
+                    for key, value in population_tensor_metadata.get("source_hashes", {}).items()
+                }
+            )
+            diagnostics_path = Path(run_dir) / "Tables" / "population_tensor_diagnostics.parquet"
+            if diagnostics_path.exists():
+                source_hashes["population_tensor_diagnostics"] = sha256_file(diagnostics_path)
+
     race_bridge_metadata: dict[str, Any] | None = None
     if race_bridge_plan.requires_attach:
         assert race_bridge_plan.prior_path is not None
@@ -325,7 +352,8 @@ def run_compile(
 
     telemetry.set_stage("geo_support", "success", 0.0)
     telemetry.set_stage("q_tensor", "success", 0.0)
-    telemetry.block("population_solver", reason="official SIDRA anchor smoke path; tensor solver scaffold remains blocked")
+    if population_tensor_metadata is None:
+        telemetry.block("population_solver", reason="official SIDRA anchor smoke path; tensor solver scaffold remains blocked")
     telemetry.block("stdfm", reason="ST-DFM scaffold remains blocked for compile smoke")
     telemetry.block("pirs_model", reason="PIRS model stage is not invoked in compile smoke")
     telemetry.block("pirs_hsic", reason="PIRS HSIC stage is not invoked in compile smoke")
@@ -372,6 +400,10 @@ def run_compile(
             cnes_sih_metadata = existing_run_config["cnes_sih"]
         if cnes_sih_metadata is not None:
             run_config_payload["cnes_sih"] = cnes_sih_metadata
+        if population_tensor_metadata is None and existing_run_config.get("population_tensor"):
+            population_tensor_metadata = existing_run_config["population_tensor"]
+        if population_tensor_metadata is not None:
+            run_config_payload["population_tensor"] = population_tensor_metadata
         run_config_path.write_text(
             json.dumps(run_config_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
@@ -388,6 +420,8 @@ def run_compile(
             manifest_extras["race_bridge"] = race_bridge_metadata
         if cnes_sih_metadata is not None:
             manifest_extras["cnes_sih"] = cnes_sih_metadata
+        if population_tensor_metadata is not None:
+            manifest_extras["population_tensor"] = population_tensor_metadata
         write_reproducibility_manifest(
             run_dir=run_dir,
             run_id=run_id,
@@ -415,6 +449,8 @@ def run_compile(
         final_extras["race_bridge"] = race_bridge_metadata
     if cnes_sih_metadata is not None:
         final_extras["cnes_sih"] = cnes_sih_metadata
+    if population_tensor_metadata is not None:
+        final_extras["population_tensor"] = population_tensor_metadata
     write_reproducibility_manifest(
         run_dir=run_dir,
         run_id=run_id,
@@ -438,4 +474,5 @@ def run_compile(
         "race_bridge_plan": race_bridge_plan.as_manifest(),
         "race_bridge": race_bridge_metadata,
         "cnes_sih": cnes_sih_metadata,
+        "population_tensor": population_tensor_metadata,
     }

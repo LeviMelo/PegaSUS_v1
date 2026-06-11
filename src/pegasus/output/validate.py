@@ -9,81 +9,14 @@ import pyarrow.parquet as pq
 from pegasus.output.reproducibility import COMPILE_TELEMETRY_STAGES, TERMINAL_STAGE_STATUSES
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES, OutputSchemaRegistry, OutputValidationResult
 
-REQUIRED_V_FIELDS_COLUMNS = {
-    "field_id",
-    "name",
-    "kind",
-    "carrier",
-    "unit",
-    "aggregation",
-    "role",
-    "source",
-    "support_json",
-    "axes_json",
-    "operator",
-    "provenance",
-    "state",
-    "dashboard_safe",
-    "warnings",
-    "lineage_hash",
-    "registry_hash",
-    "materialization_state",
-    "path",
-}
-
-REQUIRED_E_DAG_COLUMNS = {
-    "edge_id",
-    "parent_field_id",
-    "child_field_id",
-    "operator",
-    "operator_params_json",
-    "registry_versions_json",
-    "created_at",
-}
-
-REQUIRED_Q_TENSOR_COLUMNS = {
-    "field_id",
-    "n_events",
-    "n_denom",
-    "n_eff",
-    "cov_S",
-    "cov_T",
-    "missingness",
-    "zero_inflation",
-    "denom_fragility",
-    "provenance_risk",
-    "state",
-    "dashboard_safe",
-    "warnings",
-    "computed_at",
-    "q_schema_version",
-}
-
-REQUIRED_VARIABLE_DICTIONARY_COLUMNS = {
-    "field_id",
-    "display_name",
-    "technical_name",
-    "definition",
-    "estimand_label",
-    "source_systems",
-    "carrier",
-    "unit",
-    "support_description",
-    "axis_description",
-    "provenance_description",
-    "state",
-    "dashboard_safe",
-    "interpretation_warning",
-}
-
-FIELD_REFERENCE_COLUMNS = {
-    "field_id",
-    "parent_field_id",
-    "child_field_id",
-    "outcome_field_id",
-    "covariate_field_id",
-    "residual_field_id",
-}
+REQUIRED_V_FIELDS_COLUMNS = {"field_id", "name", "kind", "carrier", "unit", "aggregation", "role", "source", "support_json", "axes_json", "operator", "provenance", "state", "dashboard_safe", "warnings", "lineage_hash", "registry_hash", "materialization_state", "path"}
+REQUIRED_E_DAG_COLUMNS = {"edge_id", "parent_field_id", "child_field_id", "operator", "operator_params_json", "registry_versions_json", "created_at"}
+REQUIRED_Q_TENSOR_COLUMNS = {"field_id", "n_events", "n_denom", "n_eff", "cov_S", "cov_T", "missingness", "zero_inflation", "denom_fragility", "provenance_risk", "state", "dashboard_safe", "warnings", "computed_at", "q_schema_version"}
+OPTIONAL_RACE_Q_COLUMNS = {"race_axis_source", "race_axis_target", "missing_race_share", "race_bridge_cv", "sensitivity_width", "bridge_mode"}
+REQUIRED_VARIABLE_DICTIONARY_COLUMNS = {"field_id", "display_name", "technical_name", "definition", "estimand_label", "source_systems", "carrier", "unit", "support_description", "axis_description", "provenance_description", "state", "dashboard_safe", "interpretation_warning"}
+FIELD_REFERENCE_COLUMNS = {"field_id", "parent_field_id", "child_field_id", "outcome_field_id", "covariate_field_id", "residual_field_id"}
+RACE_BRIDGE_POSTERIOR_KEYS = {"numerator_axis_source", "denominator_axis_target", "bridge_operator", "emission_matrix_registry_version", "bridge_mode", "missing_race_share", "race_bridge_cv", "sensitivity_width", "race_axis_warning", "bayesian_ecological_bridge_warning", "prior_hash", "lower_count", "upper_count"}
+RUN_CONFIG_RACE_BRIDGE_KEYS = {"bridge_id", "mode", "prior_hash", "source_axis", "target_axis", "missing_race_share", "sensitivity_width", "race_bridge_cv", "raw_admin_counts_preserved", "missing_category_preserved", "attach_stage"}
 
 
 def _read(path: Path):
@@ -129,15 +62,10 @@ def _require_columns(*, table_name: str, actual: set[str], required: set[str], e
 def _validate_first_class_keys(root: Path, schema_registry: OutputSchemaRegistry, errors: list[str]) -> None:
     expected_names = {OUTPUT_BUNDLE_FILES[key] for key in schema_registry.required_keys}
     found_names = {p.name for p in root.iterdir()}
-
-    missing = expected_names - found_names
-    extra = found_names - expected_names
-
-    for name in sorted(missing):
+    for name in sorted(expected_names - found_names):
         errors.append(f"missing first-class artifact: {name}")
-    for name in sorted(extra):
+    for name in sorted(found_names - expected_names):
         errors.append(f"extra first-class artifact: {name}")
-
     for key, name in OUTPUT_BUNDLE_FILES.items():
         if key not in schema_registry.required_keys:
             continue
@@ -151,17 +79,11 @@ def _validate_first_class_keys(root: Path, schema_registry: OutputSchemaRegistry
             errors.append(f"first-class artifact is not a file: {name}")
 
 
-def _validate_manifest_and_config(
-    *,
-    root: Path,
-    errors: list[str],
-    warnings: list[str],
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _validate_manifest_and_config(*, root: Path, errors: list[str], warnings: list[str]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     user_intent = _load_json_file(root / "UserIntent.json", errors=errors, name="UserIntent.json")
     run_config = _load_json_file(root / "RunConfig.json", errors=errors, name="RunConfig.json")
     manifest = _load_json_file(root / "ReproducibilityManifest.json", errors=errors, name="ReproducibilityManifest.json")
     p_vector = _load_json_file(root / "P_vector.json", errors=errors, name="P_vector.json")
-
     if not isinstance(user_intent, dict):
         errors.append("UserIntent.json is not a frozen JSON object")
         user_intent = {}
@@ -173,13 +95,10 @@ def _validate_manifest_and_config(
         manifest = {}
     if not isinstance(p_vector, (dict, list)):
         errors.append("P_vector.json must be a JSON object or list")
-
     compile_mode = run_config.get("compile_mode") or manifest.get("compile_mode")
     is_compile_run = bool(compile_mode)
-
     source_hashes = manifest.get("source_hashes")
     registry_hashes = manifest.get("registry_hashes")
-
     if is_compile_run:
         if not isinstance(source_hashes, dict) or not source_hashes:
             errors.append("ReproducibilityManifest.json missing nonempty source_hashes for compile run")
@@ -194,7 +113,6 @@ def _validate_manifest_and_config(
             warnings.append("ReproducibilityManifest.json has empty or missing source_hashes on non-compile run")
         if not isinstance(registry_hashes, dict) or not registry_hashes:
             warnings.append("ReproducibilityManifest.json has empty or missing registry_hashes on non-compile run")
-
     _validate_telemetry(manifest=manifest, is_compile_run=is_compile_run, errors=errors)
     return user_intent, run_config, manifest
 
@@ -204,11 +122,9 @@ def _validate_telemetry(*, manifest: dict[str, Any], is_compile_run: bool, error
     if not isinstance(telemetry, dict):
         errors.append("ReproducibilityManifest.json missing global telemetry object")
         return
-
     total_wall_seconds = telemetry.get("total_wall_seconds")
     if not isinstance(total_wall_seconds, (int, float)) or total_wall_seconds < 0:
         errors.append("telemetry.total_wall_seconds missing or negative")
-
     stage_status = telemetry.get("stage_status")
     stage_wall_seconds = telemetry.get("stage_wall_seconds")
     if not isinstance(stage_status, dict):
@@ -217,7 +133,6 @@ def _validate_telemetry(*, manifest: dict[str, Any], is_compile_run: bool, error
     if not isinstance(stage_wall_seconds, dict):
         errors.append("telemetry.stage_wall_seconds missing or not a mapping")
         stage_wall_seconds = {}
-
     if is_compile_run:
         missing_status = sorted(set(COMPILE_TELEMETRY_STAGES) - set(stage_status))
         missing_duration = sorted(set(COMPILE_TELEMETRY_STAGES) - set(stage_wall_seconds))
@@ -225,21 +140,70 @@ def _validate_telemetry(*, manifest: dict[str, Any], is_compile_run: bool, error
             errors.append(f"telemetry.stage_status missing compile stages: {missing_status}")
         if missing_duration:
             errors.append(f"telemetry.stage_wall_seconds missing compile stages: {missing_duration}")
-
     for stage, status in stage_status.items():
         if status not in TERMINAL_STAGE_STATUSES:
             errors.append(f"invalid telemetry stage status: {stage}={status}")
-
     for stage, duration in stage_wall_seconds.items():
         if not isinstance(duration, (int, float)) or duration < 0:
             errors.append(f"invalid telemetry stage duration: {stage}={duration}")
 
 
-def _validate_parquet_contracts(
-    *,
-    root: Path,
-    errors: list[str],
-) -> None:
+def _validate_race_bridge_contract(*, root: Path, v, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
+    rows = v.to_pylist()
+    q_rows = {str(row.get("field_id")): row for row in q.to_pylist() if row.get("field_id") is not None}
+    bridge_rows = [row for row in rows if str(row.get("field_id", "")).startswith("SIMRaceBridge") or str(row.get("field_id", "")).startswith("SIMRaceAdminRawCount_")]
+    if not bridge_rows:
+        return
+    run_bridge = run_config.get("race_bridge")
+    manifest_bridge = manifest.get("race_bridge")
+    if not isinstance(run_bridge, dict):
+        errors.append("RunConfig.json missing race_bridge metadata while race bridge fields exist")
+        run_bridge = {}
+    if not isinstance(manifest_bridge, dict):
+        errors.append("ReproducibilityManifest.json missing race_bridge metadata while race bridge fields exist")
+        manifest_bridge = {}
+    missing_run_keys = sorted(RUN_CONFIG_RACE_BRIDGE_KEYS - set(run_bridge))
+    if missing_run_keys:
+        errors.append(f"RunConfig.race_bridge missing keys: {missing_run_keys}")
+    if run_bridge.get("raw_admin_counts_preserved") is not True:
+        errors.append("RunConfig.race_bridge.raw_admin_counts_preserved must be true")
+    if run_bridge.get("missing_category_preserved") is not True:
+        errors.append("RunConfig.race_bridge.missing_category_preserved must be true")
+    if manifest_bridge.get("prior_hash") != run_bridge.get("prior_hash"):
+        errors.append("ReproducibilityManifest.race_bridge.prior_hash must match RunConfig.race_bridge.prior_hash")
+    if not (root / "Tables" / "race_bridge_summary.parquet").exists():
+        errors.append("race bridge fields exist but Tables/race_bridge_summary.parquet is missing")
+    for row in bridge_rows:
+        fid = str(row.get("field_id"))
+        q_row = q_rows.get(fid)
+        if q_row is None:
+            errors.append(f"race bridge field missing Q_tensor row: {fid}")
+            continue
+        if fid.startswith("SIMRaceBridgePosteriorCount_"):
+            axes = _load_json_cell(row.get("axes_json"), errors=errors, context=f"V_fields.axes_json[{fid}]")
+            if not isinstance(axes, dict):
+                errors.append(f"race bridge posterior axes_json is not an object: {fid}")
+                continue
+            absent = sorted(RACE_BRIDGE_POSTERIOR_KEYS - set(axes))
+            if absent:
+                errors.append(f"race bridge posterior field missing metadata keys: {fid} {absent}")
+            if axes.get("bridge_operator") != "Bridge_R_fixedC_dynamic_weight":
+                errors.append(f"race bridge posterior field has wrong bridge_operator: {fid} {axes.get('bridge_operator')}")
+            sensitivity = float(axes.get("sensitivity_width") or 0.0)
+            if row.get("dashboard_safe") == "True" and sensitivity > 0.05:
+                errors.append(f"race bridge posterior dashboard safety not downgraded despite sensitivity width: {fid}")
+            if q_row.get("dashboard_safe") == "True" and sensitivity > 0.05:
+                errors.append(f"race bridge posterior Q dashboard safety not downgraded despite sensitivity width: {fid}")
+            for column in OPTIONAL_RACE_Q_COLUMNS & set(q.column_names):
+                if q_row.get(column) is None:
+                    errors.append(f"race bridge posterior Q_tensor missing {column}: {fid}")
+        if fid == "SIMRaceBridgeMissingRaceObserver":
+            axes = _load_json_cell(row.get("axes_json"), errors=errors, context=f"V_fields.axes_json[{fid}]")
+            if isinstance(axes, dict) and axes.get("missing_category_preserved") is not True:
+                errors.append("SIMRaceBridgeMissingRaceObserver must declare missing_category_preserved=true")
+
+
+def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
     try:
         v = _read(root / "V_fields.parquet")
         q = _read(root / "Q_tensor.parquet")
@@ -255,41 +219,30 @@ def _validate_parquet_contracts(
     except Exception as exc:
         errors.append(f"parquet read failure: {exc}")
         return
-
     _require_columns(table_name="V_fields", actual=set(v.column_names), required=REQUIRED_V_FIELDS_COLUMNS, errors=errors)
     _require_columns(table_name="E_DAG", actual=set(edges.column_names), required=REQUIRED_E_DAG_COLUMNS, errors=errors)
     _require_columns(table_name="Q_tensor", actual=set(q.column_names), required=REQUIRED_Q_TENSOR_COLUMNS, errors=errors)
     _require_columns(table_name="VariableDictionary", actual=set(vd.column_names), required=REQUIRED_VARIABLE_DICTIONARY_COLUMNS, errors=errors)
-
     if q.num_rows == 0:
         errors.append("Q_tensor is empty")
-
     v_ids = _nonnull(_column_values(v, "field_id"))
     q_ids = _nonnull(_column_values(q, "field_id"))
     vd_ids = _nonnull(_column_values(vd, "field_id"))
-
     if not v_ids:
         errors.append("V_fields has no field_id values")
     if not v_ids.issubset(vd_ids):
         errors.append(f"VariableDictionary does not cover all V_fields: {sorted(v_ids - vd_ids)}")
     if not v_ids.issubset(q_ids):
         errors.append(f"Q_tensor does not cover all V_fields: {sorted(v_ids - q_ids)}")
-
     if edges.num_rows:
         for col in ["parent_field_id", "child_field_id"]:
             bad = _nonnull(_column_values(edges, col)) - v_ids
             if bad:
                 errors.append(f"E_DAG {col} contains IDs absent from V_fields: {sorted(bad)}")
-
     if warnings_table.num_rows and "field_id" in warnings_table.column_names:
-        bad_warnings = {
-            x
-            for x in warnings_table.column("field_id").to_pylist()
-            if x is not None and x not in {"", "run"} and x not in v_ids
-        }
+        bad_warnings = {x for x in warnings_table.column("field_id").to_pylist() if x is not None and x not in {"", "run"} and x not in v_ids}
         if bad_warnings:
             errors.append(f"Warnings link to invalid field IDs: {sorted(bad_warnings)}")
-
     if failed_branches.num_rows and "parent_field_ids" in failed_branches.column_names:
         for idx, raw in enumerate(failed_branches.column("parent_field_ids").to_pylist()):
             parents = _load_json_cell(raw, errors=errors, context=f"FailedBranches.parent_field_ids[{idx}]")
@@ -301,53 +254,39 @@ def _validate_parquet_contracts(
             bad = {x for x in parents if x not in v_ids}
             if bad:
                 errors.append(f"FailedBranches parent IDs absent from V_fields at row {idx}: {sorted(bad)}")
-
     illegal_ids = set()
     if "state" in v.column_names and "field_id" in v.column_names:
         field_ids = v.column("field_id").to_pylist()
         states = v.column("state").to_pylist()
         illegal_ids = {fid for fid, state in zip(field_ids, states, strict=False) if state == "illegal_excluded"}
-
-    for table_name, table in [
-        ("ModelAssociations", model_assoc),
-        ("ResidualAssociations", residual_assoc),
-        ("Hypotheses", hypotheses),
-    ]:
+    for table_name, table in [("ModelAssociations", model_assoc), ("ResidualAssociations", residual_assoc), ("Hypotheses", hypotheses)]:
         if not illegal_ids:
             break
         for col in FIELD_REFERENCE_COLUMNS & set(table.column_names):
             bad = _nonnull(_column_values(table, col)) & illegal_ids
             if bad:
                 errors.append(f"{table_name}.{col} references illegal_excluded fields: {sorted(bad)}")
-
     for table_name, table in [("QuarantinedFields", quarantined), ("ForcedFields", forced)]:
         for col in FIELD_REFERENCE_COLUMNS & set(table.column_names):
             bad = _nonnull(_column_values(table, col)) - v_ids
             if bad:
                 errors.append(f"{table_name}.{col} contains IDs absent from V_fields: {sorted(bad)}")
+    _validate_race_bridge_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
 
 
-def validate_output_bundle(
-    *,
-    run_dir: str,
-    schema_registry: OutputSchemaRegistry | None = None,
-) -> OutputValidationResult:
+def validate_output_bundle(*, run_dir: str, schema_registry: OutputSchemaRegistry | None = None) -> OutputValidationResult:
     """Validate exact 17-key output bundle and mandatory cross-references."""
     schema_registry = schema_registry or OutputSchemaRegistry()
     root = Path(run_dir)
     errors: list[str] = []
     warnings: list[str] = []
-
     if not root.exists():
         return OutputValidationResult(ok=False, errors=[f"run_dir does not exist: {root}"], warnings=[])
     if not root.is_dir():
         return OutputValidationResult(ok=False, errors=[f"run_dir is not a directory: {root}"], warnings=[])
-
     _validate_first_class_keys(root, schema_registry, errors)
     if errors:
         return OutputValidationResult(ok=False, errors=errors, warnings=warnings)
-
-    _validate_manifest_and_config(root=root, errors=errors, warnings=warnings)
-    _validate_parquet_contracts(root=root, errors=errors)
-
+    _user_intent, run_config, manifest = _validate_manifest_and_config(root=root, errors=errors, warnings=warnings)
+    _validate_parquet_contracts(root=root, run_config=run_config, manifest=manifest, errors=errors)
     return OutputValidationResult(ok=not errors, errors=errors, warnings=warnings)

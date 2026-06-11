@@ -1,12 +1,24 @@
-schema_version: '1.0'
-registry_version: v1.0
-created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for race_bridge_priors.yaml; not a calibrated
-  analytic registry.
+schema_version: "1.0"
+registry_version: "race_bridge_priors.v1.slice4b"
+created_at: "2026-06-10"
+updated_at: "2026-06-10"
+provenance: "Slice 4B smoke registry for downstream Bridge_R prior selection. The prior is a fixture for compiler validation and must not be interpreted as calibrated epidemiological truth."
 entries:
-- id: race_bridge_priors
-  status: deferred
-  description: Slice 0 placeholder registry.
-  warnings:
-  - scaffold_only
+  - id: "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"
+    status: "experimental"
+    description: "Smoke fixed-C dynamic-weight bridge from SIM administrative race/color to IBGE self-declared race axis."
+    warnings:
+      - "fixture_prior_not_calibrated"
+      - "posterior_fields_are_sensitivity_observers"
+      - "raw_administrative_counts_must_be_preserved"
+    source_system: "SIM-DO"
+    source_axis: "SIM_ADMIN_RACACOR"
+    target_axis: "IBGE_SELF_DECLARED_RACE"
+    mode: "fixedC_dynamic_weight"
+    prior_path: "tests/fixtures/race_bridge/fixedC_valid.json"
+    enabled_for_compile: true
+    region_scope:
+      - "AL"
+    period_start: 2022
+    period_end: 2022
+    dashboard_policy: "downgrade_when_sensitive"

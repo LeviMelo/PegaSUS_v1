@@ -14,10 +14,12 @@ from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
 from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
 from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_manifest
 from pegasus.output.validate import validate_output_bundle
+from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
 from pegasus.sidra.facts import write_facts_parquet
 from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
 from pegasus.workflows.datasus import run_datasus_normalize_sim
 from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
+from pegasus.workflows.race_bridge import run_attach_race_bridge
 from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 
 
@@ -69,11 +71,7 @@ SIDRA_POPULATION_MACEIO_CHUNK_REQUEST: dict[str, Any] = {
     "periods": ["2022"],
     "locality_level": "N6",
     "localities": ["2704302"],
-    "classifications": {
-        "86": ["95251"],
-        "2": ["6794"],
-        "287": ["100362"],
-    },
+    "classifications": {"86": ["95251"], "2": ["6794"], "287": ["100362"]},
 }
 
 
@@ -96,6 +94,7 @@ def _registry_hashes() -> dict[str, str]:
         Path("config/registries/source_fields.yaml"),
         Path("config/registries/quality_permissions.yaml"),
         Path("config/registries/race_axis_registry.yaml"),
+        Path("config/registries/race_bridge_priors.yaml"),
     ]
     return {str(path): sha256_file(path) for path in candidates if path.exists()}
 
@@ -139,11 +138,11 @@ def _write_sidra_smoke_facts(*, output_path: Path) -> Path:
 
 def _smoke_municipality_cod6(intent: UserIntent) -> str:
     if intent.execution_scale != "smoke":
-        raise ValueError("Slice 3B compile supports execution_scale='smoke' only.")
+        raise ValueError("Slice 4B compile supports execution_scale='smoke' only.")
     if intent.geography.level != "municipality":
-        raise ValueError("Slice 3B compile smoke requires geography.level='municipality'.")
+        raise ValueError("Slice 4B compile smoke requires geography.level='municipality'.")
     if len(intent.geography.codes) != 1:
-        raise ValueError("Slice 3B compile smoke requires exactly one municipality code.")
+        raise ValueError("Slice 4B compile smoke requires exactly one municipality code.")
     cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
     if cod6 is None:
         raise ValueError(f"Could not convert intent municipality code to DATASUS cod6: {intent.geography.codes[0]!r}")
@@ -160,6 +159,12 @@ def run_compile(
     data_root = Path(data_root)
     intent_payload, intent = _load_intent(intent_path)
     municipality_cod6 = _smoke_municipality_cod6(intent)
+    try:
+        race_bridge_plan = resolve_race_bridge_plan(intent=intent, municipality_cod6=municipality_cod6)
+    except RaceBridgeRegistryError as exc:
+        raise ValueError(f"Invalid Race Bridge registry plan for {intent_path}: {exc}") from exc
+    if race_bridge_plan.status == "blocked":
+        raise ValueError(f"Race Bridge mode is blocked for this compile slice: {race_bridge_plan.as_manifest()}")
 
     intent_hash = sha256_file(intent_path)
     run_id = f"compile_{intent_path.stem}_{utc_stamp()}_{intent_hash[:8]}"
@@ -169,6 +174,8 @@ def run_compile(
 
     source_hashes: dict[str, str] = {"intent": intent_hash}
     registry_hashes = _registry_hashes()
+    if race_bridge_plan.registry_path is not None and race_bridge_plan.registry_hash is not None:
+        registry_hashes[str(race_bridge_plan.registry_path)] = race_bridge_plan.registry_hash
 
     raw_fixture_source = Path("tests/fixtures/datasus/sim_do_fixture.csv")
     raw_sinasc_fixture_source = Path("tests/fixtures/datasus/sinasc_fixture.csv")
@@ -247,6 +254,27 @@ def run_compile(
             Path(run_dir) / "Tables" / "maternal_child_linkage_summary.parquet"
         )
 
+    race_bridge_metadata: dict[str, Any] | None = None
+    if race_bridge_plan.requires_attach:
+        assert race_bridge_plan.prior_path is not None
+        with telemetry.stage("race_bridge"):
+            bridge_result = run_attach_race_bridge(
+                run_dir=run_dir,
+                sim_events_path=sim_events_path,
+                bridge_prior_path=race_bridge_plan.prior_path,
+                municipality_cod6=municipality_cod6,
+            )
+            if not bridge_result["validation"].ok:
+                raise RuntimeError("Race bridge attachment invalidated run bundle: " + "; ".join(bridge_result["validation"].errors))
+            race_bridge_metadata = bridge_result.get("race_bridge")
+            source_hashes["race_bridge_prior"] = sha256_file(race_bridge_plan.prior_path)
+            summary_path = Path(run_dir) / "Tables" / "race_bridge_summary.parquet"
+            if summary_path.exists():
+                source_hashes["race_bridge_summary"] = sha256_file(summary_path)
+    else:
+        telemetry.set_stage("race_bridge", "skipped", 0.0)
+        telemetry.flush()
+
     telemetry.set_stage("geo_support", "success", 0.0)
     telemetry.set_stage("q_tensor", "success", 0.0)
     telemetry.block("population_solver", reason="official SIDRA anchor smoke path; tensor solver scaffold remains blocked")
@@ -275,6 +303,7 @@ def run_compile(
             },
             "population_mode": intent.population_mode,
             "race_tensor_mode": intent.race_tensor_mode,
+            "race_bridge_plan": race_bridge_plan.as_manifest(),
             "registry_hashes": registry_hashes,
             "source_hashes": source_hashes,
         }
@@ -286,10 +315,23 @@ def run_compile(
                 existing_run_config = {}
         if existing_run_config.get("maternal_child_linkage"):
             run_config_payload["maternal_child_linkage"] = existing_run_config["maternal_child_linkage"]
+        if race_bridge_metadata is None and existing_run_config.get("race_bridge"):
+            race_bridge_metadata = existing_run_config["race_bridge"]
+        if race_bridge_metadata is not None:
+            run_config_payload["race_bridge"] = race_bridge_metadata
         run_config_path.write_text(
             json.dumps(run_config_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
+        manifest_extras = {
+            "compile_mode": "smoke",
+            "compile_manifest": str(compile_manifest_path),
+            "intent_path": str(intent_path),
+            "maternal_child_linkage": True,
+            "race_bridge_plan": race_bridge_plan.as_manifest(),
+        }
+        if race_bridge_metadata is not None:
+            manifest_extras["race_bridge"] = race_bridge_metadata
         write_reproducibility_manifest(
             run_dir=run_dir,
             run_id=run_id,
@@ -297,12 +339,7 @@ def run_compile(
             source_hashes=source_hashes,
             registry_hashes=registry_hashes,
             telemetry=telemetry,
-            extras={
-                "compile_mode": "smoke",
-                "compile_manifest": str(compile_manifest_path),
-                "intent_path": str(intent_path),
-                "maternal_child_linkage": True,
-            },
+            extras=manifest_extras,
         )
 
     with telemetry.stage("output_validation"):
@@ -310,6 +347,15 @@ def run_compile(
         if not result.ok:
             raise RuntimeError("Compile smoke produced invalid output bundle: " + "; ".join(result.errors))
 
+    final_extras = {
+        "compile_mode": "smoke",
+        "compile_manifest": str(compile_manifest_path),
+        "intent_path": str(intent_path),
+        "maternal_child_linkage": True,
+        "race_bridge_plan": race_bridge_plan.as_manifest(),
+    }
+    if race_bridge_metadata is not None:
+        final_extras["race_bridge"] = race_bridge_metadata
     write_reproducibility_manifest(
         run_dir=run_dir,
         run_id=run_id,
@@ -317,12 +363,7 @@ def run_compile(
         source_hashes=source_hashes,
         registry_hashes=registry_hashes,
         telemetry=telemetry,
-        extras={
-            "compile_mode": "smoke",
-            "compile_manifest": str(compile_manifest_path),
-            "intent_path": str(intent_path),
-            "maternal_child_linkage": True,
-        },
+        extras=final_extras,
     )
 
     validation = validate_output_bundle(run_dir=str(run_dir))
@@ -335,4 +376,6 @@ def run_compile(
         "source_hashes": source_hashes,
         "registry_hashes": registry_hashes,
         "telemetry": telemetry.model(),
+        "race_bridge_plan": race_bridge_plan.as_manifest(),
+        "race_bridge": race_bridge_metadata,
     }

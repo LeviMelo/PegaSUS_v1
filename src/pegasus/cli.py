@@ -360,3 +360,32 @@ def efg_attach_race_bridge(
         _fail(validation.errors)
     print(f"[green]race bridge fields attached and run bundle valid[/green] {result['run_dir']}")
 
+
+@efg_app.command("validate-race-bridge-prior")
+def efg_validate_race_bridge_prior(
+    bridge_prior: Path = typer.Option(..., "--bridge-prior"),
+) -> None:
+    from pegasus.workflows.race_bridge import run_validate_race_bridge_prior
+
+    result = run_validate_race_bridge_prior(bridge_prior_path=bridge_prior)
+    print(f"[green]race bridge prior valid[/green] bridge_id={result['bridge_id']} hash={result['prior_hash']}")
+
+
+@efg_app.command("plan-race-bridge")
+def efg_plan_race_bridge(
+    sim_events: Path = typer.Option(..., "--sim-events"),
+    bridge_prior: Path | None = typer.Option(None, "--bridge-prior"),
+    intent: Path | None = typer.Option(None, "--intent"),
+    registry: Path = typer.Option(Path("config/registries/race_bridge_priors.yaml"), "--registry"),
+    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
+) -> None:
+    from pegasus.workflows.race_bridge import run_plan_race_bridge
+
+    result = run_plan_race_bridge(
+        sim_events_path=sim_events,
+        bridge_prior_path=bridge_prior,
+        intent_path=intent,
+        registry_path=registry,
+        municipality_cod6=municipality_cod6,
+    )
+    print(result["summary_json"])

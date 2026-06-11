@@ -18,6 +18,7 @@ COMPILE_TELEMETRY_STAGES = (
     "sidra_plan",
     "sidra_fetch",
     "sidra_normalize",
+    "race_bridge",
     "geo_support",
     "she_build",
     "population_solver",

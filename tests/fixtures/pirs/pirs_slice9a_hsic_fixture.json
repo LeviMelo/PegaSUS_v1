@@ -1,0 +1,728 @@
+{
+  "observations": [
+    {
+      "covariate": 0.1,
+      "municipality_cod6": "270001",
+      "residual": -0.2725,
+      "year": 2011
+    },
+    {
+      "covariate": 0.111,
+      "municipality_cod6": "270002",
+      "residual": -0.24325,
+      "year": 2011
+    },
+    {
+      "covariate": 0.122,
+      "municipality_cod6": "270003",
+      "residual": -0.214,
+      "year": 2011
+    },
+    {
+      "covariate": 0.133,
+      "municipality_cod6": "270004",
+      "residual": -0.21475,
+      "year": 2011
+    },
+    {
+      "covariate": 0.144,
+      "municipality_cod6": "270005",
+      "residual": -0.1855,
+      "year": 2011
+    },
+    {
+      "covariate": 0.155,
+      "municipality_cod6": "270006",
+      "residual": -0.15625,
+      "year": 2011
+    },
+    {
+      "covariate": 0.166,
+      "municipality_cod6": "270007",
+      "residual": -0.157,
+      "year": 2011
+    },
+    {
+      "covariate": 0.177,
+      "municipality_cod6": "270008",
+      "residual": -0.12775,
+      "year": 2011
+    },
+    {
+      "covariate": 0.188,
+      "municipality_cod6": "270009",
+      "residual": -0.0985,
+      "year": 2011
+    },
+    {
+      "covariate": 0.199,
+      "municipality_cod6": "270010",
+      "residual": -0.09925,
+      "year": 2011
+    },
+    {
+      "covariate": 0.115,
+      "municipality_cod6": "270001",
+      "residual": -0.23625,
+      "year": 2012
+    },
+    {
+      "covariate": 0.126,
+      "municipality_cod6": "270002",
+      "residual": -0.207,
+      "year": 2012
+    },
+    {
+      "covariate": 0.137,
+      "municipality_cod6": "270003",
+      "residual": -0.20775,
+      "year": 2012
+    },
+    {
+      "covariate": 0.148,
+      "municipality_cod6": "270004",
+      "residual": -0.1785,
+      "year": 2012
+    },
+    {
+      "covariate": 0.159,
+      "municipality_cod6": "270005",
+      "residual": -0.14925,
+      "year": 2012
+    },
+    {
+      "covariate": 0.17,
+      "municipality_cod6": "270006",
+      "residual": -0.15,
+      "year": 2012
+    },
+    {
+      "covariate": 0.181,
+      "municipality_cod6": "270007",
+      "residual": -0.12075,
+      "year": 2012
+    },
+    {
+      "covariate": 0.192,
+      "municipality_cod6": "270008",
+      "residual": -0.0915,
+      "year": 2012
+    },
+    {
+      "covariate": 0.203,
+      "municipality_cod6": "270009",
+      "residual": -0.09225,
+      "year": 2012
+    },
+    {
+      "covariate": 0.214,
+      "municipality_cod6": "270010",
+      "residual": -0.063,
+      "year": 2012
+    },
+    {
+      "covariate": 0.13,
+      "municipality_cod6": "270001",
+      "residual": -0.2,
+      "year": 2013
+    },
+    {
+      "covariate": 0.141,
+      "municipality_cod6": "270002",
+      "residual": -0.20075,
+      "year": 2013
+    },
+    {
+      "covariate": 0.152,
+      "municipality_cod6": "270003",
+      "residual": -0.1715,
+      "year": 2013
+    },
+    {
+      "covariate": 0.163,
+      "municipality_cod6": "270004",
+      "residual": -0.14225,
+      "year": 2013
+    },
+    {
+      "covariate": 0.174,
+      "municipality_cod6": "270005",
+      "residual": -0.143,
+      "year": 2013
+    },
+    {
+      "covariate": 0.185,
+      "municipality_cod6": "270006",
+      "residual": -0.11375,
+      "year": 2013
+    },
+    {
+      "covariate": 0.196,
+      "municipality_cod6": "270007",
+      "residual": -0.0845,
+      "year": 2013
+    },
+    {
+      "covariate": 0.207,
+      "municipality_cod6": "270008",
+      "residual": -0.08525,
+      "year": 2013
+    },
+    {
+      "covariate": 0.218,
+      "municipality_cod6": "270009",
+      "residual": -0.056,
+      "year": 2013
+    },
+    {
+      "covariate": 0.229,
+      "municipality_cod6": "270010",
+      "residual": -0.02675,
+      "year": 2013
+    },
+    {
+      "covariate": 0.145,
+      "municipality_cod6": "270001",
+      "residual": -0.19375,
+      "year": 2014
+    },
+    {
+      "covariate": 0.156,
+      "municipality_cod6": "270002",
+      "residual": -0.1645,
+      "year": 2014
+    },
+    {
+      "covariate": 0.167,
+      "municipality_cod6": "270003",
+      "residual": -0.13525,
+      "year": 2014
+    },
+    {
+      "covariate": 0.178,
+      "municipality_cod6": "270004",
+      "residual": -0.136,
+      "year": 2014
+    },
+    {
+      "covariate": 0.189,
+      "municipality_cod6": "270005",
+      "residual": -0.10675,
+      "year": 2014
+    },
+    {
+      "covariate": 0.2,
+      "municipality_cod6": "270006",
+      "residual": -0.0775,
+      "year": 2014
+    },
+    {
+      "covariate": 0.211,
+      "municipality_cod6": "270007",
+      "residual": -0.07825,
+      "year": 2014
+    },
+    {
+      "covariate": 0.222,
+      "municipality_cod6": "270008",
+      "residual": -0.049,
+      "year": 2014
+    },
+    {
+      "covariate": 0.233,
+      "municipality_cod6": "270009",
+      "residual": -0.01975,
+      "year": 2014
+    },
+    {
+      "covariate": 0.244,
+      "municipality_cod6": "270010",
+      "residual": -0.0205,
+      "year": 2014
+    },
+    {
+      "covariate": 0.16,
+      "municipality_cod6": "270001",
+      "residual": -0.1575,
+      "year": 2015
+    },
+    {
+      "covariate": 0.171,
+      "municipality_cod6": "270002",
+      "residual": -0.12825,
+      "year": 2015
+    },
+    {
+      "covariate": 0.182,
+      "municipality_cod6": "270003",
+      "residual": -0.129,
+      "year": 2015
+    },
+    {
+      "covariate": 0.193,
+      "municipality_cod6": "270004",
+      "residual": -0.09975,
+      "year": 2015
+    },
+    {
+      "covariate": 0.204,
+      "municipality_cod6": "270005",
+      "residual": -0.0705,
+      "year": 2015
+    },
+    {
+      "covariate": 0.215,
+      "municipality_cod6": "270006",
+      "residual": -0.07125,
+      "year": 2015
+    },
+    {
+      "covariate": 0.226,
+      "municipality_cod6": "270007",
+      "residual": -0.042,
+      "year": 2015
+    },
+    {
+      "covariate": 0.237,
+      "municipality_cod6": "270008",
+      "residual": -0.01275,
+      "year": 2015
+    },
+    {
+      "covariate": 0.248,
+      "municipality_cod6": "270009",
+      "residual": -0.0135,
+      "year": 2015
+    },
+    {
+      "covariate": 0.259,
+      "municipality_cod6": "270010",
+      "residual": 0.01575,
+      "year": 2015
+    },
+    {
+      "covariate": 0.175,
+      "municipality_cod6": "270001",
+      "residual": -0.12125,
+      "year": 2016
+    },
+    {
+      "covariate": 0.186,
+      "municipality_cod6": "270002",
+      "residual": -0.122,
+      "year": 2016
+    },
+    {
+      "covariate": 0.197,
+      "municipality_cod6": "270003",
+      "residual": -0.09275,
+      "year": 2016
+    },
+    {
+      "covariate": 0.208,
+      "municipality_cod6": "270004",
+      "residual": -0.0635,
+      "year": 2016
+    },
+    {
+      "covariate": 0.219,
+      "municipality_cod6": "270005",
+      "residual": -0.06425,
+      "year": 2016
+    },
+    {
+      "covariate": 0.23,
+      "municipality_cod6": "270006",
+      "residual": -0.035,
+      "year": 2016
+    },
+    {
+      "covariate": 0.241,
+      "municipality_cod6": "270007",
+      "residual": -0.00575,
+      "year": 2016
+    },
+    {
+      "covariate": 0.252,
+      "municipality_cod6": "270008",
+      "residual": -0.0065,
+      "year": 2016
+    },
+    {
+      "covariate": 0.263,
+      "municipality_cod6": "270009",
+      "residual": 0.02275,
+      "year": 2016
+    },
+    {
+      "covariate": 0.274,
+      "municipality_cod6": "270010",
+      "residual": 0.052,
+      "year": 2016
+    },
+    {
+      "covariate": 0.19,
+      "municipality_cod6": "270001",
+      "residual": -0.115,
+      "year": 2017
+    },
+    {
+      "covariate": 0.201,
+      "municipality_cod6": "270002",
+      "residual": -0.08575,
+      "year": 2017
+    },
+    {
+      "covariate": 0.212,
+      "municipality_cod6": "270003",
+      "residual": -0.0565,
+      "year": 2017
+    },
+    {
+      "covariate": 0.223,
+      "municipality_cod6": "270004",
+      "residual": -0.05725,
+      "year": 2017
+    },
+    {
+      "covariate": 0.234,
+      "municipality_cod6": "270005",
+      "residual": -0.028,
+      "year": 2017
+    },
+    {
+      "covariate": 0.245,
+      "municipality_cod6": "270006",
+      "residual": 0.00125,
+      "year": 2017
+    },
+    {
+      "covariate": 0.256,
+      "municipality_cod6": "270007",
+      "residual": 0.0005,
+      "year": 2017
+    },
+    {
+      "covariate": 0.267,
+      "municipality_cod6": "270008",
+      "residual": 0.02975,
+      "year": 2017
+    },
+    {
+      "covariate": 0.278,
+      "municipality_cod6": "270009",
+      "residual": 0.059,
+      "year": 2017
+    },
+    {
+      "covariate": 0.289,
+      "municipality_cod6": "270010",
+      "residual": 0.05825,
+      "year": 2017
+    },
+    {
+      "covariate": 0.205,
+      "municipality_cod6": "270001",
+      "residual": -0.07875,
+      "year": 2018
+    },
+    {
+      "covariate": 0.216,
+      "municipality_cod6": "270002",
+      "residual": -0.0495,
+      "year": 2018
+    },
+    {
+      "covariate": 0.227,
+      "municipality_cod6": "270003",
+      "residual": -0.05025,
+      "year": 2018
+    },
+    {
+      "covariate": 0.238,
+      "municipality_cod6": "270004",
+      "residual": -0.021,
+      "year": 2018
+    },
+    {
+      "covariate": 0.249,
+      "municipality_cod6": "270005",
+      "residual": 0.00825,
+      "year": 2018
+    },
+    {
+      "covariate": 0.26,
+      "municipality_cod6": "270006",
+      "residual": 0.0075,
+      "year": 2018
+    },
+    {
+      "covariate": 0.271,
+      "municipality_cod6": "270007",
+      "residual": 0.03675,
+      "year": 2018
+    },
+    {
+      "covariate": 0.282,
+      "municipality_cod6": "270008",
+      "residual": 0.066,
+      "year": 2018
+    },
+    {
+      "covariate": 0.293,
+      "municipality_cod6": "270009",
+      "residual": 0.06525,
+      "year": 2018
+    },
+    {
+      "covariate": 0.304,
+      "municipality_cod6": "270010",
+      "residual": 0.0945,
+      "year": 2018
+    },
+    {
+      "covariate": 0.22,
+      "municipality_cod6": "270001",
+      "residual": -0.0425,
+      "year": 2019
+    },
+    {
+      "covariate": 0.231,
+      "municipality_cod6": "270002",
+      "residual": -0.04325,
+      "year": 2019
+    },
+    {
+      "covariate": 0.242,
+      "municipality_cod6": "270003",
+      "residual": -0.014,
+      "year": 2019
+    },
+    {
+      "covariate": 0.253,
+      "municipality_cod6": "270004",
+      "residual": 0.01525,
+      "year": 2019
+    },
+    {
+      "covariate": 0.264,
+      "municipality_cod6": "270005",
+      "residual": 0.0145,
+      "year": 2019
+    },
+    {
+      "covariate": 0.275,
+      "municipality_cod6": "270006",
+      "residual": 0.04375,
+      "year": 2019
+    },
+    {
+      "covariate": 0.286,
+      "municipality_cod6": "270007",
+      "residual": 0.073,
+      "year": 2019
+    },
+    {
+      "covariate": 0.297,
+      "municipality_cod6": "270008",
+      "residual": 0.07225,
+      "year": 2019
+    },
+    {
+      "covariate": 0.308,
+      "municipality_cod6": "270009",
+      "residual": 0.1015,
+      "year": 2019
+    },
+    {
+      "covariate": 0.319,
+      "municipality_cod6": "270010",
+      "residual": 0.13075,
+      "year": 2019
+    },
+    {
+      "covariate": 0.235,
+      "municipality_cod6": "270001",
+      "residual": -0.03625,
+      "year": 2020
+    },
+    {
+      "covariate": 0.246,
+      "municipality_cod6": "270002",
+      "residual": -0.007,
+      "year": 2020
+    },
+    {
+      "covariate": 0.257,
+      "municipality_cod6": "270003",
+      "residual": 0.02225,
+      "year": 2020
+    },
+    {
+      "covariate": 0.268,
+      "municipality_cod6": "270004",
+      "residual": 0.0215,
+      "year": 2020
+    },
+    {
+      "covariate": 0.279,
+      "municipality_cod6": "270005",
+      "residual": 0.05075,
+      "year": 2020
+    },
+    {
+      "covariate": 0.29,
+      "municipality_cod6": "270006",
+      "residual": 0.08,
+      "year": 2020
+    },
+    {
+      "covariate": 0.301,
+      "municipality_cod6": "270007",
+      "residual": 0.07925,
+      "year": 2020
+    },
+    {
+      "covariate": 0.312,
+      "municipality_cod6": "270008",
+      "residual": 0.1085,
+      "year": 2020
+    },
+    {
+      "covariate": 0.323,
+      "municipality_cod6": "270009",
+      "residual": 0.13775,
+      "year": 2020
+    },
+    {
+      "covariate": 0.334,
+      "municipality_cod6": "270010",
+      "residual": 0.137,
+      "year": 2020
+    },
+    {
+      "covariate": 0.25,
+      "municipality_cod6": "270001",
+      "residual": 0.0,
+      "year": 2021
+    },
+    {
+      "covariate": 0.261,
+      "municipality_cod6": "270002",
+      "residual": 0.02925,
+      "year": 2021
+    },
+    {
+      "covariate": 0.272,
+      "municipality_cod6": "270003",
+      "residual": 0.0285,
+      "year": 2021
+    },
+    {
+      "covariate": 0.283,
+      "municipality_cod6": "270004",
+      "residual": 0.05775,
+      "year": 2021
+    },
+    {
+      "covariate": 0.294,
+      "municipality_cod6": "270005",
+      "residual": 0.087,
+      "year": 2021
+    },
+    {
+      "covariate": 0.305,
+      "municipality_cod6": "270006",
+      "residual": 0.08625,
+      "year": 2021
+    },
+    {
+      "covariate": 0.316,
+      "municipality_cod6": "270007",
+      "residual": 0.1155,
+      "year": 2021
+    },
+    {
+      "covariate": 0.327,
+      "municipality_cod6": "270008",
+      "residual": 0.14475,
+      "year": 2021
+    },
+    {
+      "covariate": 0.338,
+      "municipality_cod6": "270009",
+      "residual": 0.144,
+      "year": 2021
+    },
+    {
+      "covariate": 0.349,
+      "municipality_cod6": "270010",
+      "residual": 0.17325,
+      "year": 2021
+    },
+    {
+      "covariate": 0.265,
+      "municipality_cod6": "270001",
+      "residual": 0.03625,
+      "year": 2022
+    },
+    {
+      "covariate": 0.276,
+      "municipality_cod6": "270002",
+      "residual": 0.0355,
+      "year": 2022
+    },
+    {
+      "covariate": 0.287,
+      "municipality_cod6": "270003",
+      "residual": 0.06475,
+      "year": 2022
+    },
+    {
+      "covariate": 0.298,
+      "municipality_cod6": "270004",
+      "residual": 0.094,
+      "year": 2022
+    },
+    {
+      "covariate": 0.309,
+      "municipality_cod6": "270005",
+      "residual": 0.09325,
+      "year": 2022
+    },
+    {
+      "covariate": 0.32,
+      "municipality_cod6": "270006",
+      "residual": 0.1225,
+      "year": 2022
+    },
+    {
+      "covariate": 0.331,
+      "municipality_cod6": "270007",
+      "residual": 0.15175,
+      "year": 2022
+    },
+    {
+      "covariate": 0.342,
+      "municipality_cod6": "270008",
+      "residual": 0.151,
+      "year": 2022
+    },
+    {
+      "covariate": 0.353,
+      "municipality_cod6": "270009",
+      "residual": 0.18025,
+      "year": 2022
+    },
+    {
+      "covariate": 0.364,
+      "municipality_cod6": "270010",
+      "residual": 0.2095,
+      "year": 2022
+    }
+  ],
+  "panel_type": "annual_municipal_panel",
+  "seed": 20260611,
+  "spatial_blocks": 10,
+  "temporal_blocks": 12
+}

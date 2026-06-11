@@ -505,3 +505,38 @@ def pirs_build_fixture(
     if not validation.ok:
         _fail(validation.errors)
     print(f"[green]pirs fixture bundle valid[/green] {result['run_dir']}")
+
+@pirs_app.command("hsic-plan-fixture")
+def pirs_hsic_plan_fixture(
+    input_path: Path = typer.Option(..., "--input"),
+    budget: str = typer.Option("standard", "--budget"),
+    cuda_required: bool = typer.Option(False, "--cuda-required"),
+) -> None:
+    from pegasus.workflows.hsic import run_hsic_plan_fixture
+
+    result = run_hsic_plan_fixture(input_path=input_path, budget=budget, cuda_required=cuda_required)
+    typer.echo(
+        "hsic planned "
+        f"mode={result['hsic_mode']} "
+        f"null={result['null_strategy']} "
+        f"fdr={result['fdr_method']} "
+        f"n_eff={result['n_eff']}"
+    )
+
+
+@pirs_app.command("hsic-build-fixture")
+def pirs_hsic_build_fixture(
+    input_path: Path = typer.Option(..., "--input"),
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    budget: str = typer.Option("standard", "--budget"),
+    cuda_required: bool = typer.Option(False, "--cuda-required"),
+) -> None:
+    from pegasus.workflows.hsic import run_hsic_build_fixture
+
+    result = run_hsic_build_fixture(
+        input_path=input_path,
+        run_dir=run_dir,
+        budget=budget,
+        cuda_required=cuda_required,
+    )
+    typer.echo(f"hsic fixture bundle valid run={result['run_dir']}")

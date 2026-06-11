@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import shutil
 import sys
+import json
 from pathlib import Path
 
 import typer
@@ -540,3 +541,37 @@ def pirs_hsic_build_fixture(
         cuda_required=cuda_required,
     )
     typer.echo(f"hsic fixture bundle valid run={result['run_dir']}")
+
+
+# -----------------------------------------------------------------------------
+# Slice 10A: read-only dashboard inspection commands
+# -----------------------------------------------------------------------------
+dashboard_app = typer.Typer(help="Read-only inspection of completed PegaSUS run bundles.")
+app.add_typer(dashboard_app, name="dashboard")
+
+
+@dashboard_app.command("assert-read-only")
+def dashboard_assert_read_only() -> None:
+    from pegasus.dashboard.contracts import dashboard_policy_manifest
+
+    typer.echo(json.dumps(dashboard_policy_manifest(), indent=2, sort_keys=True))
+
+
+@dashboard_app.command("inspect-run")
+def dashboard_inspect_run(
+    run: Path = typer.Option(..., "--run"),
+) -> None:
+    from pegasus.workflows.dashboard import run_dashboard_inspect_run
+
+    typer.echo(json.dumps(run_dashboard_inspect_run(run_dir=run), indent=2, sort_keys=True))
+
+
+@dashboard_app.command("table-head")
+def dashboard_table_head(
+    run: Path = typer.Option(..., "--run"),
+    table: str = typer.Option(..., "--table"),
+    limit: int = typer.Option(10, "--limit"),
+) -> None:
+    from pegasus.workflows.dashboard import run_dashboard_table_head
+
+    typer.echo(json.dumps(run_dashboard_table_head(run_dir=run, table_name=table, limit=limit), indent=2, sort_keys=True))

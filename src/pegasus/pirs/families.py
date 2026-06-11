@@ -1,12 +1,23 @@
-"""
-Slice 0 scaffold module: pirs/families.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
-
-from pegasus.core.exceptions import BlockedModuleError
+from pegasus.pirs.schemas import FieldCandidate, ModelFamily
 
 
-def blocked(*, module: str = "pirs/families.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def family_for_outcome(*, outcome: FieldCandidate, offset: FieldCandidate | None = None) -> ModelFamily:
+    if outcome.carrier == "event_count" and offset is not None:
+        return "poisson_count_with_log_offset"
+    if outcome.carrier == "proportion":
+        return "binomial_proportion"
+    if outcome.carrier == "sih_cost_component":
+        return "sih_gamma_cost_component"
+    return "gaussian_identity"
+
+
+def exposure_offset_source(*, family: ModelFamily, offset: FieldCandidate | None) -> str | None:
+    if family == "poisson_count_with_log_offset":
+        if offset is None:
+            raise ValueError("poisson_count_model_requires_exposure_offset")
+        if offset.carrier not in {"population_denominator", "person_time"}:
+            raise ValueError(f"unsupported_exposure_offset_carrier:{offset.carrier}")
+        return offset.field_id
+    return None

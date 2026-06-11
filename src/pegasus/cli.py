@@ -34,12 +34,14 @@ sidra_app = typer.Typer(no_args_is_help=True)
 datasus_app = typer.Typer(no_args_is_help=True)
 efg_app = typer.Typer(no_args_is_help=True)
 population_app = typer.Typer(no_args_is_help=True)
+pirs_app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(registries_app, name="registries")
 app.add_typer(sidra_app, name="sidra")
 app.add_typer(datasus_app, name="datasus")
 app.add_typer(efg_app, name="efg")
 app.add_typer(population_app, name="population")
+app.add_typer(pirs_app, name="pirs")
 
 
 def _fail(errors: list[str]) -> None:
@@ -476,3 +478,30 @@ def sidra_context_build_fixture(
 
     result = run_sidra_context_build_fixture(input_path=input_path, run_dir=run_dir)
     print(f"[green]sidra context fixture bundle built[/green] run={result['run_dir']}")
+@pirs_app.command("plan-fixture")
+def pirs_plan_fixture(
+    input_path: Path = typer.Option(..., "--input"),
+    budget: str = typer.Option("standard", "--budget"),
+) -> None:
+    from pegasus.workflows.run_pirs import run_pirs_plan_fixture
+
+    result = run_pirs_plan_fixture(input_path=input_path, budget=budget)
+    print(
+        f"[green]pirs planned[/green] outcome={result['outcome_field_id']} "
+        f"covariates={len(result['covariate_field_ids'])} residual_mode={result['residual_mode']}"
+    )
+
+
+@pirs_app.command("build-fixture")
+def pirs_build_fixture(
+    input_path: Path = typer.Option(..., "--input"),
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    budget: str = typer.Option("standard", "--budget"),
+) -> None:
+    from pegasus.workflows.run_pirs import run_pirs_build_fixture
+
+    result = run_pirs_build_fixture(input_path=input_path, run_dir=run_dir, budget=budget)
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]pirs fixture bundle valid[/green] {result['run_dir']}")

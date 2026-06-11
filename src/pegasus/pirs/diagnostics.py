@@ -1,12 +1,25 @@
-"""
-Slice 0 scaffold module: pirs/diagnostics.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
-
-from pegasus.core.exceptions import BlockedModuleError
+from pegasus.pirs.crossfit import FoldScheme
+from pegasus.pirs.schemas import PIRSDiagnostics, PIRSSelectionResult
 
 
-def blocked(*, module: str = "pirs/diagnostics.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def build_pirs_diagnostics(*, selection: PIRSSelectionResult, fold_scheme: FoldScheme, exposure_offset_source: str | None) -> PIRSDiagnostics:
+    zero_var = sum(1 for row in selection.rejected if row.get("reason") == "zero_variance_field_excluded_from_design_matrix")
+    quarantined = sum(1 for row in selection.rejected if str(row.get("q_state")) in {"illegal_excluded", "blocked"})
+    warnings: list[str] = []
+    if zero_var:
+        warnings.append("zero_variance_fields_excluded_from_design_matrix")
+    if quarantined:
+        warnings.append("q_state_limited_fields_excluded_from_pirs")
+    if fold_scheme.residual_mode == "in_sample":
+        warnings.append("fast_budget_in_sample_residuals_not_for_standard_hsic")
+    return PIRSDiagnostics(
+        residual_mode=fold_scheme.residual_mode,
+        fold_scheme=fold_scheme.fold_scheme,
+        zero_variance_rejections=zero_var,
+        quarantined_rejections=quarantined,
+        offset_field_id=selection.selected_offset.field_id if selection.selected_offset else None,
+        exposure_offset_source=exposure_offset_source,
+        warnings=tuple(warnings),
+    )

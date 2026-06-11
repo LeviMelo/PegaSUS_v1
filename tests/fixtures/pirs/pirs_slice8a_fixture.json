@@ -1,0 +1,18 @@
+{
+  "seed": 20260611,
+  "municipalities": ["270430"],
+  "years": [2019, 2020, 2021, 2022],
+  "candidates": [
+    {"field_id": "pirs_fixture_deaths_outcome", "role": "outcome", "utility": 0.98, "q_state": "verified", "carrier": "event_count", "unit": "deaths", "support": {"municipality_cod6": ["270430"], "years": [2019, 2020, 2021, 2022]}, "variance": 6.25, "warnings": [], "provenance": ["SIM-DO", "processed"]},
+    {"field_id": "pirs_fixture_population_offset", "role": "offset", "utility": 0.95, "q_state": "verified", "carrier": "population_denominator", "unit": "persons", "support": {"municipality_cod6": ["270430"], "years": [2019, 2020, 2021, 2022]}, "variance": 10000.0, "warnings": [], "provenance": ["SIDRA", "official"]},
+    {"field_id": "pirs_fixture_cnes_capacity_covariate", "role": "covariate", "utility": 0.88, "q_state": "verified", "carrier": "facility_capacity_vector", "unit": "beds", "support": {"municipality_cod6": ["270430"], "years": [2019, 2020, 2021, 2022], "capacity_vector_index": "QTINST34"}, "variance": 4.0, "warnings": [], "provenance": ["CNES-ST", "processed"]},
+    {"field_id": "pirs_fixture_zero_variance_covariate", "role": "covariate", "utility": 0.80, "q_state": "verified", "carrier": "context_gradient", "unit": "index", "support": {"municipality_cod6": ["270430"], "years": [2019, 2020, 2021, 2022]}, "variance": 0.0, "warnings": ["zero_variance"], "provenance": ["SIDRA", "processed"]},
+    {"field_id": "pirs_fixture_illegal_covariate", "role": "covariate", "utility": 0.99, "q_state": "illegal_excluded", "carrier": "context_gradient", "unit": "index", "support": {"municipality_cod6": ["270430"], "years": [2019, 2020, 2021, 2022]}, "variance": 2.0, "warnings": ["illegal_excluded"], "provenance": ["synthetic"]}
+  ],
+  "observations": [
+    {"support_id": "270430-2019", "municipality_cod6": "270430", "year": 2019, "pirs_fixture_deaths_outcome": 100.0, "pirs_fixture_population_offset": 1020000.0, "pirs_fixture_cnes_capacity_covariate": 25.0, "pirs_fixture_zero_variance_covariate": 1.0, "pirs_fixture_illegal_covariate": 4.0},
+    {"support_id": "270430-2020", "municipality_cod6": "270430", "year": 2020, "pirs_fixture_deaths_outcome": 106.0, "pirs_fixture_population_offset": 1030000.0, "pirs_fixture_cnes_capacity_covariate": 28.0, "pirs_fixture_zero_variance_covariate": 1.0, "pirs_fixture_illegal_covariate": 5.0},
+    {"support_id": "270430-2021", "municipality_cod6": "270430", "year": 2021, "pirs_fixture_deaths_outcome": 111.0, "pirs_fixture_population_offset": 1040000.0, "pirs_fixture_cnes_capacity_covariate": 30.0, "pirs_fixture_zero_variance_covariate": 1.0, "pirs_fixture_illegal_covariate": 5.0},
+    {"support_id": "270430-2022", "municipality_cod6": "270430", "year": 2022, "pirs_fixture_deaths_outcome": 115.0, "pirs_fixture_population_offset": 1050000.0, "pirs_fixture_cnes_capacity_covariate": 32.0, "pirs_fixture_zero_variance_covariate": 1.0, "pirs_fixture_illegal_covariate": 6.0}
+  ]
+}

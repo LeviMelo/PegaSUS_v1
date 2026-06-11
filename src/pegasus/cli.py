@@ -17,6 +17,7 @@ from pegasus.workflows.compile import run_compile
 from pegasus.sidra.api import SidraClient, SidraClientConfig
 from pegasus.workflows.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
 from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
+from pegasus.workflows.sinasc import run_build_sinasc_fixture, run_datasus_normalize_sinasc
 from pegasus.workflows.sidra import (
     run_sidra_extract,
     run_sidra_metadata,
@@ -179,6 +180,20 @@ def datasus_normalize_sim(
     print(f"[green]sim normalized[/green] rows={result['row_count']} output={result['output_path']}")
 
 
+@datasus_app.command("normalize-sinasc")
+def datasus_normalize_sinasc(
+    input_path: Path = typer.Option(..., "--input"),
+    output_path: Path = typer.Option(..., "--output"),
+    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+) -> None:
+    result = run_datasus_normalize_sinasc(
+        input_path=input_path,
+        output_path=output_path,
+        source_manifest_hash=source_manifest_hash,
+    )
+    print(f"[green]sinasc normalized[/green] rows={result['row_count']} output={result['output_path']}")
+
+
 @efg_app.command("build-sim-fixture")
 def efg_build_sim_fixture(
     sim_events: Path = typer.Option(..., "--sim-events"),
@@ -194,6 +209,23 @@ def efg_build_sim_fixture(
     if not validation.ok:
         _fail(validation.errors)
     print(f"[green]sim fixture EFG bundle valid[/green] {result['run_dir']}")
+
+
+@efg_app.command("build-sinasc-fixture")
+def efg_build_sinasc_fixture(
+    sinasc_events: Path = typer.Option(..., "--sinasc-events"),
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
+) -> None:
+    result = run_build_sinasc_fixture(
+        sinasc_events_path=sinasc_events,
+        run_dir=run_dir,
+        municipality_cod6=municipality_cod6,
+    )
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]SINASC maternal-child EFG bundle valid[/green] {result['run_dir']}")
 
 
 @efg_app.command("attach-sidra-denominator")

@@ -11,12 +11,14 @@ from pydantic import ValidationError
 from pegasus.core.hashing import content_hash, sha256_file
 from pegasus.core.schemas import UserIntent
 from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
+from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
 from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_manifest
 from pegasus.output.validate import validate_output_bundle
 from pegasus.sidra.facts import write_facts_parquet
 from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
 from pegasus.workflows.datasus import run_datasus_normalize_sim
 from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
+from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 
 
 SIDRA_POPULATION_MACEIO_FLAT_PAYLOAD: list[dict[str, str]] = [
@@ -137,11 +139,11 @@ def _write_sidra_smoke_facts(*, output_path: Path) -> Path:
 
 def _smoke_municipality_cod6(intent: UserIntent) -> str:
     if intent.execution_scale != "smoke":
-        raise ValueError("Slice 2D compile supports execution_scale='smoke' only.")
+        raise ValueError("Slice 3B compile supports execution_scale='smoke' only.")
     if intent.geography.level != "municipality":
-        raise ValueError("Slice 2D compile smoke requires geography.level='municipality'.")
+        raise ValueError("Slice 3B compile smoke requires geography.level='municipality'.")
     if len(intent.geography.codes) != 1:
-        raise ValueError("Slice 2D compile smoke requires exactly one municipality code.")
+        raise ValueError("Slice 3B compile smoke requires exactly one municipality code.")
     cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
     if cod6 is None:
         raise ValueError(f"Could not convert intent municipality code to DATASUS cod6: {intent.geography.codes[0]!r}")
@@ -169,12 +171,17 @@ def run_compile(
     registry_hashes = _registry_hashes()
 
     raw_fixture_source = Path("tests/fixtures/datasus/sim_do_fixture.csv")
+    raw_sinasc_fixture_source = Path("tests/fixtures/datasus/sinasc_fixture.csv")
     if not raw_fixture_source.exists():
         raise FileNotFoundError(f"Missing SIM smoke fixture: {raw_fixture_source}")
+    if not raw_sinasc_fixture_source.exists():
+        raise FileNotFoundError(f"Missing SINASC smoke fixture: {raw_sinasc_fixture_source}")
 
     compile_manifest_path = data_root / "manifests" / "runs" / f"{run_id}.compile_manifest.json"
     raw_cache_path = data_root / "raw" / "datasus" / "SIM-DO" / "fixture" / "sim_do_fixture.csv"
+    raw_sinasc_cache_path = data_root / "raw" / "datasus" / "SINASC" / "fixture" / "sinasc_fixture.csv"
     sim_events_path = data_root / "processed" / "datasus" / "SIM-DO" / "fixture" / "sim_events.parquet"
+    sinasc_events_path = data_root / "processed" / "datasus" / "SINASC" / "fixture" / "sinasc_events.parquet"
     sidra_facts_path = data_root / "processed" / "sidra" / "facts" / "9606" / "compile_smoke_maceio.parquet"
 
     with telemetry.stage("datasus_manifest"):
@@ -189,8 +196,11 @@ def run_compile(
 
     with telemetry.stage("datasus_acquire"):
         raw_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_sinasc_cache_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(raw_fixture_source, raw_cache_path)
+        shutil.copyfile(raw_sinasc_fixture_source, raw_sinasc_cache_path)
         source_hashes["sim_raw_fixture"] = sha256_file(raw_cache_path)
+        source_hashes["sinasc_raw_fixture"] = sha256_file(raw_sinasc_cache_path)
 
     with telemetry.stage("datasus_decode"):
         run_datasus_normalize_sim(
@@ -198,7 +208,13 @@ def run_compile(
             output_path=sim_events_path,
             source_manifest_hash=source_hashes["compile_manifest"],
         )
+        run_datasus_normalize_sinasc(
+            input_path=raw_sinasc_cache_path,
+            output_path=sinasc_events_path,
+            source_manifest_hash=source_hashes["compile_manifest"],
+        )
         source_hashes["sim_processed_events"] = sha256_file(sim_events_path)
+        source_hashes["sinasc_processed_events"] = sha256_file(sinasc_events_path)
 
     telemetry.set_stage("sidra_metadata", "skipped", 0.0)
     telemetry.set_stage("sidra_plan", "skipped", 0.0)
@@ -221,6 +237,15 @@ def run_compile(
             run_dir=run_dir,
             sidra_facts_path=sidra_facts_path,
         )
+        attach_maternal_child_compile_fields(
+            run_dir=run_dir,
+            sinasc_events_path=sinasc_events_path,
+            sim_events_path=sim_events_path,
+            municipality_cod6=municipality_cod6,
+        )
+        source_hashes["maternal_child_linkage_summary"] = sha256_file(
+            Path(run_dir) / "Tables" / "maternal_child_linkage_summary.parquet"
+        )
 
     telemetry.set_stage("geo_support", "success", 0.0)
     telemetry.set_stage("q_tensor", "success", 0.0)
@@ -235,29 +260,34 @@ def run_compile(
             json.dumps(intent_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
-        (run_dir / "RunConfig.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": "1.0",
-                    "compile_mode": "smoke",
-                    "run_id": run_id,
-                    "intent_path": str(intent_path),
-                    "data_root": str(data_root),
-                    "support_policy": {
-                        "geography_level": intent.geography.level,
-                        "ibge_cod7": intent.geography.codes,
-                        "datasus_cod6": [municipality_cod6],
-                        "geo_mode": intent.geo_mode,
-                    },
-                    "population_mode": intent.population_mode,
-                    "race_tensor_mode": intent.race_tensor_mode,
-                    "registry_hashes": registry_hashes,
-                    "source_hashes": source_hashes,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-            ),
+        run_config_path = run_dir / "RunConfig.json"
+        run_config_payload = {
+            "schema_version": "1.0",
+            "compile_mode": "smoke",
+            "run_id": run_id,
+            "intent_path": str(intent_path),
+            "data_root": str(data_root),
+            "support_policy": {
+                "geography_level": intent.geography.level,
+                "ibge_cod7": intent.geography.codes,
+                "datasus_cod6": [municipality_cod6],
+                "geo_mode": intent.geo_mode,
+            },
+            "population_mode": intent.population_mode,
+            "race_tensor_mode": intent.race_tensor_mode,
+            "registry_hashes": registry_hashes,
+            "source_hashes": source_hashes,
+        }
+        existing_run_config = {}
+        if run_config_path.exists():
+            try:
+                existing_run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                existing_run_config = {}
+        if existing_run_config.get("maternal_child_linkage"):
+            run_config_payload["maternal_child_linkage"] = existing_run_config["maternal_child_linkage"]
+        run_config_path.write_text(
+            json.dumps(run_config_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
         write_reproducibility_manifest(
@@ -271,6 +301,7 @@ def run_compile(
                 "compile_mode": "smoke",
                 "compile_manifest": str(compile_manifest_path),
                 "intent_path": str(intent_path),
+                "maternal_child_linkage": True,
             },
         )
 
@@ -290,6 +321,7 @@ def run_compile(
             "compile_mode": "smoke",
             "compile_manifest": str(compile_manifest_path),
             "intent_path": str(intent_path),
+            "maternal_child_linkage": True,
         },
     )
 

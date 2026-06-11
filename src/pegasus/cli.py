@@ -36,6 +36,7 @@ datasus_app = typer.Typer(no_args_is_help=True)
 efg_app = typer.Typer(no_args_is_help=True)
 population_app = typer.Typer(no_args_is_help=True)
 pirs_app = typer.Typer(no_args_is_help=True)
+acceptance_app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(registries_app, name="registries")
 app.add_typer(sidra_app, name="sidra")
@@ -43,6 +44,7 @@ app.add_typer(datasus_app, name="datasus")
 app.add_typer(efg_app, name="efg")
 app.add_typer(population_app, name="population")
 app.add_typer(pirs_app, name="pirs")
+app.add_typer(acceptance_app, name="acceptance")
 
 
 def _fail(errors: list[str]) -> None:
@@ -575,3 +577,23 @@ def dashboard_table_head(
     from pegasus.workflows.dashboard import run_dashboard_table_head
 
     typer.echo(json.dumps(run_dashboard_table_head(run_dir=run, table_name=table, limit=limit), indent=2, sort_keys=True))
+
+# Slice 11A acceptance hardening commands
+@acceptance_app.command("plan")
+def acceptance_plan() -> None:
+    from pegasus.workflows.acceptance import run_acceptance_plan
+
+    typer.echo(json.dumps(run_acceptance_plan(), indent=2, sort_keys=True))
+
+
+@acceptance_app.command("check-run")
+def acceptance_check_run(
+    run: Path = typer.Option(..., "--run"),
+    require_non_scaffold: bool = typer.Option(False, "--require-non-scaffold"),
+) -> None:
+    from pegasus.workflows.acceptance import run_acceptance_check_run
+
+    result = run_acceptance_check_run(run_dir=run, require_non_scaffold=require_non_scaffold)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+    if not result.get("ok", False):
+        raise typer.Exit(1)

@@ -33,11 +33,13 @@ registries_app = typer.Typer(no_args_is_help=True)
 sidra_app = typer.Typer(no_args_is_help=True)
 datasus_app = typer.Typer(no_args_is_help=True)
 efg_app = typer.Typer(no_args_is_help=True)
+population_app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(registries_app, name="registries")
 app.add_typer(sidra_app, name="sidra")
 app.add_typer(datasus_app, name="datasus")
 app.add_typer(efg_app, name="efg")
+app.add_typer(population_app, name="population")
 
 
 def _fail(errors: list[str]) -> None:
@@ -426,3 +428,26 @@ def efg_build_cnes_sih_fixture(
     if not validation.ok:
         _fail(validation.errors)
     print(f"[green]CNES/SIH fixture EFG bundle valid[/green] {result['run_dir']}")
+
+
+@population_app.command("build-fixture")
+def population_build_fixture(
+    sidra_facts: Path = typer.Option(..., "--sidra-facts"),
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    mode: str = typer.Option("independent_denominator", "--mode"),
+) -> None:
+    from pegasus.workflows.population import run_population_tensor_fixture
+    result = run_population_tensor_fixture(sidra_facts_path=sidra_facts, run_dir=run_dir, mode=mode)
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]population tensor fixture bundle valid[/green] {result['run_dir']}")
+
+
+@population_app.command("plan-fixture")
+def population_plan_fixture(
+    sidra_facts: Path = typer.Option(..., "--sidra-facts"),
+    mode: str = typer.Option("independent_denominator", "--mode"),
+) -> None:
+    from pegasus.workflows.population import run_population_tensor_plan
+    print(run_population_tensor_plan(sidra_facts_path=sidra_facts, mode=mode))

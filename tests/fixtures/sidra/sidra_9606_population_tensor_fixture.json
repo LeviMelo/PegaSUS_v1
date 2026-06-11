@@ -1,0 +1,13 @@
+[
+  {
+    "table_id": "9606",
+    "variable_id": "93",
+    "period": "2022",
+    "locality_level": "N6",
+    "locality_id": "2704302",
+    "classification_tuple": [["2", "Sexo"], ["86", "Cor ou raça"], ["287", "Idade"]],
+    "category_tuple": [["2", "6794"], ["86", "95251"], ["287", "100362"]],
+    "value": "1025360",
+    "unit": "Pessoas"
+  }
+]

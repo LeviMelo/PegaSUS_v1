@@ -1,12 +1,23 @@
-"""
-Slice 0 scaffold module: she/population/diagnostics.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
-
-from pegasus.core.exceptions import BlockedModuleError
+from pegasus.registries.population import DENSE_NATIONAL_CELL_THRESHOLD, PopulationSolverSpec
+from pegasus.she.population.schema import PopulationTensorDiagnostics, PopulationTensorRequest
 
 
-def blocked(*, module: str = "she/population/diagnostics.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def population_tensor_diagnostics(
+    *,
+    request: PopulationTensorRequest,
+    solver: PopulationSolverSpec,
+    reconstruction_uncertainty: float,
+    denominator_feedback_warning: bool,
+    warnings: list[str] | tuple[str, ...] | None = None,
+) -> PopulationTensorDiagnostics:
+    return PopulationTensorDiagnostics(
+        n_cells=request.n_cells,
+        solver_backend=solver.backend,
+        sparse_jacobian=solver.sparse_jacobian,
+        reconstruction_uncertainty=float(reconstruction_uncertainty),
+        denominator_feedback_warning=bool(denominator_feedback_warning),
+        dense_abort_threshold=DENSE_NATIONAL_CELL_THRESHOLD,
+        warnings=tuple(warnings or ()),
+    )

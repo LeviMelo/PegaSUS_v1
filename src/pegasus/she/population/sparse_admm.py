@@ -1,12 +1,35 @@
-"""
-Slice 0 scaffold module: she/population/sparse_admm.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
-
-from pegasus.core.exceptions import BlockedModuleError
+from dataclasses import dataclass
+from typing import Any
 
 
-def blocked(*, module: str = "she/population/sparse_admm.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+@dataclass(frozen=True)
+class SparseADMMScaffold:
+    solver_id: str
+    status: str
+    reason: str
+    sparse_jacobian: bool
+    warnings: tuple[str, ...]
+
+    def as_manifest(self) -> dict[str, Any]:
+        return {
+            "solver_id": self.solver_id,
+            "status": self.status,
+            "reason": self.reason,
+            "sparse_jacobian": self.sparse_jacobian,
+            "warnings": list(self.warnings),
+        }
+
+
+def build_sim_informed_sparse_admm_scaffold(*, solver_id: str) -> SparseADMMScaffold:
+    return SparseADMMScaffold(
+        solver_id=solver_id,
+        status="blocked_feedback_scaffold",
+        reason=(
+            "SIM-informed population tensor mode is architecturally visible but remains warning-only "
+            "until calibrated feedback loss and uncertainty propagation are implemented."
+        ),
+        sparse_jacobian=True,
+        warnings=("sim_informed_population_feedback_risk",),
+    )

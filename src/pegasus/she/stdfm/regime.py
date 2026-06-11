@@ -1,12 +1,23 @@
-"""
-Slice 0 scaffold module: she/stdfm/regime.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
-
-from pegasus.core.exceptions import BlockedModuleError
+from pegasus.sidra.regime import SIDRAContextRegimeResult, classify_sidra_context_regime
 
 
-def blocked(*, module: str = "she/stdfm/regime.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def stdfm_gate_for_sidra_context(
+    *,
+    anchors_bounded: bool,
+    concept_compatible: bool,
+    temporal_points: int,
+    dynamics: str,
+) -> SIDRAContextRegimeResult:
+    return classify_sidra_context_regime(
+        missing_t=True,
+        schema_stable=False,
+        schema_mismatch=False,
+        projectable=False,
+        unit="index",
+        anchors_bounded=anchors_bounded,
+        concept_compatible=concept_compatible,
+        temporal_points=temporal_points,
+        dynamics=dynamics,
+    )

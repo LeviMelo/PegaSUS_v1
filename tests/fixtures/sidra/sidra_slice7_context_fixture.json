@@ -1,0 +1,47 @@
+{
+  "localities": ["2704302"],
+  "stitching": {
+    "segments": [
+      {
+        "concept_id": "municipal_gdp_current_brl",
+        "table_id": "5938",
+        "variable_id": "37",
+        "segment_id": "gdp_2010_2019",
+        "periods": ["2018", "2019"],
+        "unit": "R$",
+        "classification_version": "ibge_old"
+      },
+      {
+        "concept_id": "municipal_gdp_current_brl",
+        "table_id": "5938_v2",
+        "variable_id": "37",
+        "segment_id": "gdp_2020_2021",
+        "periods": ["2020", "2021"],
+        "unit": "R$",
+        "classification_version": "ibge_new"
+      }
+    ]
+  },
+  "projection": {
+    "matrix_id": "slice7_cnae_to_sector_fractional_v1",
+    "source_axis": "CNAE_section",
+    "target_axis": "economic_sector",
+    "entries": [
+      {"source": "A", "target": "agriculture", "weight": 1.0},
+      {"source": "C", "target": "industry", "weight": 0.7},
+      {"source": "C", "target": "services", "weight": 0.3}
+    ]
+  },
+  "high_dimensional": {
+    "raw_axes": ["municipality", "year", "sector", "occupation", "firm_size"],
+    "demanded_axes": ["municipality", "year", "sector"],
+    "axis_cardinalities": {
+      "municipality": 1,
+      "year": 4,
+      "sector": 3,
+      "occupation": 12,
+      "firm_size": 5
+    },
+    "aggregation": "additive"
+  }
+}

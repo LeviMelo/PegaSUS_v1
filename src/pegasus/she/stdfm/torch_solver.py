@@ -1,12 +1,16 @@
-"""
-Slice 0 scaffold module: she/stdfm/torch_solver.py
+from __future__ import annotations
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
-
-from pegasus.core.exceptions import BlockedModuleError
+from pegasus.she.stdfm.blocked import blocked_solver_pending
+from pegasus.she.stdfm.schema import STDFMInputSchema, STDFMOutputSchema
 
 
-def blocked(*, module: str = "she/stdfm/torch_solver.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def solve_stdfm(input_schema: STDFMInputSchema, *, allow_uncertified: bool = False) -> STDFMOutputSchema:
+    if not allow_uncertified:
+        return blocked_solver_pending(
+            field_id=input_schema.field_id,
+            reason="PyTorch ST-DFM solver is blocked until calibration and certification are supplied.",
+        )
+    return blocked_solver_pending(
+        field_id=input_schema.field_id,
+        reason="Uncertified ST-DFM execution is not available in Slice 7A.",
+    )

@@ -451,3 +451,28 @@ def population_plan_fixture(
 ) -> None:
     from pegasus.workflows.population import run_population_tensor_plan
     print(run_population_tensor_plan(sidra_facts_path=sidra_facts, mode=mode))
+
+# Slice 7A SIDRA context/ST-DFM commands
+@sidra_app.command("context-plan-fixture")
+def sidra_context_plan_fixture(
+    input_path: Path = typer.Option(..., "--input"),
+) -> None:
+    from pegasus.workflows.sidra_context import run_sidra_context_plan_fixture
+
+    result = run_sidra_context_plan_fixture(input_path=input_path)
+    print(
+        "[green]sidra context plan[/green] "
+        f"segments={result['segments']} projection_status={result['projection_status']} "
+        f"stdfm_status={result['stdfm_status']}"
+    )
+
+
+@sidra_app.command("context-build-fixture")
+def sidra_context_build_fixture(
+    input_path: Path = typer.Option(..., "--input"),
+    run_dir: Path = typer.Option(..., "--run-dir"),
+) -> None:
+    from pegasus.workflows.sidra_context import run_sidra_context_build_fixture
+
+    result = run_sidra_context_build_fixture(input_path=input_path, run_dir=run_dir)
+    print(f"[green]sidra context fixture bundle built[/green] run={result['run_dir']}")

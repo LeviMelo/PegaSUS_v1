@@ -1,0 +1,12 @@
+{
+  "bridge_id": "invalid_rowsum",
+  "mode": "fixedC_dynamic_weight",
+  "source_axis": "SIM_ADMIN_RACACOR",
+  "target_axis": "IBGE_SELF_DECLARED_RACE",
+  "source_categories": ["1"],
+  "target_categories": ["branca", "preta"],
+  "sensitivity_width": 0.1,
+  "matrix": {
+    "1": {"branca": 0.6, "preta": 0.6}
+  }
+}

@@ -338,3 +338,25 @@ def compile(
     if not validation.ok:
         _fail(validation.errors)
     print(f"[green]compile complete[/green] run={result['run_dir']}")
+
+
+@efg_app.command("attach-race-bridge")
+def efg_attach_race_bridge(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    sim_events: Path = typer.Option(..., "--sim-events"),
+    bridge_prior: Path = typer.Option(..., "--bridge-prior"),
+    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
+) -> None:
+    from pegasus.workflows.race_bridge import run_attach_race_bridge
+
+    result = run_attach_race_bridge(
+        run_dir=run_dir,
+        sim_events_path=sim_events,
+        bridge_prior_path=bridge_prior,
+        municipality_cod6=municipality_cod6,
+    )
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]race bridge fields attached and run bundle valid[/green] {result['run_dir']}")
+

@@ -1,0 +1,9 @@
+{
+  "bridge_id": "invalid_empty",
+  "mode": "fixedC_dynamic_weight",
+  "source_axis": "SIM_ADMIN_RACACOR",
+  "target_axis": "IBGE_SELF_DECLARED_RACE",
+  "source_categories": [],
+  "target_categories": [],
+  "matrix": {}
+}

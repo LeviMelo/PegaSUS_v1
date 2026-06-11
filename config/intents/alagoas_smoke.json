@@ -1,31 +1,54 @@
 {
+  "budget": "fast",
+  "context_policy": [
+    "compile_smoke",
+    "maceio_fixture",
+    "official_sidra_anchor",
+    "sinasc_maternal_child_compile",
+    "live_birth_denominator_linkage"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
   "geography": {
+    "codes": [
+      "2704302"
+    ],
     "level": "municipality",
-    "codes": ["2704302"],
-    "uf": ["AL"]
+    "uf": [
+      "AL"
+    ]
   },
-  "time": {
-    "start_year": 2022,
-    "end_year": 2022,
-    "start_month": null,
-    "end_month": null
-  },
-  "health_seeds": ["all_cause_mortality", "icd_chapter", "icd_block"],
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block"
+  ],
   "mandatory_fields": [
     "SIMDeathsAll",
     "SIMCrudeMortalitySIDRAOfficial",
-    "SIDRAPopulationTotalAnchor"
+    "SIDRAPopulationTotalAnchor",
+    "SINASCLiveBirthsAll",
+    "SINASCCrudeBirthRateSIDRAOfficial",
+    "SINASCLowBirthWeightPrevalence",
+    "SINASCPrematurityPrevalence",
+    "SINASCCongenitalAnomalyPrevalence",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths"
   ],
-  "system_weights": {
-    "SIM-DO": 1.0,
-    "SIDRA": 1.0
-  },
-  "context_policy": ["compile_smoke", "maceio_fixture", "official_sidra_anchor"],
-  "budget": "fast",
-  "geo_mode": "native",
-  "force_selectors": [],
-  "exclude_systems": [],
-  "execution_scale": "smoke",
+  "population_mode": "official_sidra_anchor",
   "race_tensor_mode": "decoupled",
-  "population_mode": "official_sidra_anchor"
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0
+  },
+  "time": {
+    "end_month": null,
+    "end_year": 2022,
+    "start_month": null,
+    "start_year": 2022
+  }
 }

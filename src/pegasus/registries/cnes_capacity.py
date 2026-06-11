@@ -23,6 +23,7 @@ CAPACITY_COMPONENTS: dict[str, CNESCapacityComponent] = {
     "QTLEITP2": CNESCapacityComponent("QTLEITP2", "surgical_bed_capacity", "FacilityCapacityVector", "facility_capacity_units_QTLEITP2", "bed", "Surgical beds"),
     "QTLEITP3": CNESCapacityComponent("QTLEITP3", "obstetric_bed_capacity", "FacilityCapacityVector", "facility_capacity_units_QTLEITP3", "bed", "Obstetric beds"),
     "QTINST01": CNESCapacityComponent("QTINST01", "consulting_room_capacity", "FacilityCapacityVector", "facility_capacity_units_QTINST01", "room", "Consulting rooms / infrastructure component 01"),
+    "QTINST34": CNESCapacityComponent("QTINST34", "room_infrastructure_capacity_34", "FacilityCapacityVector", "facility_capacity_units_QTINST34", "room", "Infrastructure/room capacity component 34"),
 }
 
 
@@ -40,4 +41,8 @@ def require_vector_index(raw_field: str | None) -> CNESCapacityComponent:
 
 
 def registry_manifest() -> dict[str, object]:
-    return {"schema_version": "1.0", "registry": "cnes_capacity_vector", "components": {k: v.__dict__ for k, v in CAPACITY_COMPONENTS.items()}}
+    return {
+        "schema_version": "1.1",
+        "registry": "cnes_capacity_vector",
+        "components": {k: v.__dict__ for k, v in CAPACITY_COMPONENTS.items()},
+    }

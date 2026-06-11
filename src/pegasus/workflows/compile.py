@@ -11,12 +11,14 @@ from pydantic import ValidationError
 from pegasus.core.hashing import content_hash, sha256_file
 from pegasus.core.schemas import UserIntent
 from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
+from pegasus.output.cnes_sih_compile_attach import attach_cnes_sih_compile_fields
 from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
 from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_manifest
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
 from pegasus.sidra.facts import write_facts_parquet
 from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
+from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes, run_datasus_normalize_sih
 from pegasus.workflows.datasus import run_datasus_normalize_sim
 from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
 from pegasus.workflows.race_bridge import run_attach_race_bridge
@@ -138,15 +140,19 @@ def _write_sidra_smoke_facts(*, output_path: Path) -> Path:
 
 def _smoke_municipality_cod6(intent: UserIntent) -> str:
     if intent.execution_scale != "smoke":
-        raise ValueError("Slice 4B compile supports execution_scale='smoke' only.")
+        raise ValueError("Compile smoke supports execution_scale='smoke' only.")
     if intent.geography.level != "municipality":
-        raise ValueError("Slice 4B compile smoke requires geography.level='municipality'.")
+        raise ValueError("Compile smoke requires geography.level='municipality'.")
     if len(intent.geography.codes) != 1:
-        raise ValueError("Slice 4B compile smoke requires exactly one municipality code.")
+        raise ValueError("Compile smoke requires exactly one municipality code.")
     cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
     if cod6 is None:
         raise ValueError(f"Could not convert intent municipality code to DATASUS cod6: {intent.geography.codes[0]!r}")
     return cod6
+
+
+def _context_policy_enabled(intent: UserIntent, token: str) -> bool:
+    return token in set(intent.context_policy)
 
 
 def run_compile(
@@ -159,6 +165,8 @@ def run_compile(
     data_root = Path(data_root)
     intent_payload, intent = _load_intent(intent_path)
     municipality_cod6 = _smoke_municipality_cod6(intent)
+    include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
+
     try:
         race_bridge_plan = resolve_race_bridge_plan(intent=intent, municipality_cod6=municipality_cod6)
     except RaceBridgeRegistryError as exc:
@@ -179,16 +187,26 @@ def run_compile(
 
     raw_fixture_source = Path("tests/fixtures/datasus/sim_do_fixture.csv")
     raw_sinasc_fixture_source = Path("tests/fixtures/datasus/sinasc_fixture.csv")
+    raw_cnes_fixture_source = Path("tests/fixtures/datasus/cnes_st_fixture.csv")
+    raw_sih_fixture_source = Path("tests/fixtures/datasus/sih_rd_fixture.csv")
     if not raw_fixture_source.exists():
         raise FileNotFoundError(f"Missing SIM smoke fixture: {raw_fixture_source}")
     if not raw_sinasc_fixture_source.exists():
         raise FileNotFoundError(f"Missing SINASC smoke fixture: {raw_sinasc_fixture_source}")
+    if include_cnes_sih and not raw_cnes_fixture_source.exists():
+        raise FileNotFoundError(f"Missing CNES-ST smoke fixture: {raw_cnes_fixture_source}")
+    if include_cnes_sih and not raw_sih_fixture_source.exists():
+        raise FileNotFoundError(f"Missing SIH-RD smoke fixture: {raw_sih_fixture_source}")
 
     compile_manifest_path = data_root / "manifests" / "runs" / f"{run_id}.compile_manifest.json"
     raw_cache_path = data_root / "raw" / "datasus" / "SIM-DO" / "fixture" / "sim_do_fixture.csv"
     raw_sinasc_cache_path = data_root / "raw" / "datasus" / "SINASC" / "fixture" / "sinasc_fixture.csv"
+    raw_cnes_cache_path = data_root / "raw" / "datasus" / "CNES-ST" / "fixture" / "cnes_st_fixture.csv"
+    raw_sih_cache_path = data_root / "raw" / "datasus" / "SIH-RD" / "fixture" / "sih_rd_fixture.csv"
     sim_events_path = data_root / "processed" / "datasus" / "SIM-DO" / "fixture" / "sim_events.parquet"
     sinasc_events_path = data_root / "processed" / "datasus" / "SINASC" / "fixture" / "sinasc_events.parquet"
+    cnes_events_path = data_root / "processed" / "datasus" / "CNES-ST" / "fixture" / "cnes_events.parquet"
+    sih_events_path = data_root / "processed" / "datasus" / "SIH-RD" / "fixture" / "sih_events.parquet"
     sidra_facts_path = data_root / "processed" / "sidra" / "facts" / "9606" / "compile_smoke_maceio.parquet"
 
     with telemetry.stage("datasus_manifest"):
@@ -208,6 +226,13 @@ def run_compile(
         shutil.copyfile(raw_sinasc_fixture_source, raw_sinasc_cache_path)
         source_hashes["sim_raw_fixture"] = sha256_file(raw_cache_path)
         source_hashes["sinasc_raw_fixture"] = sha256_file(raw_sinasc_cache_path)
+        if include_cnes_sih:
+            raw_cnes_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_sih_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(raw_cnes_fixture_source, raw_cnes_cache_path)
+            shutil.copyfile(raw_sih_fixture_source, raw_sih_cache_path)
+            source_hashes["cnes_raw_fixture"] = sha256_file(raw_cnes_cache_path)
+            source_hashes["sih_raw_fixture"] = sha256_file(raw_sih_cache_path)
 
     with telemetry.stage("datasus_decode"):
         run_datasus_normalize_sim(
@@ -222,6 +247,19 @@ def run_compile(
         )
         source_hashes["sim_processed_events"] = sha256_file(sim_events_path)
         source_hashes["sinasc_processed_events"] = sha256_file(sinasc_events_path)
+        if include_cnes_sih:
+            run_datasus_normalize_cnes(
+                input_path=raw_cnes_cache_path,
+                output_path=cnes_events_path,
+                source_manifest_hash=source_hashes["compile_manifest"],
+            )
+            run_datasus_normalize_sih(
+                input_path=raw_sih_cache_path,
+                output_path=sih_events_path,
+                source_manifest_hash=source_hashes["compile_manifest"],
+            )
+            source_hashes["cnes_processed_events"] = sha256_file(cnes_events_path)
+            source_hashes["sih_processed_events"] = sha256_file(sih_events_path)
 
     telemetry.set_stage("sidra_metadata", "skipped", 0.0)
     telemetry.set_stage("sidra_plan", "skipped", 0.0)
@@ -239,6 +277,7 @@ def run_compile(
             municipality_cod6=municipality_cod6,
         )
 
+    cnes_sih_metadata: dict[str, Any] | None = None
     with telemetry.stage("she_build"):
         run_attach_sidra_denominator(
             run_dir=run_dir,
@@ -253,6 +292,15 @@ def run_compile(
         source_hashes["maternal_child_linkage_summary"] = sha256_file(
             Path(run_dir) / "Tables" / "maternal_child_linkage_summary.parquet"
         )
+        if include_cnes_sih:
+            cnes_sih_result = attach_cnes_sih_compile_fields(
+                run_dir=run_dir,
+                cnes_events_path=cnes_events_path,
+                sih_events_path=sih_events_path,
+                municipality_cod6=municipality_cod6,
+            )
+            cnes_sih_metadata = cnes_sih_result["cnes_sih"]
+            source_hashes.update(cnes_sih_metadata.get("source_hashes", {}))
 
     race_bridge_metadata: dict[str, Any] | None = None
     if race_bridge_plan.requires_attach:
@@ -295,6 +343,7 @@ def run_compile(
             "run_id": run_id,
             "intent_path": str(intent_path),
             "data_root": str(data_root),
+            "context_policy": intent.context_policy,
             "support_policy": {
                 "geography_level": intent.geography.level,
                 "ibge_cod7": intent.geography.codes,
@@ -319,6 +368,10 @@ def run_compile(
             race_bridge_metadata = existing_run_config["race_bridge"]
         if race_bridge_metadata is not None:
             run_config_payload["race_bridge"] = race_bridge_metadata
+        if cnes_sih_metadata is None and existing_run_config.get("cnes_sih"):
+            cnes_sih_metadata = existing_run_config["cnes_sih"]
+        if cnes_sih_metadata is not None:
+            run_config_payload["cnes_sih"] = cnes_sih_metadata
         run_config_path.write_text(
             json.dumps(run_config_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
@@ -329,9 +382,12 @@ def run_compile(
             "intent_path": str(intent_path),
             "maternal_child_linkage": True,
             "race_bridge_plan": race_bridge_plan.as_manifest(),
+            "context_policy": intent.context_policy,
         }
         if race_bridge_metadata is not None:
             manifest_extras["race_bridge"] = race_bridge_metadata
+        if cnes_sih_metadata is not None:
+            manifest_extras["cnes_sih"] = cnes_sih_metadata
         write_reproducibility_manifest(
             run_dir=run_dir,
             run_id=run_id,
@@ -353,9 +409,12 @@ def run_compile(
         "intent_path": str(intent_path),
         "maternal_child_linkage": True,
         "race_bridge_plan": race_bridge_plan.as_manifest(),
+        "context_policy": intent.context_policy,
     }
     if race_bridge_metadata is not None:
         final_extras["race_bridge"] = race_bridge_metadata
+    if cnes_sih_metadata is not None:
+        final_extras["cnes_sih"] = cnes_sih_metadata
     write_reproducibility_manifest(
         run_dir=run_dir,
         run_id=run_id,
@@ -378,4 +437,5 @@ def run_compile(
         "telemetry": telemetry.model(),
         "race_bridge_plan": race_bridge_plan.as_manifest(),
         "race_bridge": race_bridge_metadata,
+        "cnes_sih": cnes_sih_metadata,
     }

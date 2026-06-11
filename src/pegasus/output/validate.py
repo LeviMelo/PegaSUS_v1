@@ -203,6 +203,81 @@ def _validate_race_bridge_contract(*, root: Path, v, q, run_config: dict[str, An
                 errors.append("SIMRaceBridgeMissingRaceObserver must declare missing_category_preserved=true")
 
 
+CNES_CAPACITY_METADATA_KEYS = {"capacity_vector_index", "capacity_family", "generic_beds_forbidden"}
+SIH_COST_METADATA_KEYS = {"cost_component", "economic_component_id", "generic_sih_cost_forbidden"}
+RUN_CONFIG_CNES_SIH_KEYS = {"schema_version", "source_systems", "attach_stage", "cnes", "sih"}
+
+
+def _validate_cnes_sih_contract(*, root: Path, v, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
+    rows = v.to_pylist()
+    q_rows = {str(row.get("field_id")): row for row in q.to_pylist() if row.get("field_id") is not None}
+    cnes_capacity_rows = [row for row in rows if str(row.get("field_id", "")).startswith("cnes_capacity_")]
+    sih_cost_rows = [row for row in rows if str(row.get("field_id", "")).startswith("sih_cost_")]
+    cnes_sih_rows = cnes_capacity_rows + sih_cost_rows
+    if not cnes_sih_rows:
+        return
+
+    run_meta = run_config.get("cnes_sih")
+    manifest_meta = manifest.get("cnes_sih")
+    if not isinstance(run_meta, dict):
+        errors.append("RunConfig.json missing cnes_sih metadata while CNES/SIH fields exist")
+        run_meta = {}
+    if not isinstance(manifest_meta, dict):
+        errors.append("ReproducibilityManifest.json missing cnes_sih metadata while CNES/SIH fields exist")
+        manifest_meta = {}
+
+    missing_run_keys = sorted(RUN_CONFIG_CNES_SIH_KEYS - set(run_meta))
+    if missing_run_keys:
+        errors.append(f"RunConfig.cnes_sih missing keys: {missing_run_keys}")
+    if run_meta.get("source_systems") != ["CNES-ST", "SIH-RD"]:
+        errors.append("RunConfig.cnes_sih.source_systems must equal ['CNES-ST', 'SIH-RD']")
+    if run_meta.get("attach_stage") != "she_build":
+        errors.append("RunConfig.cnes_sih.attach_stage must be she_build")
+    if manifest_meta.get("cnes", {}).get("generic_beds_blocked") is not True:
+        errors.append("ReproducibilityManifest.cnes_sih.cnes.generic_beds_blocked must be true")
+    if manifest_meta.get("sih", {}).get("generic_sih_cost_blocked") is not True:
+        errors.append("ReproducibilityManifest.cnes_sih.sih.generic_sih_cost_blocked must be true")
+    if manifest_meta.get("sih", {}).get("diagnostic_topology_preserved") is not True:
+        errors.append("ReproducibilityManifest.cnes_sih.sih.diagnostic_topology_preserved must be true")
+
+    if not (root / "Tables" / "slice5a_cnes_capacity_summary.parquet").exists():
+        errors.append("CNES capacity fields exist but Tables/slice5a_cnes_capacity_summary.parquet is missing")
+    if not (root / "Tables" / "slice5a_sih_cost_summary.parquet").exists():
+        errors.append("SIH cost fields exist but Tables/slice5a_sih_cost_summary.parquet is missing")
+
+    for row in cnes_capacity_rows:
+        fid = str(row.get("field_id"))
+        axes = _load_json_cell(row.get("axes_json"), errors=errors, context=f"V_fields.axes_json[{fid}]")
+        support = _load_json_cell(row.get("support_json"), errors=errors, context=f"V_fields.support_json[{fid}]")
+        if not isinstance(axes, dict):
+            errors.append(f"CNES capacity field axes_json is not an object: {fid}")
+            continue
+        missing_axes = sorted(CNES_CAPACITY_METADATA_KEYS - set(axes))
+        if missing_axes:
+            errors.append(f"CNES capacity field missing axes metadata: {fid} {missing_axes}")
+        if not isinstance(support, dict) or support.get("capacity_vector_index") != axes.get("capacity_vector_index"):
+            errors.append(f"CNES capacity field support must preserve capacity_vector_index: {fid}")
+        if q_rows.get(fid) is None:
+            errors.append(f"CNES capacity field missing Q_tensor row: {fid}")
+        if row.get("unit") == "beds" and not axes.get("capacity_vector_index"):
+            errors.append(f"CNES generic beds field emitted without capacity_vector_index: {fid}")
+
+    for row in sih_cost_rows:
+        fid = str(row.get("field_id"))
+        axes = _load_json_cell(row.get("axes_json"), errors=errors, context=f"V_fields.axes_json[{fid}]")
+        support = _load_json_cell(row.get("support_json"), errors=errors, context=f"V_fields.support_json[{fid}]")
+        if not isinstance(axes, dict):
+            errors.append(f"SIH cost field axes_json is not an object: {fid}")
+            continue
+        missing_axes = sorted(SIH_COST_METADATA_KEYS - set(axes))
+        if missing_axes:
+            errors.append(f"SIH cost field missing axes metadata: {fid} {missing_axes}")
+        if not isinstance(support, dict) or support.get("cost_component") != axes.get("cost_component"):
+            errors.append(f"SIH cost field support must preserve cost_component: {fid}")
+        if q_rows.get(fid) is None:
+            errors.append(f"SIH cost field missing Q_tensor row: {fid}")
+
+
 def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
     try:
         v = _read(root / "V_fields.parquet")
@@ -271,6 +346,7 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
             bad = _nonnull(_column_values(table, col)) - v_ids
             if bad:
                 errors.append(f"{table_name}.{col} contains IDs absent from V_fields: {sorted(bad)}")
+    _validate_cnes_sih_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_race_bridge_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
 
 

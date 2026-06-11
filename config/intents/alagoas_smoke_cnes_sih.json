@@ -1,0 +1,39 @@
+{
+  "budget": "fast",
+  "context_policy": [
+    "include_cnes_sih"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [
+      "2704302"
+    ],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "mortality",
+    "maternal_child",
+    "hospitalization",
+    "capacity"
+  ],
+  "mandatory_fields": [],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {
+    "CNES-ST": 1.0,
+    "SIDRA": 1.0,
+    "SIH-RD": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0
+  },
+  "time": {
+    "end_year": 2022,
+    "start_year": 2022
+  }
+}

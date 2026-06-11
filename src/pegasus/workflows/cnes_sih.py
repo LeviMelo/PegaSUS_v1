@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pegasus.datasus.cnes_normalize import normalize_cnes_st_events
 from pegasus.datasus.sih_normalize import normalize_sih_rd_events
+from pegasus.output.cnes_sih_compile_attach import attach_cnes_sih_compile_fields
 from pegasus.output.cnes_sih_efg_bundle import write_cnes_sih_fixture_efg_bundle
 from pegasus.output.validate import validate_output_bundle
 
@@ -20,3 +22,22 @@ def run_build_cnes_sih_fixture(*, cnes_events_path: str | Path, sih_events_path:
     run = write_cnes_sih_fixture_efg_bundle(cnes_events_path=cnes_events_path, sih_events_path=sih_events_path, run_dir=run_dir, municipality_cod6=municipality_cod6)
     validation = validate_output_bundle(run_dir=str(run))
     return {"run_dir": run, "validation": validation}
+
+
+def run_attach_cnes_sih_compile_fields(
+    *,
+    run_dir: str | Path,
+    cnes_events_path: str | Path,
+    sih_events_path: str | Path,
+    municipality_cod6: str | None = None,
+    validate_after: bool = False,
+) -> dict[str, Any]:
+    result = attach_cnes_sih_compile_fields(
+        run_dir=run_dir,
+        cnes_events_path=cnes_events_path,
+        sih_events_path=sih_events_path,
+        municipality_cod6=municipality_cod6,
+    )
+    if validate_after:
+        result["validation"] = validate_output_bundle(run_dir=str(result["run_dir"]))
+    return result

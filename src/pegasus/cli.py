@@ -389,3 +389,40 @@ def efg_plan_race_bridge(
         municipality_cod6=municipality_cod6,
     )
     print(result["summary_json"])
+
+
+@datasus_app.command("normalize-cnes")
+def datasus_normalize_cnes(
+    input_path: Path = typer.Option(..., "--input"),
+    output_path: Path = typer.Option(..., "--output"),
+    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+) -> None:
+    from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes
+    result = run_datasus_normalize_cnes(input_path=input_path, output_path=output_path, source_manifest_hash=source_manifest_hash)
+    print(f"[green]cnes normalized[/green] rows={result['row_count']} output={result['output_path']}")
+
+
+@datasus_app.command("normalize-sih")
+def datasus_normalize_sih(
+    input_path: Path = typer.Option(..., "--input"),
+    output_path: Path = typer.Option(..., "--output"),
+    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+) -> None:
+    from pegasus.workflows.cnes_sih import run_datasus_normalize_sih
+    result = run_datasus_normalize_sih(input_path=input_path, output_path=output_path, source_manifest_hash=source_manifest_hash)
+    print(f"[green]sih normalized[/green] rows={result['row_count']} output={result['output_path']}")
+
+
+@efg_app.command("build-cnes-sih-fixture")
+def efg_build_cnes_sih_fixture(
+    cnes_events: Path = typer.Option(..., "--cnes-events"),
+    sih_events: Path = typer.Option(..., "--sih-events"),
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
+) -> None:
+    from pegasus.workflows.cnes_sih import run_build_cnes_sih_fixture
+    result = run_build_cnes_sih_fixture(cnes_events_path=cnes_events, sih_events_path=sih_events, run_dir=run_dir, municipality_cod6=municipality_cod6)
+    validation = result["validation"]
+    if not validation.ok:
+        _fail(validation.errors)
+    print(f"[green]CNES/SIH fixture EFG bundle valid[/green] {result['run_dir']}")

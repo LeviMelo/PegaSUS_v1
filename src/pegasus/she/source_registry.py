@@ -301,11 +301,19 @@ def source_system_from_path(path: str | Path) -> str | None:
 
 
 def source_registry_manifest(registry_root: str | Path = "config/registries") -> dict[str, Any]:
+    """Return SHE-facing source-field registry metadata.
+
+    Slice 13B tests and CLI callers consume summary counters at the top level.
+    The full registry manifest is still preserved, and the same summary is also
+    retained under ``summary`` for structured consumers.
+    """
+    summary = source_field_registry_summary(registry_root=registry_root)
     payload = dict(source_field_registry_manifest(registry_root=registry_root))
-    payload["summary"] = source_field_registry_summary(registry_root=registry_root)
+    payload.update(summary)
+    payload["summary"] = dict(summary)
     payload["she_source_registry_api"] = {
         "registry_backed": True,
         "carrier_surface": "canonical_registry_id_with_legacy_equality",
-        "batch_signature": "resolve_source_fields(source_system, columns, allow_heuristic=True, registry_root=...)"
+        "batch_signature": "resolve_source_fields(source_system, columns, allow_heuristic=True, registry_root=...)",
     }
     return payload

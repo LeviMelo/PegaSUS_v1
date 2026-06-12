@@ -17,7 +17,7 @@ def main() -> int:
     if summary["entry_count"] < 40:
         raise SystemExit(f"source-field registry too small: {summary['entry_count']}")
     required = [
-        ("SIM-DO", "underlying_icd_norm", "Deaths", "counts"),
+        ("SIM-DO", "underlying_icd_norm", "Deaths", "ICD10"),
         ("SIM-DO", "race_color_admin", "Deaths", "counts"),
         ("SINASC", "low_birth_weight_flag", "LiveBirths", "counts"),
         ("SIH-RD", "hospital_service_cost_real", "HospitalAdmissions", "BRL"),

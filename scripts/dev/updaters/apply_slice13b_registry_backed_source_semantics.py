@@ -249,6 +249,15 @@ quality_roles:
 write("config/registries/source_fields.yaml", r'''
 schema_version: "1.0"
 registry_id: "source_field_registry_v1"
+registry_version: "1.0"
+created_at: "2026-06-12T00:00:00Z"
+updated_at: "2026-06-12T00:00:00Z"
+provenance: "slice13b_registry_backed_source_semantics"
+entries:
+  - id: "source_field_registry_v1"
+    status: "active"
+    description: "Registry-backed source-field semantics for SHE substrate admission."
+    warnings: []
 default_unknown:
   carrier: "AuditMetadata"
   unit: "none"
@@ -275,7 +284,7 @@ source_systems:
       mun_residence_cod6: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, residence], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {geography: mun_residence_cod6}}
       underlying_icd_norm: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, underlying_cause], quality_role: diagnostic_code, provenance: [source_normalized, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: underlying_cause}}
       underlying_icd_parse_state: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [icd_parse_audit], quality_role: sentinel_state, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: underlying_cause}}
-      cause_chain_norm: {carrier: Deaths, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, terminal_chain], quality_role: audit_only, provenance: [source_normalized, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: terminal_chain}}
+      cause_chain_norm: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, terminal_chain], quality_role: audit_only, provenance: [source_normalized, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: terminal_chain}}
       associated_conditions_norm: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, associated_condition], quality_role: diagnostic_code, provenance: [source_normalized, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: associated_condition}}
       source_manifest_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [source_manifest_hash], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
       raw_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [raw_payload], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
@@ -300,7 +309,7 @@ source_systems:
       admission_year: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [time_axis_candidate], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {time: admission_year}}
       mun_residence_cod6: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, residence], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {geography: mun_residence_cod6}}
       principal_icd_norm: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, sih_principal_diagnosis], quality_role: diagnostic_code, provenance: [source_normalized, billing_record, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: sih_principal_diagnosis}}
-      secondary_icd_norm_json: {carrier: HospitalAdmissions, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, sih_secondary_diagnosis], quality_role: audit_only, provenance: [source_normalized, billing_record, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: sih_secondary_diagnosis}}
+      secondary_icd_norm_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, sih_secondary_diagnosis], quality_role: audit_only, provenance: [source_normalized, billing_record, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: sih_secondary_diagnosis}}
       stay_length_days: {carrier: HospitalAdmissions, unit: days, aggregation: additive, field_kind: extensive_measure, role: [length_of_stay], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {measure: stay_length}}
       death_flag: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [inpatient_death], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {indicator: inpatient_death}}
       hospital_service_cost_real: {carrier: HospitalAdmissions, unit: BRL, aggregation: additive, field_kind: extensive_measure, role: [sih_cost_component, VAL_SH], quality_role: analytical_measure, provenance: [source_normalized, billing_record, component_specific_cost], admissible: true, dashboard_safe: "warning", axes: {cost_component: VAL_SH}}
@@ -329,7 +338,7 @@ source_systems:
       variable_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_variable_id], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
       period: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_period_axis], quality_role: audit_only, provenance: [sidra_contextual], admissible: false, dashboard_safe: "False", axes: {time: sidra_period}}
       locality_id: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_locality_axis], quality_role: audit_only, provenance: [sidra_contextual], admissible: false, dashboard_safe: "False", axes: {geography: sidra_locality}}
-      classification_tuple: {carrier: ContextCells, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_classification_axis], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {classification: tuple}}
+      classification_tuple: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_classification_axis], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {classification: tuple}}
       value_numeric: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: latent_context, role: [sidra_context_value], quality_role: analytical_measure, provenance: [sidra_contextual], admissible: true, dashboard_safe: "warning", axes: {measure: sidra_value}}
       value_status: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_value_status], quality_role: sentinel_state, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
       request_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [request_hash], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
@@ -903,129 +912,7 @@ def registry_manifest(registry_root: str | Path = "config/registries") -> dict[s
     }
 ''')
 
-write("src/pegasus/she/source_registry.py", r'''
-from __future__ import annotations
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-from pegasus.registries.source_fields import (
-    SourceFieldRegistryEntry,
-    normalize_source_system,
-    resolve_source_field_entry,
-    source_field_registry_summary,
-)
-
-
-@dataclass(frozen=True)
-class SourceFieldSpec:
-    """SHE-facing source-field semantics resolved from the registry layer."""
-
-    source_system: str
-    column_name: str
-    carrier: str
-    unit: str
-    aggregation: str
-    field_kind: str
-    role: tuple[str, ...]
-    quality_role: str
-    provenance: tuple[str, ...]
-    admissible: bool
-    dashboard_safe: str
-    axes: dict[str, Any]
-    registry_hash: str
-    warning: str | None = None
-    matched_pattern: str | None = None
-
-    def as_manifest(self) -> dict[str, Any]:
-        return {
-            "source_system": self.source_system,
-            "column_name": self.column_name,
-            "carrier": self.carrier,
-            "unit": self.unit,
-            "aggregation": self.aggregation,
-            "field_kind": self.field_kind,
-            "role": list(self.role),
-            "quality_role": self.quality_role,
-            "provenance": list(self.provenance),
-            "admissible": self.admissible,
-            "dashboard_safe": self.dashboard_safe,
-            "axes": self.axes,
-            "registry_hash": self.registry_hash,
-            "warning": self.warning,
-            "matched_pattern": self.matched_pattern,
-        }
-
-
-@dataclass(frozen=True)
-class SourceRegistryResolution:
-    source_system: str
-    column_name: str
-    spec: SourceFieldSpec
-    known: bool
-    registry_backed: bool
-    warnings: tuple[str, ...]
-
-    def as_manifest(self) -> dict[str, Any]:
-        return {
-            "source_system": self.source_system,
-            "column_name": self.column_name,
-            "known": self.known,
-            "registry_backed": self.registry_backed,
-            "warnings": list(self.warnings),
-            "spec": self.spec.as_manifest(),
-        }
-
-
-def _spec_from_entry(entry: SourceFieldRegistryEntry) -> SourceFieldSpec:
-    return SourceFieldSpec(
-        source_system=entry.source_system,
-        column_name=entry.column_name,
-        carrier=entry.carrier,
-        unit=entry.unit,
-        aggregation=entry.aggregation,
-        field_kind=entry.field_kind,
-        role=entry.role,
-        quality_role=entry.quality_role,
-        provenance=entry.provenance,
-        admissible=entry.admissible,
-        dashboard_safe=entry.dashboard_safe,
-        axes=dict(entry.axes),
-        registry_hash=entry.registry_hash,
-        warning=entry.warning,
-        matched_pattern=entry.matched_pattern,
-    )
-
-
-def resolve_source_field(
-    *,
-    source_system: str,
-    column_name: str,
-    registry_root: str | Path = "config/registries",
-) -> SourceRegistryResolution:
-    system = normalize_source_system(source_system)
-    entry = resolve_source_field_entry(source_system=system, column_name=column_name, registry_root=registry_root)
-    spec = _spec_from_entry(entry)
-    known = entry.warning != "unknown_source_field_requires_registry_entry"
-    warnings: list[str] = []
-    if entry.warning:
-        warnings.append(entry.warning)
-    if not entry.admissible:
-        warnings.append(f"source_field_not_substrate_admissible:{entry.quality_role}")
-    return SourceRegistryResolution(
-        source_system=system,
-        column_name=column_name,
-        spec=spec,
-        known=known,
-        registry_backed=True,
-        warnings=tuple(warnings),
-    )
-
-
-def source_registry_manifest(registry_root: str | Path = "config/registries") -> dict[str, Any]:
-    return source_field_registry_summary(registry_root=registry_root)
-''')
+write("src/pegasus/she/source_registry.py", r
 
 write("tests/unit/test_registry_source_fields_yaml.py", r'''
 from __future__ import annotations

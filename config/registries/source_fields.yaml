@@ -1,5 +1,14 @@
 schema_version: "1.0"
 registry_id: "source_field_registry_v1"
+registry_version: "1.0"
+created_at: "2026-06-12T00:00:00Z"
+updated_at: "2026-06-12T00:00:00Z"
+provenance: "slice13b_registry_backed_source_semantics"
+entries:
+  - id: "source_field_registry_v1"
+    status: "active"
+    description: "Registry-backed source-field semantics for SHE substrate admission."
+    warnings: []
 default_unknown:
   carrier: "AuditMetadata"
   unit: "none"
@@ -26,7 +35,7 @@ source_systems:
       mun_residence_cod6: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, residence], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {geography: mun_residence_cod6}}
       underlying_icd_norm: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, underlying_cause], quality_role: diagnostic_code, provenance: [source_normalized, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: underlying_cause}}
       underlying_icd_parse_state: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [icd_parse_audit], quality_role: sentinel_state, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: underlying_cause}}
-      cause_chain_norm: {carrier: Deaths, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, terminal_chain], quality_role: audit_only, provenance: [source_normalized, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: terminal_chain}}
+      cause_chain_norm: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, terminal_chain], quality_role: audit_only, provenance: [source_normalized, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: terminal_chain}}
       associated_conditions_norm: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, associated_condition], quality_role: diagnostic_code, provenance: [source_normalized, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: associated_condition}}
       source_manifest_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [source_manifest_hash], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
       raw_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [raw_payload], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
@@ -51,7 +60,7 @@ source_systems:
       admission_year: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [time_axis_candidate], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {time: admission_year}}
       mun_residence_cod6: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, residence], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {geography: mun_residence_cod6}}
       principal_icd_norm: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, sih_principal_diagnosis], quality_role: diagnostic_code, provenance: [source_normalized, billing_record, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: sih_principal_diagnosis}}
-      secondary_icd_norm_json: {carrier: HospitalAdmissions, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, sih_secondary_diagnosis], quality_role: audit_only, provenance: [source_normalized, billing_record, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: sih_secondary_diagnosis}}
+      secondary_icd_norm_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, sih_secondary_diagnosis], quality_role: audit_only, provenance: [source_normalized, billing_record, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: sih_secondary_diagnosis}}
       stay_length_days: {carrier: HospitalAdmissions, unit: days, aggregation: additive, field_kind: extensive_measure, role: [length_of_stay], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {measure: stay_length}}
       death_flag: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [inpatient_death], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {indicator: inpatient_death}}
       hospital_service_cost_real: {carrier: HospitalAdmissions, unit: BRL, aggregation: additive, field_kind: extensive_measure, role: [sih_cost_component, VAL_SH], quality_role: analytical_measure, provenance: [source_normalized, billing_record, component_specific_cost], admissible: true, dashboard_safe: "warning", axes: {cost_component: VAL_SH}}
@@ -80,7 +89,7 @@ source_systems:
       variable_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_variable_id], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
       period: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_period_axis], quality_role: audit_only, provenance: [sidra_contextual], admissible: false, dashboard_safe: "False", axes: {time: sidra_period}}
       locality_id: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_locality_axis], quality_role: audit_only, provenance: [sidra_contextual], admissible: false, dashboard_safe: "False", axes: {geography: sidra_locality}}
-      classification_tuple: {carrier: ContextCells, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_classification_axis], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {classification: tuple}}
+      classification_tuple: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_classification_axis], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {classification: tuple}}
       value_numeric: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: latent_context, role: [sidra_context_value], quality_role: analytical_measure, provenance: [sidra_contextual], admissible: true, dashboard_safe: "warning", axes: {measure: sidra_value}}
       value_status: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_value_status], quality_role: sentinel_state, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
       request_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [request_hash], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}

@@ -1,38 +1,60 @@
-schema_version: "1.0"
-registry_id: "carrier_registry_v1"
+schema_version: '1.0'
+registry_id: carrier_registry_v1
 carriers:
   Deaths:
-    label: "Death events"
-    description: "Individual death events and derived death counts from SIM-DO."
-    allowed_units: ["counts"]
-    default_aggregation: "additive"
+    label: Death events
+    description: Individual death events and derived death counts from SIM-DO.
+    allowed_units:
+    - counts
+    default_aggregation: additive
   LiveBirths:
-    label: "Live birth events"
-    description: "Individual live-birth events and derived live-birth counts from SINASC."
-    allowed_units: ["counts"]
-    default_aggregation: "additive"
+    label: Live birth events
+    description: Individual live-birth events and derived live-birth counts from SINASC.
+    allowed_units:
+    - counts
+    default_aggregation: additive
   HospitalAdmissions:
-    label: "Hospital admissions"
-    description: "SIH-RD hospitalization/admission records."
-    allowed_units: ["counts", "days", "BRL"]
-    default_aggregation: "additive"
+    label: Hospital admissions
+    description: SIH-RD hospitalization/admission records.
+    allowed_units:
+    - counts
+    - days
+    - BRL
+    default_aggregation: additive
   Facilities:
-    label: "Health facilities"
-    description: "CNES-ST establishment/facility-period records."
-    allowed_units: ["counts", "beds", "binary_flag"]
-    default_aggregation: "additive"
+    label: Health facilities
+    description: CNES-ST establishment/facility-period records.
+    allowed_units:
+    - counts
+    - beds
+    - binary_flag
+    default_aggregation: additive
   Population:
-    label: "Population denominator"
-    description: "SIDRA or population-tensor person-year denominator carrier."
-    allowed_units: ["person_years", "persons"]
-    default_aggregation: "additive"
+    label: Population denominator
+    description: SIDRA or population-tensor person-year denominator carrier.
+    allowed_units:
+    - person_years
+    - persons
+    default_aggregation: additive
   ContextCells:
-    label: "SIDRA contextual cells"
-    description: "Long-form SIDRA contextual fact cells before epidemiological projection."
-    allowed_units: ["raw_sidra_value", "index", "percent", "BRL", "persons", "counts"]
-    default_aggregation: "non_aggregable"
+    label: SIDRA contextual cells
+    description: Long-form SIDRA contextual fact cells before epidemiological projection.
+    allowed_units:
+    - raw_sidra_value
+    - index
+    - percent
+    - BRL
+    - persons
+    - counts
+    default_aggregation: non_aggregable
   AuditMetadata:
-    label: "Audit metadata"
-    description: "Identifiers, hashes, raw JSON payloads, parse states, and other non-analytic metadata."
-    allowed_units: ["identifier", "state", "hash", "json", "none"]
-    default_aggregation: "non_aggregable"
+    label: Audit metadata
+    description: Identifiers, hashes, raw JSON payloads, parse states, and other non-analytic metadata.
+    allowed_units:
+    - identifier
+    - state
+    - hash
+    - json
+    - none
+    default_aggregation: non_aggregable
+entries: {}

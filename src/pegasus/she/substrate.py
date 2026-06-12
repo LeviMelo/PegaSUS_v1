@@ -28,8 +28,8 @@ class SubstrateError(ValueError):
 class SourceArtifactRef:
     path: str
     source_system: str
-    artifact_role: str
-    provenance_mode: str
+    artifact_role: str = "processed_events"
+    provenance_mode: str = "fixture"
     source_manifest_hash: str | None = None
     artifact_hash: str | None = None
 
@@ -429,3 +429,79 @@ def attach_substrate_summary_to_run(*, run_dir: str | Path, bundle: SubstrateBun
             payload.setdefault("registry_hashes", {}).update(bundle.registry_hashes)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary
+
+# ---- Slice 13B source-registry compatibility bridge ----
+# Slice 13B moved source-field semantics to YAML registries. These runtime
+# compatibility accessors keep the Slice 13A SubstrateBundle public surface
+# stable while adding registry-backed metadata required by the 13B tests/audits.
+
+def _slice13b_candidate_column_name(self):
+    return self.column
+
+
+def _slice13b_candidate_quality_role(self):
+    try:
+        from pegasus.she.source_registry import resolve_source_field
+
+        return resolve_source_field(source_system=self.source_system, column_name=self.column).spec.quality_role
+    except Exception:
+        return None
+
+
+def _slice13b_exclusion_column_name(self):
+    return self.column
+
+
+def _slice13b_bundle_candidate_fields(self):
+    return self.candidates
+
+
+def _slice13b_bundle_excluded_fields(self):
+    return self.exclusions
+
+
+SubstrateFieldCandidate.column_name = property(_slice13b_candidate_column_name)  # type: ignore[attr-defined]
+SubstrateFieldCandidate.quality_role = property(_slice13b_candidate_quality_role)  # type: ignore[attr-defined]
+SubstrateFieldExclusion.column_name = property(_slice13b_exclusion_column_name)  # type: ignore[attr-defined]
+SubstrateBundle.candidate_fields = property(_slice13b_bundle_candidate_fields)  # type: ignore[attr-defined]
+SubstrateBundle.excluded_fields = property(_slice13b_bundle_excluded_fields)  # type: ignore[attr-defined]
+
+if not hasattr(SubstrateBundle, "_slice13b_base_summary"):
+    SubstrateBundle._slice13b_base_summary = SubstrateBundle.summary  # type: ignore[attr-defined]
+
+
+def _slice13b_summary(self):
+    payload = self._slice13b_base_summary()  # type: ignore[attr-defined]
+    payload.setdefault("candidate_count", len(self.candidates))
+    payload.setdefault("excluded_count", len(self.exclusions))
+    payload.setdefault("registry_backed", bool(self.registry_hashes) and all(bool(v) for v in self.registry_hashes.values()))
+    return payload
+
+
+SubstrateBundle.summary = _slice13b_summary  # type: ignore[method-assign]
+
+if not hasattr(SubstrateFieldCandidate, "_slice13b_base_as_manifest"):
+    SubstrateFieldCandidate._slice13b_base_as_manifest = SubstrateFieldCandidate.as_manifest  # type: ignore[attr-defined]
+
+
+def _slice13b_candidate_as_manifest(self):
+    payload = self._slice13b_base_as_manifest()  # type: ignore[attr-defined]
+    payload.setdefault("column_name", self.column)
+    payload.setdefault("quality_role", self.quality_role)
+    return payload
+
+
+SubstrateFieldCandidate.as_manifest = _slice13b_candidate_as_manifest  # type: ignore[method-assign]
+
+if not hasattr(SubstrateFieldExclusion, "_slice13b_base_as_manifest"):
+    SubstrateFieldExclusion._slice13b_base_as_manifest = SubstrateFieldExclusion.as_manifest  # type: ignore[attr-defined]
+
+
+def _slice13b_exclusion_as_manifest(self):
+    payload = self._slice13b_base_as_manifest()  # type: ignore[attr-defined]
+    payload.setdefault("column_name", self.column)
+    return payload
+
+
+SubstrateFieldExclusion.as_manifest = _slice13b_exclusion_as_manifest  # type: ignore[method-assign]
+# ---- End Slice 13B source-registry compatibility bridge ----

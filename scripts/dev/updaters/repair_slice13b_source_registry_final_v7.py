@@ -1,4 +1,19 @@
-"""SHE-facing source-field registry resolution.
+from __future__ import annotations
+
+"""Repair Slice 13B source-registry API drift after failed v3-v6 repairs.
+
+This updater deliberately avoids patching the large original Slice 13B replay script.
+It overwrites the live SHE source registry with a clean, single-definition module and
+replaces the corrupted replay updater with a valid archival stub so it no longer
+blocks compilation or future tooling.
+"""
+
+import inspect
+import py_compile
+import sys
+from pathlib import Path
+
+SOURCE_REGISTRY = r'''"""SHE-facing source-field registry resolution.
 
 This module is the compatibility boundary between the YAML-backed registry layer
 introduced in Slice 13B and the Slice 13A SHE substrate API.  It exposes canonical
@@ -309,3 +324,112 @@ def source_registry_manifest(registry_root: str | Path = "config/registries") ->
         "batch_signature": "resolve_source_fields(source_system, columns, allow_heuristic=True, registry_root=...)"
     }
     return payload
+'''
+
+APPLY_STUB = r'''from __future__ import annotations
+
+"""Historical Slice 13B updater placeholder.
+
+The original replay script was corrupted during post-commit repair attempts.
+The live Slice 13B changes are now represented by committed source files and by
+repair updaters.  This placeholder is intentionally side-effect free so that the
+repository remains compilable and old repair artifacts do not re-break the tree.
+"""
+
+
+def main() -> None:
+    print(
+        "Slice 13B registry-backed source semantics are already represented by "
+        "the committed source tree. This archival updater performs no action."
+    )
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for candidate in (Path.cwd(), here.parents[3] if len(here.parents) > 3 else Path.cwd()):
+        if (candidate / "src" / "pegasus").exists():
+            return candidate
+    raise RuntimeError("Cannot locate PegaSUS repository root")
+
+
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.rstrip() + "\n", encoding="utf-8")
+
+
+def remove_bad_repair_scripts(root: Path) -> None:
+    for name in (
+        "repair_slice13b_icd10_resolver_guard_v3.py",
+        "repair_slice13b_icd10_resolver_guard_v4.py",
+        "repair_slice13b_source_registry_clean_v5.py",
+        "repair_slice13b_carrierid_canonical_v6.py",
+    ):
+        path = root / "scripts" / "dev" / "updaters" / name
+        if path.exists():
+            path.unlink()
+
+
+def validate(root: Path) -> None:
+    source_registry = root / "src" / "pegasus" / "she" / "source_registry.py"
+    apply_stub = root / "scripts" / "dev" / "updaters" / "apply_slice13b_registry_backed_source_semantics.py"
+    py_compile.compile(str(source_registry), doraise=True)
+    py_compile.compile(str(apply_stub), doraise=True)
+    py_compile.compile(str(Path(__file__).resolve()), doraise=True)
+
+    sys.path.insert(0, str(root / "src"))
+    for module_name in [
+        "pegasus.she.source_registry",
+        "pegasus.she.substrate",
+        "pegasus.she",
+    ]:
+        sys.modules.pop(module_name, None)
+
+    from pegasus.she.source_registry import resolve_source_field, resolve_source_fields
+    from pegasus.she.substrate import SourceArtifactRef
+
+    sig = inspect.signature(resolve_source_fields)
+    if "allow_heuristic" not in sig.parameters:
+        raise AssertionError("resolve_source_fields lost allow_heuristic compatibility parameter")
+
+    batch = resolve_source_fields(source_system="SIM-DO", columns=["underlying_icd_norm", "age_years", "raw_json"])
+    specs = {spec.column: spec for spec in batch.specs}
+    if specs["underlying_icd_norm"].unit != "ICD10":
+        raise AssertionError("underlying_icd_norm did not resolve to ICD10")
+    if specs["underlying_icd_norm"].aggregation != "non_aggregable":
+        raise AssertionError("underlying_icd_norm did not resolve to non_aggregable")
+    if "diagnostic_topology" not in specs["underlying_icd_norm"].role:
+        raise AssertionError("underlying_icd_norm lost diagnostic_topology role")
+    if str(specs["age_years"].carrier) != "Deaths":
+        raise AssertionError("age_years carrier does not render as canonical Deaths")
+    if not (specs["age_years"].carrier == "deaths"):
+        raise AssertionError("age_years carrier no longer satisfies legacy deaths equality")
+    if specs["raw_json"].admissible is not False:
+        raise AssertionError("raw_json must remain non-admissible")
+
+    race = resolve_source_field(source_system="SIM-DO", column_name="race_color_admin")
+    if str(race.spec.carrier) != "Deaths":
+        raise AssertionError("race_color_admin carrier does not render as canonical Deaths")
+    if not (race.spec.carrier == "Deaths" and race.spec.carrier == "deaths"):
+        raise AssertionError("race_color_admin carrier compatibility comparison failed")
+
+    ref = SourceArtifactRef(path="fixture.parquet", source_system="SIM-DO", provenance_mode="fixture")
+    if ref.artifact_role != "processed_events":
+        raise AssertionError("SourceArtifactRef default artifact_role was not preserved")
+
+
+def main() -> None:
+    root = repo_root()
+    write_text(root / "src" / "pegasus" / "she" / "source_registry.py", SOURCE_REGISTRY)
+    write_text(root / "scripts" / "dev" / "updaters" / "apply_slice13b_registry_backed_source_semantics.py", APPLY_STUB)
+    remove_bad_repair_scripts(root)
+    validate(root)
+    print("Repair Slice 13B final v7 applied: source_registry restored and corrupted replay updater stubbed.")
+
+
+if __name__ == "__main__":
+    main()

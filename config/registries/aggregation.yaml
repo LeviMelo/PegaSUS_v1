@@ -1,0 +1,23 @@
+schema_version: "1.0"
+registry_id: "aggregation_registry_v1"
+aggregations:
+  additive:
+    description: "Can be summed over compatible support after legal alignment."
+    allowed_for_rates_numerator: true
+    allowed_for_denominator: true
+  weighted_mean:
+    description: "Requires explicit weights; cannot be naively summed."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false
+  statistical_functional:
+    description: "Derived functional such as median, quantile, or model residual."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false
+  compositional:
+    description: "Composition vector or share; requires simplex-aware handling."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false
+  non_aggregable:
+    description: "Identifiers, states, JSON, raw symbols, and other audit metadata."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false

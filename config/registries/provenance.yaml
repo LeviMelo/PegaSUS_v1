@@ -1,0 +1,33 @@
+schema_version: "1.0"
+registry_id: "provenance_registry_v1"
+provenance_tags:
+  source_normalized:
+    risk: 0.05
+    description: "Field produced by source-specific normalization with manifest hash."
+  administrative_declaration:
+    risk: 0.15
+    description: "Administrative declaration process field."
+  diagnostic_topology:
+    risk: 0.10
+    description: "CID/diagnostic topology-bearing field."
+  billing_record:
+    risk: 0.20
+    description: "SIH billing/admission record."
+  facility_registry:
+    risk: 0.20
+    description: "CNES establishment registry record."
+  sidra_contextual:
+    risk: 0.25
+    description: "SIDRA contextual or denominator fact."
+  component_specific_cost:
+    risk: 0.20
+    description: "SIH cost component preserved without generic-cost collapse."
+  vector_indexed_capacity:
+    risk: 0.20
+    description: "CNES capacity component preserving QTINST/QTLEIT index semantics."
+  audit_metadata:
+    risk: 0.70
+    description: "Metadata-only field; not directly analytic."
+  fixture:
+    risk: 1.00
+    description: "Fixture-backed field."

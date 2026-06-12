@@ -1,0 +1,27 @@
+schema_version: "1.0"
+registry_id: "quality_registry_v1"
+quality_roles:
+  analytical_measure:
+    substrate_admissible: true
+    default_state: "fragile"
+    description: "Source-level measure that may become a substrate candidate if variance/support permits."
+  denominator_measure:
+    substrate_admissible: true
+    default_state: "fragile"
+    description: "Population/exposure candidate; still requires denominator legality checks."
+  diagnostic_code:
+    substrate_admissible: true
+    default_state: "fragile"
+    description: "Diagnostic topology field; not a generic string."
+  audit_only:
+    substrate_admissible: false
+    default_state: "quarantined_descriptive"
+    description: "Identifier/hash/state/raw metadata."
+  sentinel_state:
+    substrate_admissible: false
+    default_state: "quarantined_descriptive"
+    description: "Parse, missingness, or validity state column."
+  forbidden_generic_collapse:
+    substrate_admissible: false
+    default_state: "illegal_excluded"
+    description: "Field would collapse component semantics such as generic beds or generic cost."

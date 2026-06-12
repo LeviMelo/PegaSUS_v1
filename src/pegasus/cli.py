@@ -719,3 +719,24 @@ def she_substrate_summary(
 
     typer.echo(json.dumps(run_substrate_summary(manifest=manifest), indent=2, sort_keys=True))
 # ---- End Slice 13A SHE substrate CLI ----
+
+# Slice 13B registry-backed source-field commands
+@registries_app.command("source-fields-summary")
+def registries_source_fields_summary(
+    registry_root: Path = typer.Option(Path("config/registries"), "--registry-root"),
+) -> None:
+    from pegasus.registries.source_fields import source_field_registry_summary
+
+    typer.echo(json.dumps(source_field_registry_summary(registry_root=registry_root), indent=2, sort_keys=True))
+
+
+@registries_app.command("source-field-resolve")
+def registries_source_field_resolve(
+    source_system: str = typer.Option(..., "--source-system"),
+    column: str = typer.Option(..., "--column"),
+    registry_root: Path = typer.Option(Path("config/registries"), "--registry-root"),
+) -> None:
+    from pegasus.she.source_registry import resolve_source_field
+
+    result = resolve_source_field(source_system=source_system, column_name=column, registry_root=registry_root)
+    typer.echo(json.dumps(result.as_manifest(), indent=2, sort_keys=True))

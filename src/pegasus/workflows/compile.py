@@ -168,9 +168,20 @@ def run_compile(
     intent_path: str | Path,
     run_dir: str | Path | None = None,
     data_root: str | Path = "data",
+    source_manifest: str | Path | None = None,
+    require_materialized_external: bool = False,
 ) -> dict[str, Any]:
     intent_path = Path(intent_path)
     data_root = Path(data_root)
+    from pegasus.source_artifacts.compile_policy import (
+        attach_compile_source_reality,
+        resolve_compile_source_reality,
+    )
+
+    compile_source_reality = resolve_compile_source_reality(
+        source_manifest=source_manifest,
+        require_materialized_external=require_materialized_external,
+    )
     intent_payload, intent = _load_intent(intent_path)
     municipality_cod6 = _smoke_municipality_cod6(intent)
     include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
@@ -461,6 +472,7 @@ def run_compile(
         extras=final_extras,
     )
 
+    attach_compile_source_reality(run_dir=run_dir, source_reality=compile_source_reality)
     validation = validate_output_bundle(run_dir=str(run_dir))
     return {
         "status": "success" if validation.ok else "failed",

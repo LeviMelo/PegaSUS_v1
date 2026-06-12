@@ -67,6 +67,9 @@ class AcceptanceRunSummary:
     residual_association_count: int
     hypothesis_count: int
     dashboard_safe_values: tuple[str, ...]
+    compile_source_mode: str | None
+    source_artifact_manifest_present: bool
+    source_reality_production_candidate: bool | None
     telemetry_stage_status: dict[str, Any]
 
     def as_manifest(self) -> dict[str, Any]:
@@ -84,6 +87,9 @@ class AcceptanceRunSummary:
             "residual_association_count": self.residual_association_count,
             "hypothesis_count": self.hypothesis_count,
             "dashboard_safe_values": list(self.dashboard_safe_values),
+            "compile_source_mode": self.compile_source_mode,
+            "source_artifact_manifest_present": self.source_artifact_manifest_present,
+            "source_reality_production_candidate": self.source_reality_production_candidate,
             "telemetry_stage_status": self.telemetry_stage_status,
         }
 
@@ -136,6 +142,25 @@ def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) ->
     validation = validate_output_bundle(run_dir=str(root))
     errors = list(validation.errors)
     manifest = _load_json(root / "ReproducibilityManifest.json")
+    run_config = _load_json(root / "RunConfig.json")
+    source_reality = run_config.get("source_artifact_reality")
+    if not isinstance(source_reality, dict):
+        source_reality = manifest.get("source_artifact_reality")
+    if not isinstance(source_reality, dict):
+        source_reality = {}
+    compile_source_mode = (
+        run_config.get("compile_source_mode")
+        or manifest.get("compile_source_mode")
+        or source_reality.get("compile_source_mode")
+    )
+    source_artifact_manifest_present = bool(
+        run_config.get("source_artifact_manifest_present")
+        if "source_artifact_manifest_present" in run_config
+        else source_reality.get("source_artifact_manifest_present", False)
+    )
+    source_reality_production_candidate = run_config.get("source_reality_production_candidate")
+    if source_reality_production_candidate is None:
+        source_reality_production_candidate = source_reality.get("production_candidate")
     telemetry = manifest.get("telemetry", {}) if isinstance(manifest.get("telemetry", {}), dict) else {}
     stage_status = telemetry.get("stage_status", {}) if isinstance(telemetry.get("stage_status", {}), dict) else {}
 
@@ -168,6 +193,13 @@ def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) ->
         residual_association_count=_count_parquet(root / "ResidualAssociations.parquet"),
         hypothesis_count=_count_parquet(root / "Hypotheses.parquet"),
         dashboard_safe_values=dashboard_values,
+        compile_source_mode=compile_source_mode,
+        source_artifact_manifest_present=source_artifact_manifest_present,
+        source_reality_production_candidate=(
+            bool(source_reality_production_candidate)
+            if source_reality_production_candidate is not None
+            else None
+        ),
         telemetry_stage_status=dict(stage_status),
     )
 

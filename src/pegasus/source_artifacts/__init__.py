@@ -1,5 +1,11 @@
 """Source artifact reality contracts for PegaSUS data-layer hardening."""
 
+from pegasus.source_artifacts.compile_policy import (
+    CompileSourceReality,
+    CompileSourceRealityError,
+    attach_compile_source_reality,
+    resolve_compile_source_reality,
+)
 from pegasus.source_artifacts.contracts import (
     SourceArtifact,
     SourceArtifactError,
@@ -11,6 +17,10 @@ from pegasus.source_artifacts.contracts import (
 )
 
 __all__ = [
+    "CompileSourceReality",
+    "CompileSourceRealityError",
+    "attach_compile_source_reality",
+    "resolve_compile_source_reality",
     "SourceArtifact",
     "SourceArtifactError",
     "inspect_source_artifact",

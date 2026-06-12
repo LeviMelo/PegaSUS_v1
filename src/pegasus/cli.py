@@ -337,9 +337,16 @@ def sidra_extract(
 def compile(
     intent: Path = typer.Option(..., "--intent"),
     run_dir: Path | None = typer.Option(None, "--run-dir"),
+    source_manifest: Path | None = typer.Option(None, "--source-manifest"),
+    require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
 ) -> None:
     try:
-        result = run_compile(intent_path=intent, run_dir=run_dir)
+        result = run_compile(
+            intent_path=intent,
+            run_dir=run_dir,
+            source_manifest=source_manifest,
+            require_materialized_external=require_materialized_external,
+        )
     except ValueError as exc:
         print(f"[red]ERROR[/red] {exc}")
         raise typer.Exit(1) from exc
@@ -647,3 +654,20 @@ def source_artifacts_summary(
     from pegasus.workflows.source_artifacts import run_source_manifest_summary
 
     typer.echo(json.dumps(run_source_manifest_summary(manifest=manifest), indent=2, sort_keys=True))
+
+
+@source_artifacts_app.command("compile-reality-plan")
+def source_artifacts_compile_reality_plan(
+    source_manifest: Path | None = typer.Option(None, "--source-manifest"),
+    require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
+) -> None:
+    from pegasus.workflows.compile_source import run_compile_source_reality_plan
+
+    typer.echo(json.dumps(
+        run_compile_source_reality_plan(
+            source_manifest=source_manifest,
+            require_materialized_external=require_materialized_external,
+        ),
+        indent=2,
+        sort_keys=True,
+    ))

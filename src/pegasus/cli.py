@@ -671,3 +671,51 @@ def source_artifacts_compile_reality_plan(
         indent=2,
         sort_keys=True,
     ))
+
+
+# ---- Slice 13A SHE substrate CLI ----
+she_app = typer.Typer(help="Substrate Harmonization Engine inspection commands.")
+app.add_typer(she_app, name="she")
+
+
+@she_app.command("build-substrate")
+def she_build_substrate(
+    artifact: list[Path] = typer.Option([], "--artifact", help="Processed source artifact path; repeatable."),
+    source_system: str = typer.Option("UNKNOWN", "--source-system"),
+    provenance_mode: str = typer.Option("fixture", "--provenance-mode"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    from pegasus.workflows.build_substrate import run_build_substrate_from_artifacts
+
+    artifacts = [
+        {
+            "path": str(path),
+            "source_system": source_system,
+            "artifact_role": "processed_events",
+            "provenance_mode": provenance_mode,
+        }
+        for path in (artifact or [])
+    ]
+    result = run_build_substrate_from_artifacts(artifacts=artifacts, output=output)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@she_app.command("build-substrate-manifest")
+def she_build_substrate_manifest(
+    source_manifest: Path = typer.Option(..., "--source-manifest"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    from pegasus.workflows.build_substrate import run_build_substrate_from_source_manifest
+
+    result = run_build_substrate_from_source_manifest(source_manifest=source_manifest, output=output)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@she_app.command("substrate-summary")
+def she_substrate_summary(
+    manifest: Path = typer.Option(..., "--manifest"),
+) -> None:
+    from pegasus.workflows.build_substrate import run_substrate_summary
+
+    typer.echo(json.dumps(run_substrate_summary(manifest=manifest), indent=2, sort_keys=True))
+# ---- End Slice 13A SHE substrate CLI ----

@@ -39,6 +39,12 @@ AGGREGATION_LAWS: frozenset[str] = frozenset({
     "non_aggregable",
 })
 COUNT_UNITS: frozenset[str] = frozenset({"count", "counts", "events", "admissions", "births", "deaths"})
+DIAGNOSTIC_CODE_COLUMNS: frozenset[str] = frozenset({
+    "underlying_icd_norm",
+    "associated_conditions_norm",
+    "principal_icd_norm",
+    "anomaly_icd_code",
+})
 
 
 class EFGMaterializationError(ValueError):
@@ -122,6 +128,15 @@ def _safe_aggregation(value: str) -> Literal[
     return "non_aggregable"
 
 
+def _is_diagnostic_candidate(candidate: SubstrateFieldCandidate) -> bool:
+    roles = {str(role) for role in candidate.role}
+    return (
+        str(candidate.column) in DIAGNOSTIC_CODE_COLUMNS
+        or str(candidate.unit) == "ICD10"
+        or "diagnostic_topology" in roles
+    )
+
+
 def classify_substrate_candidate_kind(candidate: SubstrateFieldCandidate) -> Literal[
     "extensive_measure",
     "intensive_density",
@@ -140,14 +155,14 @@ def classify_substrate_candidate_kind(candidate: SubstrateFieldCandidate) -> Lit
     aggregation law and role.  It never makes epidemiological ratio claims.
     """
 
-    raw = str(candidate.substrate_kind)
-    if raw in FIELD_KINDS:
-        return raw  # type: ignore[return-value]
     roles = set(str(role) for role in candidate.role)
     unit = str(candidate.unit)
     aggregation = str(candidate.aggregation)
-    if unit == "ICD10" or "diagnostic_topology" in roles:
+    if _is_diagnostic_candidate(candidate):
         return "observer_proxy"
+    raw = str(candidate.substrate_kind)
+    if raw in FIELD_KINDS:
+        return raw  # type: ignore[return-value]
     if aggregation == "additive" and unit.lower() in COUNT_UNITS:
         return "extensive_measure"
     if aggregation == "weighted_mean":
@@ -177,7 +192,12 @@ def support_from_substrate_candidate(candidate: SubstrateFieldCandidate) -> dict
 def materialize_candidate_field(candidate: SubstrateFieldCandidate) -> SubstrateMaterializedField:
     """Materialize one SHE substrate candidate as a metadata-only FieldNode."""
 
-    aggregation = _safe_aggregation(str(candidate.aggregation))
+    diagnostic = _is_diagnostic_candidate(candidate)
+    aggregation = "non_aggregable" if diagnostic else _safe_aggregation(str(candidate.aggregation))
+    unit = "ICD10" if diagnostic else str(candidate.unit)
+    role = _unique([*candidate.role, "source_field", "substrate_materialized"])
+    if diagnostic and "diagnostic_topology" not in role:
+        role.append("diagnostic_topology")
     kind = classify_substrate_candidate_kind(candidate)
     source_manifest_hashes = _unique([candidate.source_manifest_hash, candidate.artifact_hash])
     lineage = make_lineage(

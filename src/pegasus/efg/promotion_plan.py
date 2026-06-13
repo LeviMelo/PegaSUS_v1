@@ -34,6 +34,7 @@ class PromotionDecision:
     status: str
     reason: str
     source_manifest_index: int | None = None
+    field: dict[str, Any] | None = None
 
     def as_manifest(self) -> dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class PromotionDecision:
             "status": self.status,
             "reason": self.reason,
             "source_manifest_index": self.source_manifest_index,
+            "field": dict(self.field) if self.field is not None else None,
         }
 
 
@@ -156,8 +158,16 @@ def _first_list(payload: dict[str, Any], names: tuple[str, ...]) -> list[dict[st
     return []
 
 
+
 def materialized_fields_from_manifest(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract materialized FieldNode-like rows from known Slice 14B manifest shapes."""
+    """Extract materialized FieldNode-like rows from Slice 14B manifest shapes.
+
+    Slice 14B serializes materialized entries as wrappers of the form
+    ``{"candidate_id": ..., "field": {...}}``.  Promotion planning must
+    preserve the full nested FieldNode payload rather than collapsing to the
+    small PromotionDecision summary.  Older tests and manual manifests may
+    still provide direct field dictionaries; those remain accepted.
+    """
 
     fields = _first_list(
         payload,
@@ -170,11 +180,27 @@ def materialized_fields_from_manifest(payload: dict[str, Any]) -> list[dict[str,
         ),
     )
     valid: list[dict[str, Any]] = []
-    for field in fields:
-        if "field_id" in field or "id" in field or "name" in field:
-            valid.append(dict(field))
+    for item in fields:
+        direct = dict(item)
+        nested = None
+        for key in ("field", "field_node", "materialized_field", "v_field"):
+            value = item.get(key)
+            if isinstance(value, dict):
+                nested = dict(value)
+                break
+        if nested is not None:
+            if item.get("candidate_id") is not None:
+                nested.setdefault("candidate_id", item.get("candidate_id"))
+            if item.get("lineage_hash") is not None:
+                nested.setdefault("lineage_hash", item.get("lineage_hash"))
+            if item.get("materialization_reason") is not None:
+                nested.setdefault("materialization_reason", item.get("materialization_reason"))
+            if "field_id" in nested or "id" in nested or "name" in nested:
+                valid.append(nested)
+            continue
+        if "field_id" in direct or "id" in direct or "name" in direct:
+            valid.append(direct)
     return valid
-
 
 def excluded_fields_from_manifest(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return _first_list(
@@ -311,6 +337,7 @@ def build_efg_promotion_plan(
             status=status,
             reason=reason,
             source_manifest_index=index,
+            field=dict(field),
         )
         if status == "planned":
             planned.append(decision)

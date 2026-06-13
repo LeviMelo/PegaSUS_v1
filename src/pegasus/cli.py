@@ -1197,3 +1197,32 @@ def pirs_inspect_hsic_dashboard(
     payload = inspect_hsic_dashboard_cards(dashboard)
     typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str))
 # END SLICE18B HSIC RANKING DASHBOARD CLI
+
+# BEGIN SLICE18C HSIC REPORT EXPORT CLI
+@pirs_app.command("export-hsic-report")
+def pirs_export_hsic_report(
+    run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, dir_okay=True),
+    ranking_manifest: Path | None = typer.Option(None, "--ranking-manifest", exists=False, file_okay=True, dir_okay=False),
+    output_dir: Path | None = typer.Option(None, "--output-dir", exists=False, file_okay=False, dir_okay=True),
+) -> None:
+    """Export a read-only HSIC evidence report bundle from ranked scan artifacts."""
+    from pegasus.workflows.hsic_report import run_export_hsic_report
+
+    payload = run_export_hsic_report(
+        run_dir=run_dir,
+        ranking_manifest=ranking_manifest,
+        output_dir=output_dir,
+    )
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str))
+
+
+@pirs_app.command("inspect-hsic-report")
+def pirs_inspect_hsic_report(
+    manifest: Path = typer.Option(..., "--manifest", exists=True, file_okay=True, dir_okay=False),
+) -> None:
+    """Inspect an exported HSIC evidence report manifest without mutating a run."""
+    from pegasus.workflows.hsic_report import inspect_hsic_report_manifest
+
+    payload = inspect_hsic_report_manifest(manifest)
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str))
+# END SLICE18C HSIC REPORT EXPORT CLI

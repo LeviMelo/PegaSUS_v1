@@ -163,7 +163,7 @@ def _compile_population_tensor_mode(intent: UserIntent) -> str | None:
         return "sim_informed_denominator"
     return None
 
-def run_compile(
+def _run_compile_impl(
     *,
     intent_path: str | Path,
     run_dir: str | Path | None = None,
@@ -489,53 +489,52 @@ def run_compile(
         "population_tensor": population_tensor_metadata,
     }
 
+# ---- Slice 13C compile/substrate contract consolidation ----
+def run_compile(
+    *,
+    intent_path: str | Path,
+    run_dir: str | Path | None = None,
+    data_root: str | Path = "data",
+    source_manifest: str | Path | None = None,
+    require_materialized_external: bool = False,
+) -> dict[str, Any]:
+    # Single public compile boundary. The actual smoke compiler remains in
+    # _run_compile_impl(); this wrapper only attaches SHE substrate metadata
+    # when source artifact manifests are supplied.
+    result = _run_compile_impl(
+        intent_path=intent_path,
+        run_dir=run_dir,
+        data_root=data_root,
+        source_manifest=source_manifest,
+        require_materialized_external=require_materialized_external,
+    )
+    if not isinstance(result, dict):
+        return result
 
-# ---- Slice 13A SHE substrate boundary wrapper ----
-# The original compile workflow remains the authoritative smoke compiler for now.
-# Slice 13A wraps it to attach SHE substrate-gate metadata when source artifact
-# manifests are available, without changing EFG/PIRS/HSIC behavior.
-try:
-    _slice13a_original_run_compile = run_compile
-except NameError:  # pragma: no cover
-    _slice13a_original_run_compile = None
-
-
-def run_compile(*, intent_path, run_dir=None, data_root="data", source_manifest=None, require_materialized_external=False):
-    if _slice13a_original_run_compile is None:  # pragma: no cover
-        raise RuntimeError("original run_compile is unavailable")
-    try:
-        result = _slice13a_original_run_compile(
-            intent_path=intent_path,
-            run_dir=run_dir,
-            data_root=data_root,
-            source_manifest=source_manifest,
-            require_materialized_external=require_materialized_external,
-        )
-    except TypeError as exc:
-        # Preserve compatibility with pre-12B run_compile signatures during local repair/rebase workflows.
-        if "unexpected keyword" not in str(exc):
-            raise
-        result = _slice13a_original_run_compile(intent_path=intent_path, run_dir=run_dir, data_root=data_root)
-
-    try:
-        from pegasus.output.validate import validate_output_bundle as _validate_output_bundle
-        from pegasus.workflows.build_substrate import run_attach_substrate_to_run as _run_attach_substrate_to_run
-
-        run_path = result.get("run_dir") if isinstance(result, dict) else None
-        if run_path is not None and source_manifest is not None:
-            substrate_summary = _run_attach_substrate_to_run(run_dir=run_path, source_manifest=source_manifest)
-            result["substrate_gate"] = substrate_summary
-            result["validation"] = _validate_output_bundle(run_dir=str(run_path))
-        elif isinstance(result, dict):
-            result.setdefault("substrate_gate", {
+    if source_manifest is None:
+        result.setdefault(
+            "substrate_gate",
+            {
                 "status": "not_evaluated",
                 "reason": "no_source_manifest_supplied_to_compile",
-            })
-    except Exception as exc:
-        if isinstance(result, dict):
-            result["substrate_gate"] = {
-                "status": "failed_nonfatal",
-                "reason": str(exc),
-            }
+                "source_reality_mode": "no_manifest",
+                "registry_backed": None,
+            },
+        )
+        return result
+
+    run_path = result.get("run_dir")
+    if run_path is None:
+        result["substrate_gate"] = {
+            "status": "failed_nonfatal",
+            "reason": "compile_result_missing_run_dir",
+        }
+        return result
+
+    from pegasus.output.validate import validate_output_bundle as _validate_output_bundle
+    from pegasus.workflows.build_substrate import run_attach_substrate_to_run as _run_attach_substrate_to_run
+
+    substrate_summary = _run_attach_substrate_to_run(run_dir=run_path, source_manifest=source_manifest)
+    result["substrate_gate"] = substrate_summary
+    result["validation"] = _validate_output_bundle(run_dir=str(run_path))
     return result
-# ---- End Slice 13A SHE substrate boundary wrapper ----

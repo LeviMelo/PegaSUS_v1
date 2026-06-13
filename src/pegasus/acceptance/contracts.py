@@ -70,6 +70,11 @@ class AcceptanceRunSummary:
     compile_source_mode: str | None
     source_artifact_manifest_present: bool
     source_reality_production_candidate: bool | None
+    substrate_present: bool
+    substrate_source_reality_mode: str | None
+    substrate_admissible_candidate_count: int | None
+    substrate_excluded_field_count: int | None
+    substrate_registry_backed: bool | None
     telemetry_stage_status: dict[str, Any]
 
     def as_manifest(self) -> dict[str, Any]:
@@ -90,6 +95,11 @@ class AcceptanceRunSummary:
             "compile_source_mode": self.compile_source_mode,
             "source_artifact_manifest_present": self.source_artifact_manifest_present,
             "source_reality_production_candidate": self.source_reality_production_candidate,
+            "substrate_present": self.substrate_present,
+            "substrate_source_reality_mode": self.substrate_source_reality_mode,
+            "substrate_admissible_candidate_count": self.substrate_admissible_candidate_count,
+            "substrate_excluded_field_count": self.substrate_excluded_field_count,
+            "substrate_registry_backed": self.substrate_registry_backed,
             "telemetry_stage_status": self.telemetry_stage_status,
         }
 
@@ -164,6 +174,20 @@ def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) ->
     telemetry = manifest.get("telemetry", {}) if isinstance(manifest.get("telemetry", {}), dict) else {}
     stage_status = telemetry.get("stage_status", {}) if isinstance(telemetry.get("stage_status", {}), dict) else {}
 
+    substrate_gate = run_config.get("substrate_gate")
+    if not isinstance(substrate_gate, dict):
+        substrate_gate = manifest.get("substrate_gate")
+    if not isinstance(substrate_gate, dict):
+        p_vector = _load_json(root / "P_vector.json")
+        substrate_gate = p_vector.get("substrate_gate") if isinstance(p_vector.get("substrate_gate"), dict) else {}
+    if not isinstance(substrate_gate, dict):
+        substrate_gate = {}
+    substrate_present = substrate_gate.get("status") == "evaluated"
+    substrate_source_reality_mode = substrate_gate.get("source_reality_mode") if substrate_gate else None
+    substrate_admissible_candidate_count = substrate_gate.get("admissible_candidate_count") if substrate_gate else None
+    substrate_excluded_field_count = substrate_gate.get("excluded_field_count") if substrate_gate else None
+    substrate_registry_backed = substrate_gate.get("registry_backed") if substrate_gate else None
+
     v_path = root / "V_fields.parquet"
     q_path = root / "Q_tensor.parquet"
     fields = _count_parquet(v_path)
@@ -200,6 +224,11 @@ def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) ->
             if source_reality_production_candidate is not None
             else None
         ),
+        substrate_present=substrate_present,
+        substrate_source_reality_mode=substrate_source_reality_mode,
+        substrate_admissible_candidate_count=substrate_admissible_candidate_count,
+        substrate_excluded_field_count=substrate_excluded_field_count,
+        substrate_registry_backed=substrate_registry_backed,
         telemetry_stage_status=dict(stage_status),
     )
 

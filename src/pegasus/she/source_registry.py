@@ -299,7 +299,6 @@ def source_system_from_path(path: str | Path) -> str | None:
             return source_system
     return None
 
-
 def source_registry_manifest(registry_root: str | Path = "config/registries") -> dict[str, Any]:
     """Return SHE-facing source-field registry metadata.
 
@@ -317,3 +316,4 @@ def source_registry_manifest(registry_root: str | Path = "config/registries") ->
         "batch_signature": "resolve_source_fields(source_system, columns, allow_heuristic=True, registry_root=...)",
     }
     return payload
+

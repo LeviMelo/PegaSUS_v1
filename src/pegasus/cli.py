@@ -740,3 +740,57 @@ def registries_source_field_resolve(
 
     result = resolve_source_field(source_system=source_system, column_name=column, registry_root=registry_root)
     typer.echo(json.dumps(result.as_manifest(), indent=2, sort_keys=True))
+
+# ---- Slice 14C EFG materialization CLI boundary ----
+@efg_app.command("materialize-substrate-manifest")
+def efg_materialize_substrate_manifest(
+    substrate_manifest: Path = typer.Option(..., "--substrate-manifest"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    """Build a metadata-only EFG materialization manifest from a substrate manifest."""
+    import json
+
+    from pegasus.workflows.efg_materialize import run_materialize_substrate_manifest
+
+    payload = run_materialize_substrate_manifest(substrate_manifest=substrate_manifest, output=output)
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@efg_app.command("attach-materialization")
+def efg_attach_materialization_manifest(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    substrate_manifest: Path | None = typer.Option(None, "--substrate-manifest"),
+) -> None:
+    """Attach EFG substrate materialization metadata to an existing run bundle."""
+    import json
+
+    from pegasus.workflows.efg_materialize import run_attach_efg_materialization_to_run
+
+    payload = run_attach_efg_materialization_to_run(run_dir=run_dir, substrate_manifest=substrate_manifest)
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@efg_app.command("inspect-materialization")
+def efg_inspect_materialization_manifest(
+    manifest: Path = typer.Option(..., "--manifest"),
+) -> None:
+    """Inspect a metadata-only EFG materialization manifest without mutating a run."""
+    import json
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise typer.BadParameter(f"EFG materialization manifest is not a JSON object: {manifest}")
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        summary = {
+            "status": "evaluated",
+            "materialization_id": payload.get("materialization_id"),
+            "substrate_id": payload.get("substrate_id"),
+            "field_count": payload.get("field_count"),
+            "excluded_field_count": payload.get("excluded_field_count"),
+            "metadata_only": payload.get("metadata_only"),
+            "writes_v_fields": payload.get("writes_v_fields"),
+            "writes_e_dag": payload.get("writes_e_dag"),
+        }
+    print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False))
+# ---- End Slice 14C EFG materialization CLI boundary ----

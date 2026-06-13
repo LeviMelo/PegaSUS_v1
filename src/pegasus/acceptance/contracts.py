@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -11,6 +10,7 @@ import pyarrow.parquet as pq
 from pegasus.core.hashing import sha256_file
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
 from pegasus.output.validate import validate_output_bundle
+from pegasus.workflows.stage_plan import validate_compiler_stage_plan
 
 FORBIDDEN_DASHBOARD_COMPUTE_STAGES: tuple[str, ...] = (
     "datasus_acquire",
@@ -255,6 +255,15 @@ def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) ->
     )
 
 
+
+def _compiler_stage_plan_payload(root: Path, run_config: dict[str, Any]) -> dict[str, Any]:
+    plan = run_config.get("compiler_stage_plan")
+    if isinstance(plan, dict):
+        return plan
+    manifest = _load_json(root / "ReproducibilityManifest.json")
+    plan = manifest.get("compiler_stage_plan")
+    return plan if isinstance(plan, dict) else {}
+
 def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
     root = Path(run_dir)
     summary = summarize_run(root, require_non_scaffold=True)
@@ -272,11 +281,13 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
         and bool(autonomous.get("manifest_hash"))
         and sha256_file(autonomous_manifest) == autonomous.get("manifest_hash")
     )
-    optional_stages = ("population_solver", "stdfm", "pirs_model", "pirs_hsic")
-    truthful_optional_stages = all(
-        summary.telemetry_stage_status.get(stage) in {"success", "skipped"}
-        for stage in optional_stages
+    stage_plan = _compiler_stage_plan_payload(root, run_config)
+    stage_plan_errors = validate_compiler_stage_plan(
+        stage_plan=stage_plan,
+        stage_status=summary.telemetry_stage_status,
     )
+    stage_plan_present = bool(stage_plan)
+    truthful_optional_stages = not stage_plan_errors
     checks = {
         "output_bundle_valid": summary.ok,
         "exact_first_class_keys": summary.first_class_keys == required_first_class_key_paths(),
@@ -288,9 +299,12 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
         ),
         "autonomous_manifest_integrity": autonomous_manifest_valid,
         "truthful_optional_stage_statuses": truthful_optional_stages,
+        "compiler_stage_plan_present": stage_plan_present,
+        "stage_skip_proofs_valid": not stage_plan_errors,
         "source_reality_declared": summary.compile_source_mode in {"fixture_only", "materialized_external"},
     }
     errors = list(summary.errors)
+    errors.extend(stage_plan_errors)
     errors.extend(name for name, passed in checks.items() if not passed)
     structural_ok = all(checks.values())
     production_candidate = bool(

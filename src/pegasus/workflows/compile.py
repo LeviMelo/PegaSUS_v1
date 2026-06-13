@@ -169,14 +169,24 @@ def _compile_population_tensor_mode(intent: UserIntent) -> str | None:
 
 def _compiler_architecture_metadata() -> dict[str, Any]:
     return {
-        "schema_version": "25A.1",
+        "schema_version": "26A.1",
         "graph_authority": "autonomous_efg_core",
         "graph_builder": "pegasus.efg.dag.build_efg",
-        "numerical_materialization": "legacy_bootstrap",
-        "legacy_bootstrap_builder": "pegasus.workflows.efg.run_build_sim_fixture",
-        "legacy_bootstrap_status": "compatibility_materializer",
+        "numerical_materialization": "autonomous_compiler_services",
+        "numerical_materializer": "pegasus.workflows.compile._run_compile_impl",
+        "legacy_bootstrap_builder": None,
+        "legacy_bootstrap_status": "quarantined_fixture_only",
         "legacy_graph_authority": False,
-        "migration_target": "autonomous_efg_numerical_materializer",
+        "fixture_compatibility_modules": [
+            "pegasus.output.sim_efg_bundle",
+            "pegasus.output.sinasc_efg_bundle",
+            "pegasus.output.cnes_sih_efg_bundle",
+            "pegasus.output.population_tensor_bundle",
+            "pegasus.output.sidra_stdfm_bundle",
+            "pegasus.output.pirs_bundle",
+            "pegasus.output.hsic_bundle",
+        ],
+        "production_runtime_authority": "autonomous_efg_core_plus_compiler_services",
     }
 
 
@@ -204,6 +214,15 @@ def _run_compile_impl(
     include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
     population_tensor_mode = _compile_population_tensor_mode(intent)
     compiler_architecture = _compiler_architecture_metadata()
+    from pegasus.workflows.stage_plan import build_compile_stage_plan
+
+    compiler_stage_plan = build_compile_stage_plan(
+        intent=intent,
+        population_tensor_mode=population_tensor_mode,
+        include_cnes_sih=include_cnes_sih,
+        source_manifest=None if source_manifest is None else str(source_manifest),
+        require_materialized_external=require_materialized_external,
+    )
 
     try:
         race_bridge_plan = resolve_race_bridge_plan(intent=intent, municipality_cod6=municipality_cod6)
@@ -458,7 +477,7 @@ def _run_compile_impl(
     telemetry.set_stage("stdfm", "skipped", 0.0)
     telemetry.set_stage("pirs_model", "skipped", 0.0)
     telemetry.set_stage("pirs_hsic", "skipped", 0.0)
-    skipped_reasons = {
+    skipped_reasons = {**compiler_stage_plan.skip_reason_map(),
         "stdfm": "compile smoke intent does not request latent-factor fitting",
         "pirs_model": "compile smoke intent does not request parametric inference",
         "pirs_hsic": "compile smoke intent does not request HSIC inference",
@@ -491,6 +510,7 @@ def _run_compile_impl(
             "race_tensor_mode": intent.race_tensor_mode,
             "race_bridge_plan": race_bridge_plan.as_manifest(),
             "compiler_architecture": compiler_architecture,
+            "compiler_stage_plan": compiler_stage_plan.as_manifest(),
             "registry_hashes": registry_hashes,
             "source_hashes": source_hashes,
         }
@@ -528,6 +548,7 @@ def _run_compile_impl(
             "race_bridge_plan": race_bridge_plan.as_manifest(),
             "context_policy": intent.context_policy,
             "compiler_architecture": compiler_architecture,
+            "compiler_stage_plan": compiler_stage_plan.as_manifest(),
         }
         if race_bridge_metadata is not None:
             manifest_extras["race_bridge"] = race_bridge_metadata
@@ -560,6 +581,7 @@ def _run_compile_impl(
         "race_bridge_plan": race_bridge_plan.as_manifest(),
         "context_policy": intent.context_policy,
         "compiler_architecture": compiler_architecture,
+        "compiler_stage_plan": compiler_stage_plan.as_manifest(),
     }
     if race_bridge_metadata is not None:
         final_extras["race_bridge"] = race_bridge_metadata
@@ -596,6 +618,7 @@ def _run_compile_impl(
         "population_tensor": population_tensor_metadata,
         "autonomous_efg": autonomous_efg_metadata,
         "compiler_architecture": compiler_architecture,
+        "compiler_stage_plan": compiler_stage_plan.as_manifest(),
     }
 
 # ---- Slice 13C compile/substrate contract consolidation ----

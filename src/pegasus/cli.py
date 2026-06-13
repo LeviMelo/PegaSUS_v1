@@ -608,6 +608,19 @@ def acceptance_check_run(
         raise typer.Exit(1)
 
 
+
+@acceptance_app.command("level3")
+def acceptance_level3(
+    run: Path = typer.Option(..., "--run"),
+) -> None:
+    from pegasus.workflows.acceptance import run_acceptance_level3
+
+    result = run_acceptance_level3(run_dir=run)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+    if not result.get("ok", False):
+        raise typer.Exit(1)
+
+
 # Slice 12A source artifact reality gate commands
 @source_artifacts_app.command("inspect")
 def source_artifacts_inspect(

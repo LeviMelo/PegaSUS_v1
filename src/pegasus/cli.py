@@ -1127,3 +1127,33 @@ def pirs_inspect_model_execution(
 
     _pirs_cli_print(inspect_pirs_model_execution_manifest(manifest))
 # ---- End Slice 17B PIRS model execution CLI boundary ----
+
+# ---- Slice 18A HSIC residual scan CLI boundary ----
+@pirs_app.command("scan-residuals-hsic")
+def pirs_scan_residuals_hsic(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    model_execution_manifest: Path | None = typer.Option(None, "--model-execution-manifest"),
+    design_matrix_manifest: Path | None = typer.Option(None, "--design-matrix-manifest"),
+    output_manifest: Path | None = typer.Option(None, "--output-manifest"),
+    budget: str = typer.Option("fast", "--budget"),
+    permutations: int = typer.Option(199, "--permutations"),
+    min_support: int = typer.Option(3, "--min-support"),
+    mutate_output_bundle: bool = typer.Option(True, "--mutate-output-bundle/--no-mutate-output-bundle"),
+    validate: bool = typer.Option(True, "--validate/--no-validate"),
+    attach: bool = typer.Option(True, "--attach/--no-attach"),
+) -> None:
+    """Scan PIRS residuals against design covariates with HSIC and emit hypothesis rows."""
+    from pegasus.workflows.hsic_execute import run_execute_hsic_residual_scan
+
+    _pirs_cli_print(run_execute_hsic_residual_scan(run_dir=run_dir, model_execution_manifest=model_execution_manifest, design_matrix_manifest=design_matrix_manifest, output_manifest=output_manifest, budget=budget, permutations=permutations, min_support=min_support, mutate_output_bundle=mutate_output_bundle, validate=validate, attach=attach))
+
+
+@pirs_app.command("inspect-hsic-scan")
+def pirs_inspect_hsic_scan(
+    manifest: Path = typer.Option(..., "--manifest"),
+) -> None:
+    """Read an existing HSIC residual-scan manifest without mutating a run."""
+    from pegasus.workflows.hsic_execute import run_inspect_hsic_residual_scan
+
+    _pirs_cli_print(run_inspect_hsic_residual_scan(manifest=manifest))
+# ---- End Slice 18A HSIC residual scan CLI boundary ----

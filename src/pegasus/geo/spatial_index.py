@@ -1,12 +1,18 @@
-"""
-Slice 0 scaffold module: geo/spatial_index.py
+"""Deterministic support index used by sparse geospatial modules."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from __future__ import annotations
 
-from pegasus.core.exceptions import BlockedModuleError
+from dataclasses import dataclass
 
 
-def blocked(*, module: str = "geo/spatial_index.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+@dataclass(frozen=True)
+class SpatialIndex:
+    ids: tuple[str, ...]
+    index_by_id: dict[str, int]
+
+
+def build_spatial_index(ids) -> SpatialIndex:
+    ordered = tuple(sorted(dict.fromkeys(str(value) for value in ids)))
+    if not ordered:
+        raise ValueError("spatial index requires at least one support ID")
+    return SpatialIndex(ordered, {value: index for index, value in enumerate(ordered)})

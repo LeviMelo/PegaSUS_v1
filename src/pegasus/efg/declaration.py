@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from pegasus.core.schemas import FieldNode
 
@@ -13,7 +11,7 @@ class OperatorSpec(BaseModel):
     name: str
     role: str
     output_kind: str | None = None
-    params: dict = {}
+    params: dict = Field(default_factory=dict)
 
 
 class DeclarationResult(BaseModel):

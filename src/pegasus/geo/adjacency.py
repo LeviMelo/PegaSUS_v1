@@ -1,12 +1,22 @@
-"""
-Slice 0 scaffold module: geo/adjacency.py
+"""External municipality adjacency contract."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from __future__ import annotations
 
-from pegasus.core.exceptions import BlockedModuleError
+from pathlib import Path
+
+from pegasus.geo.geodata import GeoArtifactError, load_geo_artifact
 
 
-def blocked(*, module: str = "geo/adjacency.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def load_adjacency(path: str | Path, *, require_symmetric: bool = True) -> dict[str, tuple[str, ...]]:
+    frame, _artifact = load_geo_artifact(path, required_columns={"left_id", "right_id"})
+    pairs = {(str(row["left_id"]), str(row["right_id"])) for row in frame.to_dicts()}
+    if any(left == right for left, right in pairs):
+        raise GeoArtifactError("adjacency artifact contains self-neighbor edges")
+    if require_symmetric:
+        missing = {(right, left) for left, right in pairs if (right, left) not in pairs}
+        if missing:
+            raise GeoArtifactError("adjacency artifact is not symmetric")
+    output: dict[str, set[str]] = {}
+    for left, right in pairs:
+        output.setdefault(left, set()).add(right)
+    return {key: tuple(sorted(values)) for key, values in sorted(output.items())}

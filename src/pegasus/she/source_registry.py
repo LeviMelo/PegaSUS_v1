@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from pegasus.registries.source_fields import (
     SourceFieldRegistryEntry,
+    load_source_field_registry,
     normalize_source_system,
     registry_manifest as source_field_registry_manifest,
     resolve_source_field_entry,
@@ -265,20 +266,18 @@ def resolve_source_fields(
 
     del allow_heuristic
     normalized = normalize_source_system(source_system)
+    registry = load_source_field_registry(registry_root)
     specs: list[SourceFieldSpec] = []
     unresolved: list[str] = []
     for column in columns:
-        result = resolve_source_field(
-            source_system=normalized,
-            column_name=str(column),
-            registry_root=registry_root,
-        )
-        specs.append(result.spec)
-        if not result.known:
+        entry = registry.resolve(source_system=normalized, column_name=str(column))
+        spec = _spec_from_entry(entry)
+        specs.append(spec)
+        if _is_unknown_entry(entry):
             unresolved.append(str(column))
     return SourceRegistryBatchResolution(
         source_system=normalized,
-        registry_hash=source_registry_hash(normalized, registry_root=registry_root),
+        registry_hash=f"{registry.registry_hash}:{normalized}",
         specs=tuple(specs),
         unresolved_columns=tuple(unresolved),
         registry_backed=True,

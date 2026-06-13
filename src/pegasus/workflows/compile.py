@@ -10,6 +10,8 @@ from pydantic import ValidationError
 
 from pegasus.core.hashing import content_hash, sha256_file
 from pegasus.core.schemas import UserIntent
+from pegasus.efg.compile_attach import attach_autonomous_efg_to_run
+from pegasus.efg.dag import build_efg
 from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
 from pegasus.output.cnes_sih_compile_attach import attach_cnes_sih_compile_fields
 from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
@@ -19,6 +21,7 @@ from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
 from pegasus.sidra.facts import write_facts_parquet
 from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
+from pegasus.she.substrate import build_substrate_bundle
 from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes, run_datasus_normalize_sih
 from pegasus.workflows.datasus import run_datasus_normalize_sim
 from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
@@ -290,12 +293,84 @@ def _run_compile_impl(
         _write_sidra_smoke_facts(output_path=sidra_facts_path)
         source_hashes["sidra_facts"] = sha256_file(sidra_facts_path)
 
+    autonomous_efg_metadata: dict[str, Any] | None = None
     with telemetry.stage("efg_build"):
         run_build_sim_fixture(
             sim_events_path=sim_events_path,
             run_dir=run_dir,
             municipality_cod6=municipality_cod6,
         )
+        provenance_mode = (
+            "fixture"
+            if compile_source_reality.compile_source_mode == "fixture_only"
+            else compile_source_reality.compile_source_mode
+        )
+        autonomous_artifacts: list[dict[str, Any]] = [
+            {
+                "path": str(sim_events_path),
+                "source_system": "SIM-DO",
+                "artifact_role": "processed_events",
+                "provenance_mode": provenance_mode,
+                "source_manifest_hash": source_hashes["compile_manifest"],
+                "artifact_hash": source_hashes["sim_processed_events"],
+            },
+            {
+                "path": str(sinasc_events_path),
+                "source_system": "SINASC",
+                "artifact_role": "processed_events",
+                "provenance_mode": provenance_mode,
+                "source_manifest_hash": source_hashes["compile_manifest"],
+                "artifact_hash": source_hashes["sinasc_processed_events"],
+            },
+            {
+                "path": str(sidra_facts_path),
+                "source_system": "SIDRA",
+                "artifact_role": "normalized_facts",
+                "provenance_mode": provenance_mode,
+                "source_manifest_hash": source_hashes["compile_manifest"],
+                "artifact_hash": source_hashes["sidra_facts"],
+            },
+        ]
+        if include_cnes_sih:
+            autonomous_artifacts.extend([
+                {
+                    "path": str(cnes_events_path),
+                    "source_system": "CNES-ST",
+                    "artifact_role": "processed_facility_periods",
+                    "provenance_mode": provenance_mode,
+                    "source_manifest_hash": source_hashes["compile_manifest"],
+                    "artifact_hash": source_hashes["cnes_processed_events"],
+                },
+                {
+                    "path": str(sih_events_path),
+                    "source_system": "SIH-RD",
+                    "artifact_role": "processed_admissions",
+                    "provenance_mode": provenance_mode,
+                    "source_manifest_hash": source_hashes["compile_manifest"],
+                    "artifact_hash": source_hashes["sih_processed_events"],
+                },
+            ])
+        autonomous_substrate = build_substrate_bundle(artifacts=autonomous_artifacts)
+        autonomous_result = build_efg(
+            substrate=autonomous_substrate,
+            intent=intent,
+            operator_mode="standard",
+        )
+        autonomous_attach = attach_autonomous_efg_to_run(
+            run_dir=run_dir,
+            result=autonomous_result,
+            validate=False,
+        )
+        autonomous_efg_metadata = {
+            **autonomous_attach.as_manifest(),
+            "substrate_id": autonomous_substrate.substrate_id,
+            "source_reality_mode": autonomous_substrate.source_reality_mode,
+            "source_systems": sorted({artifact["source_system"] for artifact in autonomous_artifacts}),
+            "registry_hashes": autonomous_result.registry_hashes,
+            "legality_summary": autonomous_result.legality_summary,
+            "precompression": autonomous_result.precompression.as_manifest(),
+        }
+        source_hashes["autonomous_efg_manifest"] = autonomous_attach.manifest_hash
 
     cnes_sih_metadata: dict[str, Any] | None = None
     population_tensor_metadata: dict[str, Any] | None = None
@@ -415,6 +490,8 @@ def _run_compile_impl(
             population_tensor_metadata = existing_run_config["population_tensor"]
         if population_tensor_metadata is not None:
             run_config_payload["population_tensor"] = population_tensor_metadata
+        if autonomous_efg_metadata is not None:
+            run_config_payload["autonomous_efg"] = autonomous_efg_metadata
         run_config_path.write_text(
             json.dumps(run_config_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
@@ -433,6 +510,8 @@ def _run_compile_impl(
             manifest_extras["cnes_sih"] = cnes_sih_metadata
         if population_tensor_metadata is not None:
             manifest_extras["population_tensor"] = population_tensor_metadata
+        if autonomous_efg_metadata is not None:
+            manifest_extras["autonomous_efg"] = autonomous_efg_metadata
         write_reproducibility_manifest(
             run_dir=run_dir,
             run_id=run_id,
@@ -462,6 +541,8 @@ def _run_compile_impl(
         final_extras["cnes_sih"] = cnes_sih_metadata
     if population_tensor_metadata is not None:
         final_extras["population_tensor"] = population_tensor_metadata
+    if autonomous_efg_metadata is not None:
+        final_extras["autonomous_efg"] = autonomous_efg_metadata
     write_reproducibility_manifest(
         run_dir=run_dir,
         run_id=run_id,
@@ -487,6 +568,7 @@ def _run_compile_impl(
         "race_bridge": race_bridge_metadata,
         "cnes_sih": cnes_sih_metadata,
         "population_tensor": population_tensor_metadata,
+        "autonomous_efg": autonomous_efg_metadata,
     }
 
 # ---- Slice 13C compile/substrate contract consolidation ----

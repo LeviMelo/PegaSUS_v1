@@ -10,7 +10,7 @@ keep SHE exclusions out of the EFG admission surface.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Iterable, Literal
 
 from pegasus.core.hashing import content_hash
@@ -155,7 +155,6 @@ def classify_substrate_candidate_kind(candidate: SubstrateFieldCandidate) -> Lit
     aggregation law and role.  It never makes epidemiological ratio claims.
     """
 
-    roles = set(str(role) for role in candidate.role)
     unit = str(candidate.unit)
     aggregation = str(candidate.aggregation)
     if _is_diagnostic_candidate(candidate):
@@ -225,11 +224,11 @@ def materialize_candidate_field(candidate: SubstrateFieldCandidate) -> Substrate
         name=candidate.technical_name,
         kind=kind,
         carrier=str(candidate.carrier),
-        unit=str(candidate.unit),
+        unit=unit,
         support=support_from_substrate_candidate(candidate),
         axes=dict(candidate.axes),
         aggregation=aggregation,
-        role=_unique([*candidate.role, "source_field", "substrate_materialized"]),
+        role=role,
         source=_unique([candidate.source_system, candidate.artifact_path, candidate.column]),
         operator="she_substrate_materialization",
         provenance=_unique([*candidate.provenance, "SHE_SubstrateBundle"]),

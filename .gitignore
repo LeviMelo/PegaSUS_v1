@@ -52,3 +52,5 @@ data/diagnostics/**
 
 #CBL
 .codecontext/
+TDD.md
+MSD.md

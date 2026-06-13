@@ -1101,3 +1101,29 @@ def pirs_inspect_design_readiness(
         }
     )
 # ---- End Slice 16E PIRS planning CLI boundary ----
+
+# ---- Slice 17B PIRS model execution CLI boundary ----
+@pirs_app.command("execute-model")
+def pirs_execute_model(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    design_matrix_manifest: Path | None = typer.Option(None, "--design-matrix-manifest"),
+    output_manifest: Path | None = typer.Option(None, "--output-manifest"),
+    mutate_output_bundle: bool = typer.Option(True, "--mutate-output-bundle/--no-mutate-output-bundle"),
+    validate: bool = typer.Option(True, "--validate/--no-validate"),
+    attach: bool = typer.Option(True, "--attach/--no-attach"),
+) -> None:
+    """Execute PIRS model fitting from a ready design matrix and materialize residual artifacts."""
+    from pegasus.workflows.pirs_execute import run_execute_pirs_model
+
+    _pirs_cli_print(run_execute_pirs_model(run_dir=run_dir, design_matrix_manifest=design_matrix_manifest, output_manifest=output_manifest, mutate_output_bundle=mutate_output_bundle, validate=validate, attach=attach))
+
+
+@pirs_app.command("inspect-model-execution")
+def pirs_inspect_model_execution(
+    manifest: Path = typer.Option(..., "--manifest"),
+) -> None:
+    """Read an existing PIRS model-execution manifest without mutating a run."""
+    from pegasus.pirs.model_execution import inspect_pirs_model_execution_manifest
+
+    _pirs_cli_print(inspect_pirs_model_execution_manifest(manifest))
+# ---- End Slice 17B PIRS model execution CLI boundary ----

@@ -349,7 +349,6 @@ import json
 from pathlib import Path
 
 FORBIDDEN_ARCHITECTURE_VALUES = {
-    "legacy_bootstrap",
     "compatibility_materializer",
     "pegasus.workflows.efg.run_build_sim_fixture",
 }
@@ -450,7 +449,8 @@ def test_slice26a_architecture_quarantines_legacy_runtime_authority() -> None:
     assert metadata["numerical_materialization"] == "autonomous_compiler_services"
     assert metadata["legacy_bootstrap_status"] == "quarantined_fixture_only"
     assert metadata["legacy_graph_authority"] is False
-    assert "legacy_bootstrap" not in str(metadata)
+    assert metadata["numerical_materialization"] != "legacy_bootstrap"
+    assert metadata["legacy_bootstrap_builder"] is None
     assert "pegasus.workflows.efg.run_build_sim_fixture" not in str(metadata)
 
 

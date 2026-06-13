@@ -18,7 +18,9 @@ def test_slice25a_compiler_declares_autonomous_authority_and_level3_fixture_stat
     assert result["validation"].ok, result["validation"].errors
     architecture = result["compiler_architecture"]
     assert architecture["graph_authority"] == "autonomous_efg_core"
-    assert architecture["legacy_bootstrap_status"] == "compatibility_materializer"
+    assert architecture["legacy_bootstrap_status"] == "quarantined_fixture_only"
+    assert architecture["numerical_materialization"] == "autonomous_compiler_services"
+    assert architecture.get("legacy_bootstrap_builder") is None
     assert architecture["legacy_graph_authority"] is False
 
     run_config = json.loads((run_dir / "RunConfig.json").read_text(encoding="utf-8"))

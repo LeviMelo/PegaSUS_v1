@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 FORBIDDEN_ARCHITECTURE_VALUES = {
-    "legacy_bootstrap",
     "compatibility_materializer",
     "pegasus.workflows.efg.run_build_sim_fixture",
 }
@@ -58,6 +57,12 @@ def main() -> int:
             errors.append(f"required autonomous architecture token missing: {token}")
     if metadata.get("legacy_graph_authority") is not False:
         errors.append("legacy_graph_authority must be False")
+    if metadata.get("numerical_materialization") == "legacy_bootstrap":
+        errors.append("numerical_materialization must not be legacy_bootstrap")
+    if metadata.get("legacy_bootstrap_builder") not in {None, ""}:
+        errors.append("legacy_bootstrap_builder must be None/empty in quarantined architecture")
+    if metadata.get("legacy_bootstrap_status") != "quarantined_fixture_only":
+        errors.append("legacy_bootstrap_status must be quarantined_fixture_only")
     if not Path("src/pegasus/workflows/stage_plan.py").exists():
         errors.append("stage_plan workflow module missing")
     contracts_text = Path("src/pegasus/acceptance/contracts.py").read_text(encoding="utf-8")

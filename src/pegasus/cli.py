@@ -794,3 +794,82 @@ def efg_inspect_materialization_manifest(
         }
     print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False))
 # ---- End Slice 14C EFG materialization CLI boundary ----
+
+# ---- Slice 15D EFG promotion CLI boundary ----
+@efg_app.command("plan-promotion")
+def efg_plan_promotion(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    materialization_manifest: Path = typer.Option(..., "--materialization-manifest"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    """Build a non-mutating EFG promotion plan from a materialization manifest."""
+    import json
+
+    from pegasus.workflows.efg_promotion import run_plan_efg_promotion
+
+    payload = run_plan_efg_promotion(
+        run_dir=run_dir,
+        materialization_manifest=materialization_manifest,
+        output=output,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, default=str))
+
+
+@efg_app.command("attach-promotion-plan")
+def efg_attach_promotion_plan(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    materialization_manifest: Path | None = typer.Option(None, "--materialization-manifest"),
+) -> None:
+    """Attach a non-mutating EFG promotion plan and gate summary to a run bundle."""
+    import json
+
+    from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run
+
+    payload = run_attach_efg_promotion_plan_to_run(
+        run_dir=run_dir,
+        materialization_manifest=materialization_manifest,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, default=str))
+
+
+@efg_app.command("apply-promotion-plan")
+def efg_apply_promotion_plan(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    promotion_plan: Path | None = typer.Option(None, "--promotion-plan"),
+    validate: bool = typer.Option(True, "--validate/--no-validate"),
+) -> None:
+    """Apply planned EFG promotions to descriptive/quarantined bundle surfaces."""
+    import json
+
+    from pegasus.workflows.efg_apply import run_apply_efg_promotion_plan
+
+    payload = run_apply_efg_promotion_plan(
+        run_dir=run_dir,
+        promotion_plan=promotion_plan,
+        validate=validate,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, default=str))
+
+
+@efg_app.command("inspect-promotion-plan")
+def efg_inspect_promotion_plan(
+    plan: Path = typer.Option(..., "--plan"),
+) -> None:
+    """Inspect an EFG promotion plan without mutating a run bundle."""
+    import json
+
+    payload = json.loads(plan.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise typer.BadParameter(f"EFG promotion plan is not a JSON object: {plan}")
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        summary = {
+            "status": payload.get("status", "evaluated"),
+            "promotion_plan_id": payload.get("promotion_plan_id"),
+            "planned_promotion_count": payload.get("planned_promotion_count"),
+            "conflict_count": payload.get("conflict_count"),
+            "excluded_source_field_count": payload.get("excluded_source_field_count"),
+            "mutates_v_fields": payload.get("mutates_v_fields", False),
+        }
+    print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False, default=str))
+# ---- End Slice 15D EFG promotion CLI boundary ----

@@ -6,10 +6,11 @@ from pegasus.sidra.projection import load_projection_matrix, projection_metadata
 from pegasus.sidra.regime import classify_sidra_context_regime
 from pegasus.sidra.stitching import SIDRASegment, stitch_sidra_longitudinal_segments
 from pegasus.she.high_dimensional import HighDimensionalExposureError, bound_high_dimensional_sidra_exposure, require_bounded_pushforward
+from pegasus.she.stdfm.artifacts import materialize_stdfm_fit
 from pegasus.she.stdfm.blocked import blocked_solver_pending
 from pegasus.she.stdfm.certification import STDFMCertificationError, assert_verified_promotion_allowed, blocked_certification_row
 from pegasus.she.stdfm.objective import stdfm_objective_pseudocode_contract
-from pegasus.she.stdfm.schema import build_stdfm_input_schema
+from pegasus.she.stdfm.schema import STDFMFitResult, STDFMProblem, build_stdfm_input_schema
 from pegasus.she.stdfm.torch_solver import solve_stdfm
 
 
@@ -91,3 +92,104 @@ def test_stdfm_certification_blocks_verified_promotion_without_certification() -
     contract = stdfm_objective_pseudocode_contract()
     assert "Y" in contract["inputs"]
     assert "blocked_solver_pending" in contract["warnings"]
+
+
+def _numerical_input(*, localities: int = 1, periods: int = 6):
+    return build_stdfm_input_schema(
+        field_id="stdfm_numeric",
+        concept_id="synthetic_low_rank",
+        support={"years": list(range(2018, 2018 + periods))},
+        periods=[str(year) for year in range(2018, 2018 + periods)],
+        localities=[str(index) for index in range(localities)],
+        transform="identity",
+        dynamics="continuous",
+        projection_matrix_id=None,
+        stitch_metadata={"status": "single_segment"},
+    )
+
+
+def test_stdfm_fits_masked_low_rank_factor_and_identified_loadings() -> None:
+    values = (1.0, 2.0, 2.0, 4.0, 999999.0, 6.0, 4.0, 8.0, 5.0, 10.0, 6.0, 12.0)
+    mask = (True, True, True, True, False, True, True, True, True, True, True, True)
+    problem = STDFMProblem(
+        field_ids=("a", "b"),
+        shape=(1, 6, 2),
+        observations=values,
+        observed_mask=mask,
+        validation_mask=(False,) * 8 + (True, True) + (False, False),
+        link_function_by_field=("identity", "identity"),
+        n_factors=1,
+        gamma_temporal=0.1,
+        gamma_transition=0.1,
+        gamma_spatial=0.0,
+        multi_starts=2,
+        seed=7,
+    )
+    result = solve_stdfm(_numerical_input(), problem=problem, allow_uncertified=True, max_iterations=1500)
+    assert isinstance(result, STDFMFitResult)
+    assert result.output.status in {"verified", "uncertified"}
+    assert result.telemetry.converged is True
+    assert result.loadings[0] > 0
+    assert result.reconstructed[8] == pytest.approx(5.0, rel=0.15)
+    assert result.reconstructed[9] == pytest.approx(10.0, rel=0.15)
+    assert result.reconstructed[4] < 20.0
+    assert result.certification["status"] == "verified"
+    assert result.certification["mape_holdout"] < 0.15
+
+
+def test_stdfm_masked_placeholders_do_not_change_fit() -> None:
+    base = dict(
+        field_ids=("a",),
+        shape=(1, 5, 1),
+        observed_mask=(True, True, False, True, True),
+        link_function_by_field=("identity",),
+        gamma_temporal=0.1,
+        gamma_transition=0.1,
+        gamma_spatial=0.0,
+        multi_starts=1,
+        seed=9,
+    )
+    first = solve_stdfm(_numerical_input(periods=5), problem=STDFMProblem(observations=(1.0, 2.0, -1e9, 4.0, 5.0), **base), allow_uncertified=True)
+    second = solve_stdfm(_numerical_input(periods=5), problem=STDFMProblem(observations=(1.0, 2.0, 1e9, 4.0, 5.0), **base), allow_uncertified=True)
+    assert isinstance(first, STDFMFitResult) and isinstance(second, STDFMFitResult)
+    assert first.reconstructed == pytest.approx(second.reconstructed, abs=1e-9)
+
+
+def test_stdfm_spatial_laplacian_enters_objective() -> None:
+    problem = STDFMProblem(
+        field_ids=("a",),
+        shape=(2, 4, 1),
+        observations=(1.0, 2.0, 3.0, 4.0, 4.0, 3.0, 2.0, 1.0),
+        observed_mask=(True,) * 8,
+        link_function_by_field=("identity",),
+        spatial_laplacian=(1.0, -1.0, -1.0, 1.0),
+        gamma_spatial=1.0,
+        multi_starts=1,
+        seed=11,
+    )
+    result = solve_stdfm(_numerical_input(localities=2, periods=4), problem=problem, allow_uncertified=True)
+    assert isinstance(result, STDFMFitResult)
+    assert result.telemetry.objective_terms["spatial"] >= 0.0
+
+
+def test_stdfm_materializes_typed_artifacts(tmp_path) -> None:
+    problem = STDFMProblem(
+        field_ids=("a",),
+        shape=(1, 4, 1),
+        observations=(1.0, 2.0, 3.0, 4.0),
+        observed_mask=(True, True, True, True),
+        link_function_by_field=("identity",),
+        multi_starts=1,
+    )
+    result = solve_stdfm(_numerical_input(periods=4), problem=problem, allow_uncertified=True)
+    assert isinstance(result, STDFMFitResult)
+    materialized = materialize_stdfm_fit(result, problem, output_dir=tmp_path)
+    for path in (
+        materialized.output.latent_factor_path,
+        materialized.output.loading_matrix_path,
+        materialized.output.reconstructed_fields_path,
+        materialized.output.certification_table_path,
+        materialized.output.uncertainty_path,
+    ):
+        assert path is not None
+        assert Path(path).exists()

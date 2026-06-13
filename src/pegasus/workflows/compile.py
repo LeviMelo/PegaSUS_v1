@@ -166,6 +166,20 @@ def _compile_population_tensor_mode(intent: UserIntent) -> str | None:
         return "sim_informed_denominator"
     return None
 
+
+def _compiler_architecture_metadata() -> dict[str, Any]:
+    return {
+        "schema_version": "25A.1",
+        "graph_authority": "autonomous_efg_core",
+        "graph_builder": "pegasus.efg.dag.build_efg",
+        "numerical_materialization": "legacy_bootstrap",
+        "legacy_bootstrap_builder": "pegasus.workflows.efg.run_build_sim_fixture",
+        "legacy_bootstrap_status": "compatibility_materializer",
+        "legacy_graph_authority": False,
+        "migration_target": "autonomous_efg_numerical_materializer",
+    }
+
+
 def _run_compile_impl(
     *,
     intent_path: str | Path,
@@ -189,6 +203,7 @@ def _run_compile_impl(
     municipality_cod6 = _smoke_municipality_cod6(intent)
     include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
     population_tensor_mode = _compile_population_tensor_mode(intent)
+    compiler_architecture = _compiler_architecture_metadata()
 
     try:
         race_bridge_plan = resolve_race_bridge_plan(intent=intent, municipality_cod6=municipality_cod6)
@@ -439,10 +454,18 @@ def _run_compile_impl(
     telemetry.set_stage("geo_support", "success", 0.0)
     telemetry.set_stage("q_tensor", "success", 0.0)
     if population_tensor_metadata is None:
-        telemetry.block("population_solver", reason="official SIDRA anchor smoke path; tensor solver scaffold remains blocked")
-    telemetry.block("stdfm", reason="ST-DFM scaffold remains blocked for compile smoke")
-    telemetry.block("pirs_model", reason="PIRS model stage is not invoked in compile smoke")
-    telemetry.block("pirs_hsic", reason="PIRS HSIC stage is not invoked in compile smoke")
+        telemetry.set_stage("population_solver", "skipped", 0.0)
+    telemetry.set_stage("stdfm", "skipped", 0.0)
+    telemetry.set_stage("pirs_model", "skipped", 0.0)
+    telemetry.set_stage("pirs_hsic", "skipped", 0.0)
+    skipped_reasons = {
+        "stdfm": "compile smoke intent does not request latent-factor fitting",
+        "pirs_model": "compile smoke intent does not request parametric inference",
+        "pirs_hsic": "compile smoke intent does not request HSIC inference",
+    }
+    if population_tensor_metadata is None:
+        skipped_reasons["population_solver"] = "official SIDRA anchor selected by intent"
+    telemetry.resource_summary["skipped_reasons"] = skipped_reasons
     telemetry.flush()
 
     with telemetry.stage("output_serialization"):
@@ -467,6 +490,7 @@ def _run_compile_impl(
             "population_mode": intent.population_mode,
             "race_tensor_mode": intent.race_tensor_mode,
             "race_bridge_plan": race_bridge_plan.as_manifest(),
+            "compiler_architecture": compiler_architecture,
             "registry_hashes": registry_hashes,
             "source_hashes": source_hashes,
         }
@@ -503,6 +527,7 @@ def _run_compile_impl(
             "maternal_child_linkage": True,
             "race_bridge_plan": race_bridge_plan.as_manifest(),
             "context_policy": intent.context_policy,
+            "compiler_architecture": compiler_architecture,
         }
         if race_bridge_metadata is not None:
             manifest_extras["race_bridge"] = race_bridge_metadata
@@ -534,6 +559,7 @@ def _run_compile_impl(
         "maternal_child_linkage": True,
         "race_bridge_plan": race_bridge_plan.as_manifest(),
         "context_policy": intent.context_policy,
+        "compiler_architecture": compiler_architecture,
     }
     if race_bridge_metadata is not None:
         final_extras["race_bridge"] = race_bridge_metadata
@@ -569,6 +595,7 @@ def _run_compile_impl(
         "cnes_sih": cnes_sih_metadata,
         "population_tensor": population_tensor_metadata,
         "autonomous_efg": autonomous_efg_metadata,
+        "compiler_architecture": compiler_architecture,
     }
 
 # ---- Slice 13C compile/substrate contract consolidation ----

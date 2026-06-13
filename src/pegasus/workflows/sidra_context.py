@@ -4,11 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pegasus.output.sidra_stdfm_bundle import build_sidra_stdfm_fixture_bundle
+from pegasus.output.sidra_stdfm_bundle import build_sidra_stdfm_fixture_bundle, solve_sidra_stdfm_fixture
 from pegasus.sidra.projection import load_projection_matrix, projection_metadata
 from pegasus.sidra.stitching import SIDRASegment, stitch_sidra_longitudinal_segments
 from pegasus.she.high_dimensional import bound_high_dimensional_sidra_exposure
-from pegasus.she.stdfm.blocked import blocked_solver_pending
 
 
 def run_sidra_context_plan_fixture(*, input_path: str | Path) -> dict[str, Any]:
@@ -23,14 +22,14 @@ def run_sidra_context_plan_fixture(*, input_path: str | Path) -> dict[str, Any]:
         aggregation=payload["high_dimensional"].get("aggregation", "additive"),
         high_dimensional=True,
     )
-    stdfm = blocked_solver_pending(field_id="sidra_stdfm_blocked_candidate")
+    _, _, stdfm = solve_sidra_stdfm_fixture(payload)
     return {
         "segments": len(stitch.segment_provenance),
         "stitch_status": stitch.status,
         "projection_status": projection["status"],
         "projection_warnings": projection["warnings"],
         "high_dimensional_status": bound.status,
-        "stdfm_status": stdfm.status,
+        "stdfm_status": stdfm.output.status,
     }
 
 

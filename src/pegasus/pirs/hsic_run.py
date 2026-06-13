@@ -10,6 +10,7 @@ re-run EFG materialization, or mutate compile semantics.
 from __future__ import annotations
 
 import json
+import random
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -174,7 +175,22 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
         warnings.append("hsic_disabled_insufficient_support")
     else:
         statistic = float(linear_hsic_statistic([float(v) for v in covariate[:n_eff]], [float(v) for v in residuals[:n_eff]]))
-        p_value = float(permutation_p_value(statistic=statistic, permutations=permutations, n_eff=n_eff))
+        rng = random.Random(seed)
+        null_statistics: list[float] = []
+        residual_values = [float(v) for v in residuals[:n_eff]]
+        covariate_values = [float(v) for v in covariate[:n_eff]]
+        for _ in range(max(int(permutations), 1)):
+            shuffled = residual_values[:]
+            rng.shuffle(shuffled)
+            null_statistics.append(linear_hsic_statistic(covariate_values, shuffled))
+        p_value = float(
+            permutation_p_value(
+                statistic=statistic,
+                permutations=permutations,
+                n_eff=n_eff,
+                null_statistics=null_statistics,
+            )
+        )
         if n_eff < 100:
             state = "fragile"
             warnings.append("hsic_descriptive_small_support")

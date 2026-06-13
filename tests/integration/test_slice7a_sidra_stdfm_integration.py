@@ -32,7 +32,7 @@ def test_slice7a_plan_reports_stitch_projection_highdim_and_stdfm() -> None:
     assert result["projection_status"] == "projected"
     assert "sidra_fractional_classification_projection" in result["projection_warnings"]
     assert result["high_dimensional_status"] == "bounded"
-    assert result["stdfm_status"] == "blocked_solver_pending"
+    assert result["stdfm_status"] == "uncertified"
 
 
 def test_slice7a_bundle_validates_and_preserves_sidra_stdfm_contracts(tmp_path: Path) -> None:
@@ -46,7 +46,7 @@ def test_slice7a_bundle_validates_and_preserves_sidra_stdfm_contracts(tmp_path: 
     assert "sidra_stitched_gdp_context" in ids
     assert "sidra_projected_labor_context" in ids
     assert "sidra_highdim_bounded_context" in ids
-    assert "sidra_stdfm_blocked_candidate" in ids
+    assert "sidra_stdfm_candidate" in ids
 
     by_id = {row["field_id"]: row for row in v}
     projected_meta = _field_metadata(by_id["sidra_projected_labor_context"])
@@ -57,27 +57,32 @@ def test_slice7a_bundle_validates_and_preserves_sidra_stdfm_contracts(tmp_path: 
     assert highdim_meta["high_dimensional_bound"]["status"] == "bounded"
     assert "occupation" in highdim_meta["high_dimensional_bound"]["axes_dropped"]
 
-    stdfm = by_id["sidra_stdfm_blocked_candidate"]
-    assert stdfm["state"] == "blocked"
+    stdfm = by_id["sidra_stdfm_candidate"]
+    assert stdfm["state"] == "fragile"
     assert str(stdfm["dashboard_safe"]) == "False"
     stdfm_meta = _field_metadata(stdfm)
-    assert stdfm_meta["stdfm_output"]["status"] == "blocked_solver_pending"
+    assert stdfm_meta["stdfm_output"]["status"] == "uncertified"
+    assert stdfm_meta["stdfm_output"]["telemetry"]["converged"] is True
 
     warnings = pl.read_parquet(run_dir / "Warnings.parquet").to_dicts()
     codes = {row["code"] for row in warnings}
     assert "sidra_stitch_segment_provenance" in codes
     assert "sidra_fractional_classification_projection" in codes
     assert "high_dimensional_bounded_pushforward" in codes
-    assert "blocked_solver_pending" in codes
+    assert "stdfm_certification_required" in codes
 
     failed = pl.read_parquet(run_dir / "FailedBranches.parquet").to_dicts()
     reasons = "\n".join(row["reason"] for row in failed)
     assert "bounded pushforward" in reasons
-    assert "blocked_solver_pending" in reasons
+    assert "blocked_solver_pending" not in reasons
 
     manifest = json.loads((run_dir / "ReproducibilityManifest.json").read_text(encoding="utf-8"))
-    assert manifest["sidra_context"]["stdfm_output"]["status"] == "blocked_solver_pending"
+    assert manifest["sidra_context"]["stdfm_output"]["status"] == "uncertified"
     assert (run_dir / "Tables" / "sidra_stitching_segments.parquet").exists()
     assert (run_dir / "Tables" / "sidra_projection_matrix.parquet").exists()
     assert (run_dir / "Tables" / "sidra_high_dimensional_bounds.parquet").exists()
     assert (run_dir / "Tables" / "stdfm_certification.parquet").exists()
+    assert (run_dir / "Tables" / "stdfm_latent_factors.parquet").exists()
+    assert (run_dir / "Tables" / "stdfm_loadings.parquet").exists()
+    assert (run_dir / "Tables" / "stdfm_reconstructed_fields.parquet").exists()
+    assert (run_dir / "Tables" / "stdfm_uncertainty.parquet").exists()

@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import polars as pl
+
+from pegasus.she.stdfm.schema import STDFMFitResult, STDFMProblem
+
+
+def materialize_stdfm_fit(
+    result: STDFMFitResult,
+    problem: STDFMProblem,
+    *,
+    output_dir: str | Path,
+) -> STDFMFitResult:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    space, time, fields = problem.shape
+    factors = problem.n_factors
+    factor_path = output_dir / "stdfm_latent_factors.parquet"
+    loading_path = output_dir / "stdfm_loadings.parquet"
+    reconstruction_path = output_dir / "stdfm_reconstructed_fields.parquet"
+    uncertainty_path = output_dir / "stdfm_uncertainty.parquet"
+    certification_path = output_dir / "stdfm_certification.parquet"
+
+    pl.DataFrame(
+        [
+            {
+                "space_index": s,
+                "time_index": t,
+                "factor_index": k,
+                "value": result.latent_factors[(s * time + t) * factors + k],
+            }
+            for s in range(space)
+            for t in range(time)
+            for k in range(factors)
+        ]
+    ).write_parquet(factor_path)
+    pl.DataFrame(
+        [
+            {
+                "field_id": problem.field_ids[q],
+                "factor_index": k,
+                "loading": result.loadings[q * factors + k],
+            }
+            for q in range(fields)
+            for k in range(factors)
+        ]
+    ).write_parquet(loading_path)
+    rows = [
+        {
+            "space_index": s,
+            "time_index": t,
+            "field_id": problem.field_ids[q],
+            "observed": problem.observed_mask[(s * time + t) * fields + q],
+            "reconstructed": result.reconstructed[(s * time + t) * fields + q],
+        }
+        for s in range(space)
+        for t in range(time)
+        for q in range(fields)
+    ]
+    pl.DataFrame(rows).write_parquet(reconstruction_path)
+    pl.DataFrame(
+        [dict(row, uncertainty=result.uncertainty[index]) for index, row in enumerate(rows)]
+    ).write_parquet(uncertainty_path)
+    pl.DataFrame([result.certification]).write_parquet(certification_path)
+
+    output = replace(
+        result.output,
+        latent_factor_path=str(factor_path),
+        loading_matrix_path=str(loading_path),
+        reconstructed_fields_path=str(reconstruction_path),
+        certification_table_path=str(certification_path),
+        uncertainty_path=str(uncertainty_path),
+    )
+    return replace(result, output=output)

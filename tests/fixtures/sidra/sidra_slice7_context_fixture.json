@@ -1,5 +1,17 @@
 {
   "localities": ["2704302"],
+  "stdfm": {
+    "field_ids": ["municipal_gdp_index"],
+    "observations": [1.0, null, 3.0, 4.0],
+    "observed_mask": [true, false, true, true],
+    "link_function_by_field": ["identity"],
+    "n_factors": 1,
+    "gamma_temporal": 0.1,
+    "gamma_transition": 0.1,
+    "gamma_spatial": 0.0,
+    "multi_starts": 2,
+    "seed": 23
+  },
   "stitching": {
     "segments": [
       {

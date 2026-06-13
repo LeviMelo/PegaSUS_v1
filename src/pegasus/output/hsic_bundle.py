@@ -55,6 +55,8 @@ def _support(payload: dict[str, Any]) -> dict[str, Any]:
         "n_denom": n,
         "n_eff": float(n),
         "temporal_resolution": payload.get("panel_type", "annual_municipal_panel"),
+        "panel_shape": [len(municipalities), len(years)],
+        "spatial_blocks": municipalities,
     }
 
 
@@ -174,8 +176,9 @@ def _load_fixture(input_path: str | Path) -> dict[str, Any]:
 
 
 def _vectors(payload: dict[str, Any]) -> tuple[list[float], list[float]]:
-    residuals = [float(row["residual"]) for row in payload["observations"]]
-    covariate = [float(row["covariate"]) for row in payload["observations"]]
+    rows = sorted(payload["observations"], key=lambda row: (str(row["municipality_cod6"]), int(row["year"])))
+    residuals = [float(row["residual"]) for row in rows]
+    covariate = [float(row["covariate"]) for row in rows]
     return residuals, covariate
 
 

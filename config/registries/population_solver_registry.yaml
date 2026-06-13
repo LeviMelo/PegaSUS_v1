@@ -1,12 +1,41 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for population_solver_registry.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 22A population solver registry.
 entries:
-- id: population_solver_registry
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: projected_gradient_small_v1
+  description: Analytic projected-gradient optimizer for small independent population tensors.
+  mode: independent_denominator
+  backend: projected_gradient_small_sparse_analytic
+  status: active
+  sparse_jacobian: true
+  max_cells: 10000000
+  warnings: []
+- id: projected_gradient_small_sim_informed_v1
+  description: Analytic projected-gradient optimizer with an explicit SIM death-prior term and feedback warning.
+  mode: sim_informed_denominator
+  backend: projected_gradient_small_sparse_analytic
+  status: active_warning
+  sparse_jacobian: true
+  max_cells: 10000000
   warnings:
-  - scaffold_only
+  - sim_informed_population_feedback_risk
+- id: independent_sidra_anchor_v1
+  description: Legacy identity path retained only for reproducibility of earlier runs.
+  mode: independent_denominator
+  backend: algebraic_sidra_anchor_identity
+  status: legacy_identity
+  sparse_jacobian: true
+  max_cells: 10000000
+  warnings:
+  - legacy_identity_solver
+- id: sim_informed_sparse_admm_scaffold_v1
+  description: Legacy warning scaffold retained only for reproducibility of earlier runs.
+  mode: sim_informed_denominator
+  backend: sparse_admm_scaffold_blocked_feedback
+  status: legacy_warning_scaffold
+  sparse_jacobian: true
+  max_cells: 10000000
+  warnings:
+  - sim_informed_population_feedback_risk

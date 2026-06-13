@@ -10,6 +10,68 @@ from pegasus.core.schemas import DenominatorContract
 PopulationTensorMode = Literal["independent_denominator", "sim_informed_denominator"]
 
 
+@dataclass(frozen=True)
+class PopulationObjectiveWeights:
+    anchor: float = 10.0
+    aging: float = 1.0
+    birth: float = 1.0
+    death: float = 0.0
+    migration: float = 0.1
+    race: float = 0.0
+    age_smooth: float = 0.05
+
+
+@dataclass(frozen=True)
+class PopulationTensorProblem:
+    """Typed population objective over (locality, time, age, sex, race)."""
+
+    shape: tuple[int, int, int, int, int]
+    anchors: tuple[float | None, ...]
+    mode: PopulationTensorMode = "independent_denominator"
+    hard_anchor_mask: tuple[bool, ...] | None = None
+    births: tuple[float | None, ...] | None = None
+    death_rates: tuple[float | None, ...] | None = None
+    sim_deaths: tuple[float | None, ...] | None = None
+    race_composition_prior: tuple[float | None, ...] | None = None
+    closure_totals: tuple[float | None, ...] | None = None
+    migration_totals: tuple[float | None, ...] | None = None
+    migration_bounds: tuple[float, ...] | None = None
+    initial_population: tuple[float, ...] | None = None
+    initial_migration: tuple[float, ...] | None = None
+    weights: PopulationObjectiveWeights = field(default_factory=PopulationObjectiveWeights)
+
+    @property
+    def n_cells(self) -> int:
+        result = 1
+        for dimension in self.shape:
+            result *= dimension
+        return result
+
+
+@dataclass(frozen=True)
+class PopulationSolverTelemetry:
+    converged: bool
+    iterations: int
+    initial_objective: float
+    final_objective: float
+    projected_gradient_norm: float
+    relative_objective_change: float
+    step_size: float
+    objective_terms: dict[str, float] = field(default_factory=dict)
+
+    def as_manifest(self) -> dict[str, Any]:
+        return {
+            "converged": self.converged,
+            "iterations": self.iterations,
+            "initial_objective": self.initial_objective,
+            "final_objective": self.final_objective,
+            "projected_gradient_norm": self.projected_gradient_norm,
+            "relative_objective_change": self.relative_objective_change,
+            "step_size": self.step_size,
+            "objective_terms": dict(self.objective_terms),
+        }
+
+
 def official_sidra_anchor_contract(
     *,
     source: str = "SIDRA",
@@ -72,6 +134,13 @@ class PopulationTensorDiagnostics:
     reconstruction_uncertainty: float
     denominator_feedback_warning: bool
     dense_abort_threshold: int
+    converged: bool = True
+    iterations: int = 0
+    initial_objective: float = 0.0
+    final_objective: float = 0.0
+    projected_gradient_norm: float = 0.0
+    relative_objective_change: float = 0.0
+    objective_terms: dict[str, float] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     def as_manifest(self) -> dict[str, Any]:
@@ -82,6 +151,13 @@ class PopulationTensorDiagnostics:
             "reconstruction_uncertainty": self.reconstruction_uncertainty,
             "denominator_feedback_warning": self.denominator_feedback_warning,
             "dense_abort_threshold": self.dense_abort_threshold,
+            "converged": self.converged,
+            "iterations": self.iterations,
+            "initial_objective": self.initial_objective,
+            "final_objective": self.final_objective,
+            "projected_gradient_norm": self.projected_gradient_norm,
+            "relative_objective_change": self.relative_objective_change,
+            "objective_terms": dict(self.objective_terms),
             "warnings": list(self.warnings),
         }
 
@@ -107,6 +183,9 @@ class PopulationTensorResult:
     state: str
     warnings: tuple[str, ...]
     diagnostics: PopulationTensorDiagnostics
+    tensor_shape: tuple[int, int, int, int, int] = (1, 1, 1, 1, 1)
+    tensor_values: tuple[float, ...] = field(default_factory=tuple)
+    migration_values: tuple[float, ...] = field(default_factory=tuple)
 
     def as_manifest(self) -> dict[str, Any]:
         return {
@@ -134,4 +213,7 @@ class PopulationTensorResult:
             "state": self.state,
             "warnings": list(self.warnings),
             "diagnostics": self.diagnostics.as_manifest(),
+            "tensor_shape": list(self.tensor_shape),
+            "tensor_values": list(self.tensor_values),
+            "migration_values": list(self.migration_values),
         }

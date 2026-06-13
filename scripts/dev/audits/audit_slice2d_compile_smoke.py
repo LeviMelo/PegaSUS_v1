@@ -22,7 +22,7 @@ REQUIRED_SUCCESS_STAGES = {
     "output_validation",
 }
 
-REQUIRED_BLOCKED_STAGES = {"population_solver", "stdfm", "pirs_model", "pirs_hsic"}
+REQUIRED_SKIPPED_STAGES = {"population_solver", "stdfm", "pirs_model", "pirs_hsic"}
 
 REQUIRED_SOURCE_HASHES = {
     "intent",
@@ -78,9 +78,9 @@ def main() -> None:
         if durations.get(stage, -1) < 0:
             failures.append({"kind": "telemetry_duration", "stage": stage, "actual": durations.get(stage)})
 
-    for stage in REQUIRED_BLOCKED_STAGES:
-        if statuses.get(stage) != "blocked":
-            failures.append({"kind": "telemetry_blocked_stage", "stage": stage, "actual": statuses.get(stage)})
+    for stage in REQUIRED_SKIPPED_STAGES:
+        if statuses.get(stage) != "skipped":
+            failures.append({"kind": "telemetry_skipped_stage", "stage": stage, "actual": statuses.get(stage)})
 
     source_hashes = manifest.get("source_hashes", {})
     missing_source_hashes = sorted(REQUIRED_SOURCE_HASHES - set(source_hashes))

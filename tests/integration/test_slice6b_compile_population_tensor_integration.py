@@ -53,7 +53,7 @@ def test_slice6b_compile_baseline_remains_official_anchor_without_population_ten
     assert not any(field_id.startswith("population_tensor_") for field_id in _field_ids(run_dir))
 
     manifest = _load_json(run_dir / "ReproducibilityManifest.json")
-    assert manifest["telemetry"]["stage_status"]["population_solver"] == "blocked"
+    assert manifest["telemetry"]["stage_status"]["population_solver"] == "skipped"
 
 
 def test_slice6b_compile_sim_informed_population_tensor_is_warning_only(tmp_path: Path) -> None:

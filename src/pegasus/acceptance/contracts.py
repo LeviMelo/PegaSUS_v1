@@ -8,6 +8,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from pegasus.core.hashing import sha256_file
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
 from pegasus.output.validate import validate_output_bundle
 
@@ -101,6 +102,27 @@ class AcceptanceRunSummary:
             "substrate_excluded_field_count": self.substrate_excluded_field_count,
             "substrate_registry_backed": self.substrate_registry_backed,
             "telemetry_stage_status": self.telemetry_stage_status,
+        }
+
+
+@dataclass(frozen=True)
+class Level3AcceptanceResult:
+    run_dir: str
+    status: str
+    ok: bool
+    production_candidate: bool
+    checks: dict[str, bool]
+    errors: tuple[str, ...]
+
+    def as_manifest(self) -> dict[str, Any]:
+        return {
+            "schema_version": "25A.1",
+            "run_dir": self.run_dir,
+            "status": self.status,
+            "ok": self.ok,
+            "production_candidate": self.production_candidate,
+            "checks": dict(self.checks),
+            "errors": list(self.errors),
         }
 
 
@@ -230,6 +252,67 @@ def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) ->
         substrate_excluded_field_count=substrate_excluded_field_count,
         substrate_registry_backed=substrate_registry_backed,
         telemetry_stage_status=dict(stage_status),
+    )
+
+
+def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
+    root = Path(run_dir)
+    summary = summarize_run(root, require_non_scaffold=True)
+    run_config = _load_json(root / "RunConfig.json")
+    architecture = run_config.get("compiler_architecture", {})
+    autonomous = run_config.get("autonomous_efg", {})
+    if not isinstance(architecture, dict):
+        architecture = {}
+    if not isinstance(autonomous, dict):
+        autonomous = {}
+
+    autonomous_manifest = root / str(autonomous.get("manifest_path", ""))
+    autonomous_manifest_valid = (
+        autonomous_manifest.is_file()
+        and bool(autonomous.get("manifest_hash"))
+        and sha256_file(autonomous_manifest) == autonomous.get("manifest_hash")
+    )
+    optional_stages = ("population_solver", "stdfm", "pirs_model", "pirs_hsic")
+    truthful_optional_stages = all(
+        summary.telemetry_stage_status.get(stage) in {"success", "skipped"}
+        for stage in optional_stages
+    )
+    checks = {
+        "output_bundle_valid": summary.ok,
+        "exact_first_class_keys": summary.first_class_keys == required_first_class_key_paths(),
+        "non_scaffold_numerical_bundle": summary.field_count > 1 and summary.q_count > 1,
+        "autonomous_graph_authority": (
+            architecture.get("graph_authority") == "autonomous_efg_core"
+            and autonomous.get("graph_authority") == "autonomous_efg_core"
+            and architecture.get("legacy_graph_authority") is False
+        ),
+        "autonomous_manifest_integrity": autonomous_manifest_valid,
+        "truthful_optional_stage_statuses": truthful_optional_stages,
+        "source_reality_declared": summary.compile_source_mode in {"fixture_only", "materialized_external"},
+    }
+    errors = list(summary.errors)
+    errors.extend(name for name, passed in checks.items() if not passed)
+    structural_ok = all(checks.values())
+    production_candidate = bool(
+        structural_ok
+        and summary.source_reality_production_candidate
+        and summary.compile_source_mode == "materialized_external"
+        and summary.substrate_present
+        and summary.substrate_registry_backed
+    )
+    if not structural_ok:
+        status = "failed"
+    elif production_candidate:
+        status = "production_candidate"
+    else:
+        status = "fixture_validated"
+    return Level3AcceptanceResult(
+        run_dir=str(root),
+        status=status,
+        ok=structural_ok,
+        production_candidate=production_candidate,
+        checks=checks,
+        errors=tuple(errors),
     )
 
 

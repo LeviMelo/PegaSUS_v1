@@ -54,3 +54,7 @@ data/diagnostics/**
 .codecontext/
 TDD.md
 MSD.md
+
+#Codex
+.codex-tmp/
+src/codebase_dump_src.txt

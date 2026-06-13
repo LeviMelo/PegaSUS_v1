@@ -28,18 +28,18 @@ def test_slice6a_population_tensor_bundle_validates_and_records_metadata(tmp_pat
 
     v = pl.read_parquet(run / "V_fields.parquet")
     names = set(v["name"].to_list())
-    assert "PopulationTensorOfficialSIDRAIndependent" in names
+    assert "PopulationTensorOptimizedIndependent" in names
     field = v.to_dicts()[0]
     support = json.loads(field["support_json"])
     assert support["PopulationTensorMode"] == "independent_denominator"
-    assert support["SolverBackend"] == "algebraic_sidra_anchor_identity"
+    assert support["SolverBackend"] == "projected_gradient_small_sparse_analytic"
     assert support["SparseJacobian"] is True
     assert support["DenominatorFeedbackWarning"] is False
     assert support["reconstruction_uncertainty"] == 0.0
 
     manifest = json.loads((run / "ReproducibilityManifest.json").read_text(encoding="utf-8"))
     assert manifest["population_tensor"]["PopulationTensorMode"] == "independent_denominator"
-    assert manifest["population_tensor"]["SolverBackend"] == "algebraic_sidra_anchor_identity"
+    assert manifest["population_tensor"]["SolverBackend"] == "projected_gradient_small_sparse_analytic"
     assert manifest["telemetry"]["stage_status"]["population_solver"] == "success"
 
     failed = set(pl.read_parquet(run / "FailedBranches.parquet")["failed_branch_id"].to_list())

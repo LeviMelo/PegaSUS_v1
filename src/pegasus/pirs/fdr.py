@@ -26,12 +26,22 @@ def correct_p_values(p_values: list[float | None], *, method: str) -> FDRResult:
     m = len(indexed)
     if m == 0:
         return FDRResult(method=method, q_values=q, diagnostics={"n_tests": 0})
-    factor = _harmonic(m) if method.upper() == "BY" else 1.0
+    normalized_method = method.upper().replace(" ", "_")
+    factor = _harmonic(m) if normalized_method == "BY" else 1.0
+    pi_zero = 1.0
+    if normalized_method in {"STOREY", "STOREY_Q"}:
+        lambda_value = 0.5
+        pi_zero = min(1.0, sum(p > lambda_value for _, p in indexed) / max(m * (1.0 - lambda_value), 1.0))
+        pi_zero = max(pi_zero, 1.0 / m)
     ordered = sorted(indexed, key=lambda item: item[1])
     prev = 1.0
     for rank_from_end, (idx, p) in enumerate(reversed(ordered), start=1):
         rank = m - rank_from_end + 1
-        val = min(prev, p * m * factor / rank)
+        val = min(prev, p * m * factor * pi_zero / rank)
         q[idx] = min(1.0, max(0.0, val))
         prev = q[idx] if q[idx] is not None else prev
-    return FDRResult(method=method, q_values=q, diagnostics={"n_tests": m, "dependency_factor": factor})
+    return FDRResult(
+        method=method,
+        q_values=q,
+        diagnostics={"n_tests": m, "dependency_factor": factor, "pi_zero": pi_zero},
+    )

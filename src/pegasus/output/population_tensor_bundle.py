@@ -68,7 +68,7 @@ def _field(result: PopulationTensorResult) -> dict[str, Any]:
     warnings = list(result.warnings)
     return {
         "field_id": f"population_tensor_{result.mode}",
-        "name": "PopulationTensorOfficialSIDRAIndependent" if result.mode == "independent_denominator" else "PopulationTensorSIMInformedWarningScaffold",
+        "name": "PopulationTensorOptimizedIndependent" if result.mode == "independent_denominator" else "PopulationTensorOptimizedSIMInformed",
         "kind": "latent_context" if result.mode == "sim_informed_denominator" else "extensive_measure",
         "carrier": "Population",
         "unit": result.unit,
@@ -79,7 +79,7 @@ def _field(result: PopulationTensorResult) -> dict[str, Any]:
         "role_json": _compact(role),
         "source": _compact(source),
         "source_json": _compact(source),
-        "operator": "PopulationTensor/IndependentSIDRAAnchor" if result.mode == "independent_denominator" else "PopulationTensor/SIMInformedWarningScaffold",
+        "operator": "PopulationTensor/ProjectedGradientSmall",
         "provenance": _compact(provenance),
         "provenance_json": _compact(provenance),
         "state": result.state,
@@ -128,9 +128,9 @@ def _vd_row(field: dict[str, Any], result: PopulationTensorResult) -> dict[str, 
     return {
         "field_id": field["field_id"],
         "name": field["name"],
-        "definition": "Population denominator tensor reconstructed from the official SIDRA 9606 total population anchor.",
+        "definition": "Population denominator tensor optimized under nonnegativity, closure, and registered demographic loss terms from an official SIDRA anchor.",
         "estimand": result.mode,
-        "interpretation_warning": "Independent denominator mode does not use SIM feedback." if result.mode == "independent_denominator" else "SIM-informed mode is warning-only until calibrated feedback uncertainty is implemented.",
+        "interpretation_warning": "Independent denominator mode fixes lambda_D=0 and does not use SIM feedback." if result.mode == "independent_denominator" else "SIM-informed mode requires feedback-risk handling; SIDRA-only requests record that the SIM prior was unavailable.",
         "unit": field["unit"],
         "source_system": "SIDRA",
         "carrier": field["carrier"],
@@ -161,7 +161,7 @@ def _warning_rows(field: dict[str, Any], result: PopulationTensorResult) -> list
                 "source": "population_tensor",
                 "severity": "warning",
                 "code": "sim_informed_population_feedback_risk",
-                "message": "SIM-informed denominator mode can feed numerator measurement noise back into denominator reconstruction; this slice emits warning metadata only.",
+                "message": "SIM-informed denominator mode can feed numerator measurement noise back into denominator reconstruction; this SIDRA-only request had no SIM death prior.",
                 "inherited_from_json": "[]",
                 "created_at": _now(),
             }

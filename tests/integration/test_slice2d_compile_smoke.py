@@ -21,7 +21,7 @@ REQUIRED_SUCCESS_STAGES = {
 }
 
 
-REQUIRED_BLOCKED_STAGES = {"population_solver", "stdfm", "pirs_model", "pirs_hsic"}
+REQUIRED_SKIPPED_STAGES = {"population_solver", "stdfm", "pirs_model", "pirs_hsic"}
 
 
 def test_compile_smoke_emits_valid_17_key_bundle_with_sidra_denominator(tmp_path: Path):
@@ -54,8 +54,8 @@ def test_compile_smoke_emits_valid_17_key_bundle_with_sidra_denominator(tmp_path
     for stage in REQUIRED_SUCCESS_STAGES:
         assert telemetry["stage_status"][stage] == "success", stage
         assert telemetry["stage_wall_seconds"][stage] >= 0, stage
-    for stage in REQUIRED_BLOCKED_STAGES:
-        assert telemetry["stage_status"][stage] == "blocked", stage
+    for stage in REQUIRED_SKIPPED_STAGES:
+        assert telemetry["stage_status"][stage] == "skipped", stage
 
     for key in ["intent", "compile_manifest", "sim_raw_fixture", "sim_processed_events", "sidra_facts"]:
         assert key in manifest["source_hashes"]

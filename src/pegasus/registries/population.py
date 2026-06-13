@@ -40,17 +40,34 @@ class PopulationSolverSpec:
         }
 
 
-SOLVER_REGISTRY_VERSION = "population_solver_registry_v1"
-DENSE_NATIONAL_CELL_THRESHOLD = 50_000
+SOLVER_REGISTRY_VERSION = "population_solver_registry_v2"
+DENSE_NATIONAL_CELL_THRESHOLD = 10_000_000
 
 POPULATION_SOLVERS: dict[str, PopulationSolverSpec] = {
+    "projected_gradient_small_v1": PopulationSolverSpec(
+        solver_id="projected_gradient_small_v1",
+        mode="independent_denominator",
+        backend="projected_gradient_small_sparse_analytic",
+        sparse_jacobian=True,
+        max_cells=DENSE_NATIONAL_CELL_THRESHOLD,
+        status="active",
+    ),
+    "projected_gradient_small_sim_informed_v1": PopulationSolverSpec(
+        solver_id="projected_gradient_small_sim_informed_v1",
+        mode="sim_informed_denominator",
+        backend="projected_gradient_small_sparse_analytic",
+        sparse_jacobian=True,
+        max_cells=DENSE_NATIONAL_CELL_THRESHOLD,
+        status="active_warning",
+        warning_code="sim_informed_population_feedback_risk",
+    ),
     "independent_sidra_anchor_v1": PopulationSolverSpec(
         solver_id="independent_sidra_anchor_v1",
         mode="independent_denominator",
         backend="algebraic_sidra_anchor_identity",
         sparse_jacobian=True,
         max_cells=DENSE_NATIONAL_CELL_THRESHOLD,
-        status="active",
+        status="legacy_identity",
     ),
     "sim_informed_sparse_admm_scaffold_v1": PopulationSolverSpec(
         solver_id="sim_informed_sparse_admm_scaffold_v1",
@@ -58,7 +75,7 @@ POPULATION_SOLVERS: dict[str, PopulationSolverSpec] = {
         backend="sparse_admm_scaffold_blocked_feedback",
         sparse_jacobian=True,
         max_cells=DENSE_NATIONAL_CELL_THRESHOLD,
-        status="warning_scaffold",
+        status="legacy_warning_scaffold",
         warning_code="sim_informed_population_feedback_risk",
     ),
 }
@@ -88,7 +105,7 @@ def select_population_solver(*, mode: str, solver_id: str | None = None) -> Popu
         return spec
 
     for spec in POPULATION_SOLVERS.values():
-        if spec.mode == mode:
+        if spec.mode == mode and spec.status.startswith("active"):
             return spec
     raise PopulationRegistryError(f"No population tensor solver registered for mode: {mode}")
 

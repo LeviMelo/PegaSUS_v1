@@ -15,10 +15,10 @@ from pegasus.output.reproducibility import COMPILE_TELEMETRY_STAGES
 from pegasus.sidra.projection import load_projection_matrix, projection_metadata
 from pegasus.sidra.stitching import SIDRASegment, stitch_sidra_longitudinal_segments
 from pegasus.she.high_dimensional import bound_high_dimensional_sidra_exposure
-from pegasus.she.stdfm.blocked import blocked_solver_pending
-from pegasus.she.stdfm.certification import blocked_certification_row
+from pegasus.she.stdfm.artifacts import materialize_stdfm_fit
 from pegasus.she.stdfm.objective import stdfm_objective_pseudocode_contract
-from pegasus.she.stdfm.schema import build_stdfm_input_schema
+from pegasus.she.stdfm.schema import STDFMFitResult, STDFMProblem, build_stdfm_input_schema
+from pegasus.she.stdfm.torch_solver import solve_stdfm
 
 
 def _now() -> str:
@@ -228,6 +228,60 @@ def _write_parquet_rows(path: Path, rows: list[dict[str, Any]]) -> None:
         pl.DataFrame([]).write_parquet(path)
 
 
+def solve_sidra_stdfm_fixture(payload: dict[str, Any]):
+    periods = sorted(
+        {
+            str(period)
+            for segment in payload["stitching"]["segments"]
+            for period in segment["periods"]
+        }
+    )
+    localities = [str(value) for value in payload.get("localities", ["2704302"])]
+    spec = payload["stdfm"]
+    field_ids = tuple(str(value) for value in spec["field_ids"])
+    raw_observations = spec["observations"]
+    observations = tuple(0.0 if value is None else float(value) for value in raw_observations)
+    input_schema = build_stdfm_input_schema(
+        field_id="sidra_stdfm_candidate",
+        concept_id="sidra_stdfm_context",
+        support=_support(periods, localities),
+        periods=periods,
+        localities=localities,
+        transform="mixed_registered",
+        dynamics="continuous",
+        projection_matrix_id=payload["projection"]["matrix_id"],
+        stitch_metadata={"status": "stitched"},
+        warnings=["stdfm_certification_required"],
+    )
+    problem = STDFMProblem(
+        field_ids=field_ids,
+        shape=(len(localities), len(periods), len(field_ids)),
+        observations=observations,
+        observed_mask=tuple(bool(value) for value in spec["observed_mask"]),
+        validation_mask=(
+            tuple(bool(value) for value in spec["validation_mask"])
+            if spec.get("validation_mask") is not None
+            else None
+        ),
+        link_function_by_field=tuple(str(value) for value in spec["link_function_by_field"]),
+        n_factors=int(spec.get("n_factors", 1)),
+        spatial_laplacian=(
+            tuple(float(value) for value in spec["spatial_laplacian"])
+            if spec.get("spatial_laplacian") is not None
+            else None
+        ),
+        gamma_temporal=float(spec.get("gamma_temporal", 0.1)),
+        gamma_spatial=float(spec.get("gamma_spatial", 0.1)),
+        gamma_transition=float(spec.get("gamma_transition", 0.1)),
+        multi_starts=int(spec.get("multi_starts", 3)),
+        seed=int(spec.get("seed", 1729)),
+    )
+    result = solve_stdfm(input_schema, problem=problem, allow_uncertified=True)
+    if not isinstance(result, STDFMFitResult):
+        raise RuntimeError(f"ST-DFM fixture unexpectedly blocked: {result.reason}")
+    return input_schema, problem, result
+
+
 def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | Path) -> Path:
     input_path = Path(input_path)
     run_dir = Path(run_dir)
@@ -250,20 +304,9 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
     base_support = _support(periods, localities)
     stitch_metadata = stitch.as_manifest()
 
-    stdfm_input = build_stdfm_input_schema(
-        field_id="sidra_stdfm_blocked_candidate",
-        concept_id=stitch.concept_id,
-        support=base_support,
-        periods=periods,
-        localities=localities,
-        transform="identity",
-        dynamics="continuous",
-        projection_matrix_id=projection_matrix.matrix_id,
-        stitch_metadata=stitch_metadata,
-        warnings=["stdfm_certification_required"],
-    )
-    stdfm_output = blocked_solver_pending(field_id=stdfm_input.field_id)
-    certification = blocked_certification_row(field_id=stdfm_input.field_id)
+    stdfm_input, stdfm_problem, stdfm_fit = solve_sidra_stdfm_fixture(payload)
+    stdfm_output = stdfm_fit.output
+    certification = stdfm_fit.certification
 
     fields: list[dict[str, Any]] = [
         _field(
@@ -325,7 +368,7 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
         ),
         _field(
             field_id=stdfm_input.field_id,
-            name="ST-DFM blocked latent reconstruction candidate",
+            name="ST-DFM latent reconstruction candidate",
             kind="latent_context",
             carrier="municipality_year_context",
             unit="index",
@@ -334,11 +377,11 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
             source=["SIDRA"],
             support=base_support,
             axes={"locality": "IBGE7", "time": "year", "latent_factor": "F"},
-            provenance=["SIDRA", "ST-DFM", "blocked_solver_pending"],
+            provenance=["SIDRA", "ST-DFM", stdfm_output.solver_backend],
             warnings=list(stdfm_output.warnings),
-            state="blocked",
+            state="verified" if stdfm_output.status == "verified" else "fragile",
             dashboard_safe=False,
-            materialization_state="blocked",
+            materialization_state="materialized",
             operator="ST-DFM",
             metadata={"stdfm_input": stdfm_input.as_manifest(), "stdfm_output": stdfm_output.as_manifest()},
         ),
@@ -354,13 +397,13 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
         _vd(fields[0], "SIDRA field stitched across table/variable segments with explicit segment provenance.", "stitched SIDRA contextual field", "Use with segment-provenance warning when table identity changes."),
         _vd(fields[1], "SIDRA field projected across classification axes with registered projection matrix.", "projected SIDRA contextual field", "Fractional projections are fragile unless externally validated."),
         _vd(fields[2], "High-dimensional SIDRA context exposed only after bounded pushforward.", "bounded high-dimensional context", "Dropped axes must remain visible in metadata."),
-        _vd(fields[3], "ST-DFM reconstruction candidate blocked pending solver calibration and certification.", "blocked latent reconstruction", "No direct fallback or verified promotion is allowed."),
+        _vd(fields[3], "ST-DFM latent reconstruction from masked SIDRA context observations.", "latent factor reconstruction", "Uncertified fits remain fragile and non-dashboard-safe."),
     ]
     warnings = [
         _warning("w_sidra_stitch", fields[0]["field_id"], "sidra_stitch_segment_provenance", "SIDRA stitching preserved table/variable segment provenance."),
         _warning("w_sidra_projection", fields[1]["field_id"], "sidra_fractional_classification_projection", "Fractional classification projection emits fragile state."),
         _warning("w_sidra_highdim", fields[2]["field_id"], "high_dimensional_bounded_pushforward", "High-dimensional SIDRA field was bounded before EFG exposure."),
-        _warning("w_stdfm_blocked", fields[3]["field_id"], "blocked_solver_pending", "ST-DFM candidate did not fall back to direct interpolation."),
+        _warning("w_stdfm_certification", fields[3]["field_id"], "stdfm_certification_required", "ST-DFM fit completed without independent holdout certification."),
     ]
     failed = [
         _failed(
@@ -369,13 +412,6 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
             [fields[2]["field_id"]],
             "High-dimensional SIDRA exposure without bounded pushforward is illegal.",
             ["high_dimensional_bounded_pushforward"],
-        ),
-        _failed(
-            "fb_stdfm_solver_pending",
-            "ST-DFM",
-            [fields[3]["field_id"]],
-            "ST-DFM solver pending emits blocked_solver_pending, not direct fallback.",
-            ["blocked_solver_pending", "stdfm_certification_required"],
         ),
     ]
 
@@ -392,7 +428,8 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
     _write_parquet_rows(tables / "sidra_stitching_segments.parquet", [dict(x) for x in stitch.segment_provenance])
     _write_parquet_rows(tables / "sidra_projection_matrix.parquet", projection_matrix.as_rows())
     _write_parquet_rows(tables / "sidra_high_dimensional_bounds.parquet", [high_dim.as_manifest()])
-    _write_parquet_rows(tables / "stdfm_certification.parquet", [certification.as_manifest()])
+    stdfm_fit = materialize_stdfm_fit(stdfm_fit, stdfm_problem, output_dir=tables)
+    stdfm_output = stdfm_fit.output
     _write_parquet_rows(
         tables / "stdfm_objective_contract.parquet",
         [{"contract_json": _json(stdfm_objective_pseudocode_contract())}],
@@ -404,12 +441,12 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
         if stage in stage_status:
             stage_status[stage] = "success"
     if "stdfm" in stage_status:
-        stage_status["stdfm"] = "blocked"
+        stage_status["stdfm"] = "success"
     telemetry = {
         "total_wall_seconds": 0.0,
         "stage_status": stage_status,
         "stage_wall_seconds": stage_wall_seconds,
-        "stage_errors": {"stdfm": "blocked_solver_pending"},
+        "stage_errors": {},
         "resource_summary": {
             "peak_rss_mb": None,
             "peak_vram_mb": None,
@@ -427,13 +464,17 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
         "high_dimensional_bound": high_dim.as_manifest(),
         "stdfm_input": stdfm_input.as_manifest(),
         "stdfm_output": stdfm_output.as_manifest(),
-        "certification": certification.as_manifest(),
+        "certification": certification,
         "table_paths": {
             "stitching": "Tables/sidra_stitching_segments.parquet",
             "projection": "Tables/sidra_projection_matrix.parquet",
             "high_dimensional": "Tables/sidra_high_dimensional_bounds.parquet",
             "stdfm_certification": "Tables/stdfm_certification.parquet",
             "stdfm_objective_contract": "Tables/stdfm_objective_contract.parquet",
+            "stdfm_latent_factors": "Tables/stdfm_latent_factors.parquet",
+            "stdfm_loadings": "Tables/stdfm_loadings.parquet",
+            "stdfm_reconstructed_fields": "Tables/stdfm_reconstructed_fields.parquet",
+            "stdfm_uncertainty": "Tables/stdfm_uncertainty.parquet",
         },
     }
     run_config = {

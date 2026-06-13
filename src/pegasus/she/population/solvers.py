@@ -9,9 +9,33 @@ from pegasus.registries.population import (
     select_population_solver,
 )
 from pegasus.she.population.diagnostics import population_tensor_diagnostics
-from pegasus.she.population.schema import PopulationTensorRequest, PopulationTensorResult
+from pegasus.she.population.projected_gradient import PopulationOptimizationResult, solve_projected_gradient_small
+from pegasus.she.population.schema import (
+    PopulationObjectiveWeights,
+    PopulationTensorProblem,
+    PopulationTensorRequest,
+    PopulationTensorResult,
+)
 from pegasus.she.population.sidra_anchor import load_sidra_population_total_anchor
-from pegasus.she.population.sparse_admm import build_sim_informed_sparse_admm_scaffold
+
+
+def solve_population_tensor_problem(
+    problem: PopulationTensorProblem,
+    *,
+    solver_id: str | None = None,
+    max_iterations: int = 5_000,
+    tolerance: float = 1e-5,
+) -> PopulationOptimizationResult:
+    solver = select_population_solver(mode=problem.mode, solver_id=solver_id)
+    assert_dense_population_tensor_allowed(
+        localities=problem.shape[0],
+        periods=problem.shape[1],
+        strata=problem.shape[2] * problem.shape[3] * problem.shape[4],
+        threshold=solver.max_cells,
+    )
+    if not solver.backend.startswith("projected_gradient_small"):
+        raise ValueError(f"Solver {solver.solver_id} does not implement population optimization.")
+    return solve_projected_gradient_small(problem, max_iterations=max_iterations, tolerance=tolerance)
 
 
 def solve_population_tensor_from_sidra_anchor(
@@ -52,19 +76,34 @@ def solve_population_tensor_from_sidra_anchor(
     state = "verified"
 
     if mode == "sim_informed_denominator":
-        scaffold = build_sim_informed_sparse_admm_scaffold(solver_id=solver.solver_id)
-        warnings.extend(scaffold.warnings)
+        warnings.extend(("sim_informed_population_feedback_risk", "sim_death_prior_missing_from_sidra_only_request"))
         reconstruction_uncertainty = 0.05
         denominator_feedback_warning = True
         state = "fragile"
     elif mode != "independent_denominator":
         raise ValueError(f"Unsupported population tensor mode: {mode}")
 
+    problem = PopulationTensorProblem(
+        shape=(1, 1, 1, 1, 1),
+        anchors=(anchor.value,),
+        hard_anchor_mask=(False,),
+        mode=mode,  # type: ignore[arg-type]
+        closure_totals=(anchor.value,),
+        migration_bounds=(anchor.value,),
+        weights=PopulationObjectiveWeights(death=1.0 if mode == "sim_informed_denominator" else 0.0),
+    )
+    optimized = solve_population_tensor_problem(problem, solver_id=solver.solver_id)
+    if not optimized.telemetry.converged:
+        warnings.append("population_tensor_solver_nonconvergence")
+        reconstruction_uncertainty = max(reconstruction_uncertainty, 0.1)
+        state = "fragile"
+
     diagnostics = population_tensor_diagnostics(
         request=request,
         solver=solver,
         reconstruction_uncertainty=reconstruction_uncertainty,
         denominator_feedback_warning=denominator_feedback_warning,
+        telemetry=optimized.telemetry,
         warnings=warnings,
     )
 
@@ -75,8 +114,9 @@ def solve_population_tensor_from_sidra_anchor(
         "anchor_field_id": anchor.field_id,
         "locality_id": anchor.locality_id,
         "period": anchor.period,
-        "value": anchor.value,
+        "value": optimized.population[0],
         "metadata_hash": anchor.metadata_hash,
+        "solver_telemetry": optimized.telemetry.as_manifest(),
     }
 
     return PopulationTensorResult(
@@ -85,7 +125,7 @@ def solve_population_tensor_from_sidra_anchor(
         solver_id=solver.solver_id,
         solver_backend=solver.backend,
         sparse_jacobian=solver.sparse_jacobian,
-        value=anchor.value,
+        value=optimized.population[0],
         unit=anchor.unit,
         locality_id=anchor.locality_id,
         period=anchor.period,
@@ -99,6 +139,9 @@ def solve_population_tensor_from_sidra_anchor(
         state=state,
         warnings=tuple(warnings),
         diagnostics=diagnostics,
+        tensor_shape=problem.shape,
+        tensor_values=optimized.population,
+        migration_values=optimized.migration,
     )
 
 

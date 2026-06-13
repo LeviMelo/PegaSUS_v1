@@ -873,3 +873,231 @@ def efg_inspect_promotion_plan(
         }
     print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False, default=str))
 # ---- End Slice 15D EFG promotion CLI boundary ----
+
+# ---- Slice 16E PIRS planning CLI boundary ----
+def _pirs_cli_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(f"missing JSON artifact: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"invalid JSON artifact: {path}: {exc}") from exc
+
+
+def _pirs_cli_print(payload: object) -> None:
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str))
+
+
+@pirs_app.command("candidates-from-run")
+def pirs_candidates_from_run(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    """Build a non-mutating PIRS field-candidate manifest from a completed run."""
+    from pegasus.workflows.pirs_candidates import run_build_pirs_candidates_from_run
+
+    _pirs_cli_print(run_build_pirs_candidates_from_run(run_dir=run_dir, output=output))
+
+
+@pirs_app.command("attach-candidate-gate")
+def pirs_attach_candidate_gate(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    """Write and attach the PIRS candidate-gate summary to an existing run."""
+    from pegasus.workflows.pirs_candidates import run_attach_pirs_candidate_gate
+
+    _pirs_cli_print(run_attach_pirs_candidate_gate(run_dir=run_dir, output=output))
+
+
+@pirs_app.command("plan-selection")
+def pirs_plan_selection(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    candidate_manifest: Path | None = typer.Option(None, "--candidate-manifest"),
+    output: Path | None = typer.Option(None, "--output"),
+    budget: str = typer.Option("fast", "--budget"),
+) -> None:
+    """Build a non-mutating PIRS selection plan from candidate manifest data."""
+    from pegasus.workflows.pirs_selection import run_write_pirs_selection_plan
+
+    _pirs_cli_print(
+        run_write_pirs_selection_plan(
+            run_dir=run_dir,
+            candidate_manifest=candidate_manifest,
+            output=output,
+            budget=budget,
+        )
+    )
+
+
+@pirs_app.command("attach-selection-plan")
+def pirs_attach_selection_plan(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    candidate_manifest: Path | None = typer.Option(None, "--candidate-manifest"),
+    output: Path | None = typer.Option(None, "--output"),
+    budget: str = typer.Option("fast", "--budget"),
+) -> None:
+    """Write and attach a PIRS selection-plan summary to an existing run."""
+    from pegasus.workflows.pirs_selection import run_attach_pirs_selection_plan
+
+    _pirs_cli_print(
+        run_attach_pirs_selection_plan(
+            run_dir=run_dir,
+            candidate_manifest=candidate_manifest,
+            output=output,
+            budget=budget,
+        )
+    )
+
+
+@pirs_app.command("plan-design")
+def pirs_plan_design(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    selection_plan: Path | None = typer.Option(None, "--selection-plan"),
+    output: Path | None = typer.Option(None, "--output"),
+    budget: str | None = typer.Option(None, "--budget"),
+) -> None:
+    """Build a planned-only PIRS model-design contract from a selection plan."""
+    from pegasus.workflows.pirs_design import run_plan_pirs_design
+
+    _pirs_cli_print(
+        run_plan_pirs_design(
+            run_dir=run_dir,
+            selection_plan=selection_plan,
+            output=output,
+            budget=budget,
+        )
+    )
+
+
+@pirs_app.command("attach-design-plan")
+def pirs_attach_design_plan(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    selection_plan: Path | None = typer.Option(None, "--selection-plan"),
+    output: Path | None = typer.Option(None, "--output"),
+    budget: str | None = typer.Option(None, "--budget"),
+) -> None:
+    """Write and attach a PIRS design-plan summary to an existing run."""
+    from pegasus.workflows.pirs_design import run_attach_pirs_design_plan_to_run
+
+    _pirs_cli_print(
+        run_attach_pirs_design_plan_to_run(
+            run_dir=run_dir,
+            selection_plan=selection_plan,
+            output=output,
+            budget=budget,
+        )
+    )
+
+
+@pirs_app.command("check-design-readiness")
+def pirs_check_design_readiness(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    design_plan: Path | None = typer.Option(None, "--design-plan"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    """Write a design-readiness manifest without attaching it to run metadata."""
+    from pegasus.workflows.pirs_readiness import run_write_pirs_design_readiness_manifest
+
+    _pirs_cli_print(
+        run_write_pirs_design_readiness_manifest(
+            run_dir=run_dir,
+            design_plan=design_plan,
+            output=output,
+        )
+    )
+
+
+@pirs_app.command("attach-design-readiness")
+def pirs_attach_design_readiness(
+    run_dir: Path = typer.Option(..., "--run-dir"),
+    design_plan: Path | None = typer.Option(None, "--design-plan"),
+    output: Path | None = typer.Option(None, "--output"),
+) -> None:
+    """Write and attach the PIRS design-readiness gate to an existing run."""
+    from pegasus.workflows.pirs_readiness import run_attach_pirs_design_readiness_to_run
+
+    _pirs_cli_print(
+        run_attach_pirs_design_readiness_to_run(
+            run_dir=run_dir,
+            design_plan=design_plan,
+            output=output,
+        )
+    )
+
+
+@pirs_app.command("inspect-candidates")
+def pirs_inspect_candidates(
+    manifest: Path = typer.Option(..., "--manifest"),
+) -> None:
+    """Read an existing PIRS candidate manifest without mutating a run."""
+    payload = _pirs_cli_json(manifest)
+    _pirs_cli_print(
+        {
+            "artifact": payload.get("gate", "pirs_candidate_gate"),
+            "candidate_count": payload.get("candidate_count", len(payload.get("candidates", []))),
+            "rejected_count": payload.get("rejected_count", len(payload.get("rejected", []))),
+            "manifest": str(manifest),
+            "read_only": True,
+        }
+    )
+
+
+@pirs_app.command("inspect-selection-plan")
+def pirs_inspect_selection_plan(
+    plan: Path = typer.Option(..., "--plan"),
+) -> None:
+    """Read an existing PIRS selection plan without mutating a run."""
+    payload = _pirs_cli_json(plan)
+    _pirs_cli_print(
+        {
+            "artifact": payload.get("artifact", "pirs_selection_plan"),
+            "status": payload.get("status"),
+            "budget": payload.get("budget"),
+            "selected_outcome_field_id": payload.get("selected_outcome_field_id"),
+            "selected_covariate_count": len(payload.get("selected_covariate_field_ids", [])),
+            "selection_rejected_count": len(payload.get("selection_rejected", [])),
+            "manifest": str(plan),
+            "read_only": True,
+        }
+    )
+
+
+@pirs_app.command("inspect-design-plan")
+def pirs_inspect_design_plan(
+    plan: Path = typer.Option(..., "--plan"),
+) -> None:
+    """Read an existing PIRS design plan without mutating a run."""
+    payload = _pirs_cli_json(plan)
+    _pirs_cli_print(
+        {
+            "artifact": payload.get("artifact", "pirs_design_plan"),
+            "status": payload.get("status"),
+            "design_matrix_state": payload.get("design_matrix_state"),
+            "model_fit_state": payload.get("model_fit_state"),
+            "residual_state": payload.get("residual_state"),
+            "term_count": len(payload.get("terms", [])),
+            "manifest": str(plan),
+            "read_only": True,
+        }
+    )
+
+
+@pirs_app.command("inspect-design-readiness")
+def pirs_inspect_design_readiness(
+    manifest: Path = typer.Option(..., "--manifest"),
+) -> None:
+    """Read an existing PIRS design-readiness manifest without mutating a run."""
+    payload = _pirs_cli_json(manifest)
+    _pirs_cli_print(
+        {
+            "artifact": payload.get("artifact", "pirs_design_readiness_gate"),
+            "status": payload.get("status"),
+            "ready": payload.get("ready"),
+            "accepted_field_count": len(payload.get("accepted_fields", [])),
+            "rejected_field_count": len(payload.get("rejected_fields", [])),
+            "manifest": str(manifest),
+            "read_only": True,
+        }
+    )
+# ---- End Slice 16E PIRS planning CLI boundary ----

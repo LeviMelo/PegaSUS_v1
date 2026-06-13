@@ -1157,3 +1157,43 @@ def pirs_inspect_hsic_scan(
 
     _pirs_cli_print(run_inspect_hsic_residual_scan(manifest=manifest))
 # ---- End Slice 18A HSIC residual scan CLI boundary ----
+
+# BEGIN SLICE18B HSIC RANKING DASHBOARD CLI
+@pirs_app.command("rank-hsic-scan")
+def pirs_rank_hsic_scan(
+    run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, dir_okay=True),
+    scan_manifest: Path | None = typer.Option(None, "--scan-manifest", exists=False, file_okay=True, dir_okay=False),
+    output: Path | None = typer.Option(None, "--output", exists=False, file_okay=True, dir_okay=False),
+) -> None:
+    """Rank HSIC residual-scan results and write read-only dashboard cards."""
+    from pegasus.workflows.hsic_rank import run_rank_hsic_residual_scan
+
+    payload = run_rank_hsic_residual_scan(
+        run_dir=run_dir,
+        scan_manifest=scan_manifest,
+        output=output,
+    )
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str))
+
+
+@pirs_app.command("inspect-hsic-ranking")
+def pirs_inspect_hsic_ranking(
+    manifest: Path = typer.Option(..., "--manifest", exists=True, file_okay=True, dir_okay=False),
+) -> None:
+    """Inspect an existing HSIC ranking manifest without mutating a run."""
+    from pegasus.workflows.hsic_rank import inspect_hsic_ranking_manifest
+
+    payload = inspect_hsic_ranking_manifest(manifest)
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str))
+
+
+@pirs_app.command("inspect-hsic-dashboard")
+def pirs_inspect_hsic_dashboard(
+    dashboard: Path = typer.Option(..., "--dashboard", exists=True, file_okay=True, dir_okay=False),
+) -> None:
+    """Inspect read-only HSIC dashboard cards without mutating a run."""
+    from pegasus.dashboard.hsic_readonly import inspect_hsic_dashboard_cards
+
+    payload = inspect_hsic_dashboard_cards(dashboard)
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str))
+# END SLICE18B HSIC RANKING DASHBOARD CLI

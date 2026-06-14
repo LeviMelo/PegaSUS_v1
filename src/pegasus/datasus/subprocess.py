@@ -16,6 +16,21 @@ from pegasus.datasus.cache import DatasusCache
 from pegasus.datasus.manifests import utc_now
 
 
+def datasus_dependency_unavailable(*, dependency: str, detail: str) -> str:
+    """Return the stable actionable diagnostic for unavailable live DATASUS."""
+    return json.dumps(
+        {
+            "source": "DATASUS",
+            "status": "unavailable",
+            "required_dependency": dependency,
+            "detail": detail,
+            "action": "install/configure Rscript and microdatasus, or use fixture/cached mode",
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+
+
 @dataclass(frozen=True)
 class DatasusConfig:
     rscript_path: str = "Rscript"
@@ -100,7 +115,10 @@ def fetch_datasus_chunk(
             started=started,
             status="blocked",
             exit_code=41,
-            error_message=f"Rscript not found: {config.rscript_path}",
+            error_message=datasus_dependency_unavailable(
+                dependency="Rscript / microdatasus",
+                detail=f"Rscript not found: {config.rscript_path}",
+            ),
         )
 
     script = Path(__file__).parent / "r_scripts" / "fetch_process_microdatasus.R"

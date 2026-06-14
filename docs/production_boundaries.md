@@ -46,3 +46,12 @@ The Slice 28ZC hardening gate is intentionally scoped to production modules that
 ## Slice 28ZC repair — audit import API compatibility
 
 `audit_slice28x_production_boundaries.py` exposes `run_audit()` as its stable import API. CLI execution must call this function rather than duplicating payload construction inside `main()`. This preserves compatibility with earlier Slice 28X integration tests while keeping the stricter scoped boundary policy introduced in Slice 28ZC.
+
+## Release-candidate closure
+
+The output validator is part of the canonical storage boundary and may not call
+Parquet libraries directly. `audit_release_candidate.py` performs a temporary
+fixture compile and compactly aggregates exact-bundle validation, Level 3 fixture
+classification, explicit DATASUS dependency unavailability, source/registry
+visibility, EFG materialization, dashboard read-only behavior, boundary closure,
+and deterministic HSIC signal-vs-null acceptance.

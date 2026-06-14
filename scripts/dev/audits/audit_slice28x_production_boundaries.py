@@ -29,6 +29,7 @@ GUARDED_STORAGE_FILES = {
     "src/pegasus/output/race_bridge_attach.py",
     "src/pegasus/output/sidra_denominator_anchor.py",
     "src/pegasus/dashboard/read_only.py",
+    "src/pegasus/output/validate.py",
 }
 
 GUARDED_COMPUTE_FILES = {

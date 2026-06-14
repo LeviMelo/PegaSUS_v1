@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pyarrow.parquet as pq
+from pegasus.storage import read_table
 
 from pegasus.output.reproducibility import COMPILE_TELEMETRY_STAGES, TERMINAL_STAGE_STATUSES
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES, OutputSchemaRegistry, OutputValidationResult
@@ -20,7 +20,7 @@ RUN_CONFIG_RACE_BRIDGE_KEYS = {"bridge_id", "mode", "prior_hash", "source_axis",
 
 
 def _read(path: Path):
-    return pq.read_table(path)
+    return read_table(path)
 
 
 def _column_values(table, column: str) -> list[Any]:

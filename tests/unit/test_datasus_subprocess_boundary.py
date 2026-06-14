@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from pegasus.datasus.cache import DatasusCache
 from pegasus.datasus.manifests import build_datasus_request_manifest
@@ -30,4 +31,9 @@ def test_fetch_datasus_chunk_blocks_when_rscript_missing(tmp_path: Path):
     assert result.status == "blocked"
     assert result.exit_code == 41
     assert "Rscript not found" in (result.error_message or "")
+    diagnostic = json.loads(result.error_message or "{}")
+    assert diagnostic["source"] == "DATASUS"
+    assert diagnostic["status"] == "unavailable"
+    assert diagnostic["required_dependency"] == "Rscript / microdatasus"
+    assert "fixture/cached mode" in diagnostic["action"]
     assert result.duration_seconds >= 0

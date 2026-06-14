@@ -163,3 +163,34 @@ def hypotheses(*, run_dir: str | Path, limit: int = 100) -> dict[str, Any]:
 def warnings_summary(*, run_dir: str | Path, limit: int = 100) -> dict[str, Any]:
     assert_no_compute_trigger("warnings")
     return read_table_head(run_dir=run_dir, table_name="Warnings", limit=limit)
+
+
+def bundle_overview(*, run_dir: str | Path, limit: int = 20) -> dict[str, Any]:
+    """Return a bundle-bound operational overview without triggering computation."""
+    assert_no_compute_trigger("bundle_overview")
+    if limit < 0 or limit > 500:
+        raise ValueError("Dashboard overview limit must be between 0 and 500.")
+    root = _run_dir(run_dir).resolve()
+    inspected = inspect_run(run_dir=root, validate=True)
+    run_config = _json_file(root / "RunConfig.json")
+    manifest = _json_file(root / "ReproducibilityManifest.json")
+    tables = root / "Tables"
+    hsic_paths = sorted(
+        str(path.relative_to(root)).replace("\\", "/")
+        for path in tables.glob("*hsic*")
+        if path.is_file()
+    ) if tables.exists() else []
+    return {
+        "run_dir": str(root),
+        "read_only": True,
+        "validation_ok": inspected["validation_ok"],
+        "source_reality": run_config.get("source_artifact_reality") or manifest.get("source_artifact_reality") or {},
+        "registry_hashes": manifest.get("registry_hashes") or {},
+        "efg": {
+            "fields": read_table_head(run_dir=root, table_name="V_fields", limit=limit),
+            "edges": read_table_head(run_dir=root, table_name="E_DAG", limit=limit),
+        },
+        "warnings": warnings_summary(run_dir=root, limit=limit),
+        "hypotheses": hypotheses(run_dir=root, limit=limit),
+        "hsic_artifacts": hsic_paths,
+    }

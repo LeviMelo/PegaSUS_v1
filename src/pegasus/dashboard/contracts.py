@@ -24,6 +24,7 @@ READ_ONLY_OPERATIONS: frozenset[str] = frozenset({
     "warnings",
     "q_tensor",
     "bundle_summary",
+    "bundle_overview",
     "audit_policy",
 })
 

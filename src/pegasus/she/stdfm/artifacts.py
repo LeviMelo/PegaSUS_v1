@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pegasus.storage import write_table
 
 from dataclasses import replace
 from pathlib import Path
@@ -25,30 +26,8 @@ def materialize_stdfm_fit(
     certification_path = output_dir / "stdfm_certification.parquet"
     objective_trace_path = output_dir / "stdfm_objective_trace.parquet"
 
-    pl.DataFrame(
-        [
-            {
-                "space_index": s,
-                "time_index": t,
-                "factor_index": k,
-                "value": result.latent_factors[(s * time + t) * factors + k],
-            }
-            for s in range(space)
-            for t in range(time)
-            for k in range(factors)
-        ]
-    ).write_parquet(factor_path)
-    pl.DataFrame(
-        [
-            {
-                "field_id": problem.field_ids[q],
-                "factor_index": k,
-                "loading": result.loadings[q * factors + k],
-            }
-            for q in range(fields)
-            for k in range(factors)
-        ]
-    ).write_parquet(loading_path)
+    write_table(factor_path, pl.DataFrame([{'space_index': s, 'time_index': t, 'factor_index': k, 'value': result.latent_factors[(s * time + t) * factors + k]} for s in range(space) for t in range(time) for k in range(factors)]).to_arrow())
+    write_table(loading_path, pl.DataFrame([{'field_id': problem.field_ids[q], 'factor_index': k, 'loading': result.loadings[q * factors + k]} for q in range(fields) for k in range(factors)]).to_arrow())
     rows = [
         {
             "space_index": s,
@@ -61,17 +40,10 @@ def materialize_stdfm_fit(
         for t in range(time)
         for q in range(fields)
     ]
-    pl.DataFrame(rows).write_parquet(reconstruction_path)
-    pl.DataFrame(
-        [dict(row, uncertainty=result.uncertainty[index]) for index, row in enumerate(rows)]
-    ).write_parquet(uncertainty_path)
-    pl.DataFrame([result.certification]).write_parquet(certification_path)
-    pl.DataFrame(
-        [
-            {"iteration": 0, "objective": result.telemetry.initial_objective},
-            {"iteration": result.telemetry.iterations, "objective": result.telemetry.final_objective},
-        ]
-    ).write_parquet(objective_trace_path)
+    write_table(reconstruction_path, pl.DataFrame(rows).to_arrow())
+    write_table(uncertainty_path, pl.DataFrame([dict(row, uncertainty=result.uncertainty[index]) for index, row in enumerate(rows)]).to_arrow())
+    write_table(certification_path, pl.DataFrame([result.certification]).to_arrow())
+    write_table(objective_trace_path, pl.DataFrame([{'iteration': 0, 'objective': result.telemetry.initial_objective}, {'iteration': result.telemetry.iterations, 'objective': result.telemetry.final_objective}]).to_arrow())
 
     output = replace(
         result.output,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pegasus.storage import read_table
 
 import json
 from dataclasses import dataclass
@@ -55,7 +56,7 @@ def _is_total_9606(row: dict[str, Any]) -> bool:
 
 def load_sidra_population_total_anchor(facts_path: str | Path) -> SidraPopulationAnchor:
     facts_path = Path(facts_path)
-    df = pl.read_parquet(facts_path)
+    df = pl.from_arrow(read_table(facts_path))
 
     required = {
         "table_id",

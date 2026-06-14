@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pegasus.storage import read_table
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +39,7 @@ class SIHCostSummary:
 
 
 def summarize_sih_costs(events_path: str | Path, *, municipality_cod6: str | None = None) -> SIHCostSummary:
-    df = pl.read_parquet(events_path)
+    df = pl.from_arrow(read_table(events_path))
     if municipality_cod6 is not None and "mun_residence_cod6" in df.columns:
         df = df.filter(pl.col("mun_residence_cod6") == str(municipality_cod6))
     valid = df.filter(pl.col("record_state") == "valid") if "record_state" in df.columns else df

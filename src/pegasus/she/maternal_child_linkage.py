@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pegasus.storage import read_table
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,8 +101,8 @@ def summarize_maternal_child_linkage(
     municipality_ibge_cod7: str | None,
     denominator_population: float | None = None,
 ) -> MaternalChildLinkedSummary:
-    sinasc = pl.read_parquet(sinasc_events_path)
-    sim = pl.read_parquet(sim_events_path)
+    sinasc = pl.from_arrow(read_table(sinasc_events_path))
+    sim = pl.from_arrow(read_table(sim_events_path))
 
     sinasc = _filter_municipality(sinasc, "mun_residence_cod6", municipality_cod6)
     sim = _filter_municipality(sim, "mun_residence_cod6", municipality_cod6)

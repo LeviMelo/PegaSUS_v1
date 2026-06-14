@@ -47,3 +47,20 @@ def seed_everything(seed: int, *, torch_module: Any = None, deterministic: bool 
             torch.use_deterministic_algorithms(True, warn_only=True)
         torch_seeded = True
     return SeedState(seed, numpy_seeded, torch_seeded, deterministic and torch_seeded)
+
+def torch_generator(torch_module: Any, *, seed: int, device: Any | None = None) -> Any:
+    """Create a seeded ``torch.Generator`` through the central compute boundary.
+
+    Domain modules must not construct and seed local generators directly. This
+    helper centralizes generator creation so audits can distinguish sanctioned
+    compute-boundary seeding from ad hoc numerical state changes.
+    """
+    seed_int = int(seed)
+    try:
+        generator = torch_module.Generator(device=device) if device is not None else torch_module.Generator()
+    except TypeError:
+        generator = torch_module.Generator()
+    seed_method = getattr(generator, "manual_seed")
+    seed_method(seed_int)
+    return generator
+

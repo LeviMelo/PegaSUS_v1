@@ -12,6 +12,7 @@ from pegasus.pirs.nulls import generate_null_indices
 from pegasus.compute.devices import resolve_torch_device
 from pegasus.compute.kernels import tensor_nbytes
 from pegasus.compute.torch_backend import torch_runtime
+from pegasus.compute.random import torch_generator
 
 HSICMode = Literal["exact", "nystrom", "rff", "disabled", "cuda_unavailable_abort"]
 
@@ -192,8 +193,7 @@ def permutation_p_value(
 
 
 def _rff_features(torch: Any, values: Any, *, bandwidth: float, features: int, seed: int) -> Any:
-    generator = torch.Generator(device=values.device)
-    generator.manual_seed(seed)
+    generator = torch_generator(torch, seed=seed, device=values.device)
     omega = torch.randn(features, dtype=values.dtype, device=values.device, generator=generator) / bandwidth
     phase = 2.0 * math.pi * torch.rand(features, dtype=values.dtype, device=values.device, generator=generator)
     return math.sqrt(2.0 / features) * torch.cos(values[:, None] * omega[None, :] + phase[None, :])
@@ -207,8 +207,7 @@ def _feature_hsic(x_features: Any, y_features: Any) -> float:
 
 
 def _nystrom_features(torch: Any, values: Any, *, bandwidth: float, landmarks: int, seed: int) -> Any:
-    generator = torch.Generator(device=values.device)
-    generator.manual_seed(seed)
+    generator = torch_generator(torch, seed=seed, device=values.device)
     indices = torch.randperm(values.shape[0], device=values.device, generator=generator)[:landmarks]
     selected = values[indices]
     cross = torch.exp(-((values[:, None] - selected[None, :]) ** 2) / (2.0 * bandwidth**2))

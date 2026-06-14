@@ -25,3 +25,12 @@ cross-field bridge opportunities without materializing tensors or adding new
 first-class output-bundle keys.
 
 Slice 28ZA extends the storage-boundary adoption to the SIDRA denominator anchor. The module may still use row-level Python transformations, but Parquet reads/writes are routed through output.table_io and pegasus.storage.
+
+## Slice 28ZB — compute RNG boundary closure
+
+HSIC random-feature and Nyström generators must be created through
+`pegasus.compute.random.torch_generator`. Domain modules may pass the
+returned generator to PyTorch operations, but may not construct and seed
+`torch.Generator` objects locally. The `audit_slice28zb_compute_rng_boundary.py`
+gate scans production code for direct generator seeding outside the
+central compute boundary.

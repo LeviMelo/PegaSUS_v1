@@ -1,12 +1,34 @@
-"""
-Slice 0 scaffold module: registries/race_axis.py
+"""Thin registry wrapper for race axis registry entries."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from __future__ import annotations
 
-from pegasus.core.exceptions import BlockedModuleError
+from pathlib import Path
+
+from pegasus.registries.generic import RegistryEntry, active_entries, get_entry, load_entries, registry_manifest
+
+REGISTRY_FILES = ('race_axis_registry.yaml', 'race_axis.yaml')
 
 
-def blocked(*, module: str = "registries/race_axis.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def load_race_axis_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:
+    return load_entries(REGISTRY_FILES, root=root, required=required)
+
+
+def active_race_axis_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:
+    return active_entries(REGISTRY_FILES, root=root, required=required)
+
+
+def get_race_axis_entry(entry_id: str, *, root: str | Path = "config/registries", required: bool = True) -> RegistryEntry:
+    return get_entry(REGISTRY_FILES, entry_id, root=root, required=required)
+
+
+def race_axis_registry_manifest(*, root: str | Path = "config/registries", required: bool = False) -> dict:
+    return registry_manifest(REGISTRY_FILES, root=root, required=required)
+
+
+__all__ = [
+    "REGISTRY_FILES",
+    "load_race_axis_entries",
+    "active_race_axis_entries",
+    "get_race_axis_entry",
+    "race_axis_registry_manifest",
+]

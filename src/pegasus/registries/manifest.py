@@ -1,12 +1,20 @@
-"""
-Slice 0 scaffold module: registries/manifest.py
+"""Thin accessors for the canonical registry manifest."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from __future__ import annotations
 
-from pegasus.core.exceptions import BlockedModuleError
+from pathlib import Path
+
+from pegasus.registries.generic import load_registry_payload, registry_manifest
+
+REGISTRY_FILES = ("registry_manifest.yaml",)
 
 
-def blocked(*, module: str = "registries/manifest.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def load_registry_manifest_payload(*, root: str | Path = "config/registries", required: bool = True) -> dict:
+    return load_registry_payload(REGISTRY_FILES, root=root, required=required)
+
+
+def canonical_registry_manifest(*, root: str | Path = "config/registries", required: bool = True) -> dict:
+    return registry_manifest(REGISTRY_FILES, root=root, required=required)
+
+
+__all__ = ["REGISTRY_FILES", "canonical_registry_manifest", "load_registry_manifest_payload"]

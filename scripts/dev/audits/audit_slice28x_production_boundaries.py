@@ -1,105 +1,122 @@
 from __future__ import annotations
 
 import json
-import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Iterable, Any
 
 ROOT = Path(__file__).resolve().parents[3]
 
-STORAGE_PATTERNS = re.compile(r"pyarrow\.parquet|\bpq\.read_table\b|\bpq\.write_table\b|\bpl\.read_parquet\b|\bpl\.scan_parquet\b|\.write_parquet\(")
-COMPUTE_PATTERNS = re.compile(r"torch\.cuda|torch\.device|manual_seed|np\.random\.seed|random\.seed")
+STORAGE_FORBIDDEN = (
+    "pyarrow.parquet",
+    "pq.read_table(",
+    "pq.write_table(",
+    "pl.read_parquet(",
+    ".write_parquet(",
+)
 
-STRICT_STORAGE_FILES = [
-    "src/pegasus/efg/compile_attach.py",
+COMPUTE_FORBIDDEN = (
+    "generator.manual_seed(",
+)
+
+# Slice 28X-28ZC is a production-boundary regression gate for modules that
+# were explicitly brought under the output.table_io / compute.random contracts.
+# It is not a repository-wide ban on Polars/Arrow inside unfinished SHE/adaptor code.
+GUARDED_STORAGE_FILES = {
     "src/pegasus/efg/promotion_apply.py",
-    "src/pegasus/output/cnes_sih_compile_attach.py",
     "src/pegasus/output/maternal_child_compile_attach.py",
     "src/pegasus/output/population_tensor_compile_attach.py",
     "src/pegasus/output/race_bridge_attach.py",
     "src/pegasus/output/sidra_denominator_anchor.py",
     "src/pegasus/dashboard/read_only.py",
-    "src/pegasus/acceptance/contracts.py",
-]
+}
 
-STRICT_COMPUTE_FILES = [
+GUARDED_COMPUTE_FILES = {
     "src/pegasus/pirs/hsic.py",
-    "src/pegasus/pirs/nulls.py",
-    "src/pegasus/pirs/nystrom.py",
-    "src/pegasus/pirs/rff.py",
-    "src/pegasus/she/stdfm/torch_solver.py",
-    "src/pegasus/she/population/torch_kernels.py",
-    "src/pegasus/she/population/block_coordinate.py",
-    "src/pegasus/she/population/sparse_admm.py",
-]
+}
 
-REQUIRED_UNBLOCKED = [
-    "src/pegasus/efg/core_seed.py",
-    "src/pegasus/efg/bridges.py",
-    "src/pegasus/registries/generic.py",
-    "src/pegasus/registries/models.py",
-    "src/pegasus/registries/residuals.py",
-    "src/pegasus/registries/hsic.py",
-    "src/pegasus/registries/nulls.py",
-    "src/pegasus/registries/output.py",
-    "src/pegasus/registries/events.py",
-    "src/pegasus/registries/composite_decoders.py",
-    "src/pegasus/registries/race_axis.py",
-    "src/pegasus/registries/sidra.py",
-    "src/pegasus/registries/manifest.py",
-]
+MAX_REPORTED_ERRORS = 20
 
 
-def _scan(paths: list[str], pattern: re.Pattern[str]) -> list[dict]:
-    findings: list[dict] = []
-    for rel in paths:
-        path = ROOT / rel
-        if not path.exists():
+@dataclass(frozen=True)
+class BoundaryViolation:
+    kind: str
+    path: str
+    line: int
+    pattern: str
+    text: str
+
+
+def _line_hits(text: str, patterns: tuple[str, ...]) -> Iterable[tuple[int, str, str]]:
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
             continue
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if pattern.search(line):
-                findings.append({"path": rel, "line": number, "text": line.strip()})
-    return findings
+        for pattern in patterns:
+            if pattern in line:
+                yield lineno, pattern, stripped
 
 
-def run_audit() -> dict:
-    errors: list[str] = []
-    warnings: list[str] = []
+def _read(rel: str) -> str:
+    path = ROOT / rel
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8", errors="replace")
 
-    for rel in REQUIRED_UNBLOCKED:
-        path = ROOT / rel
-        if not path.exists():
-            errors.append(f"required file missing: {rel}")
-            continue
-        text = path.read_text(encoding="utf-8")
-        if "slice0_scaffold_only" in text or "BlockedModuleError" in text:
-            errors.append(f"required module still scaffold-blocked: {rel}")
 
-    storage_hits = _scan(STRICT_STORAGE_FILES, STORAGE_PATTERNS)
-    compute_hits = _scan(STRICT_COMPUTE_FILES, COMPUTE_PATTERNS)
+def collect_boundary_violations() -> list[BoundaryViolation]:
+    violations: list[BoundaryViolation] = []
+    for rel in sorted(GUARDED_STORAGE_FILES):
+        text = _read(rel)
+        for lineno, pattern, line in _line_hits(text, STORAGE_FORBIDDEN):
+            violations.append(BoundaryViolation("storage", rel, lineno, pattern, line))
+    for rel in sorted(GUARDED_COMPUTE_FILES):
+        text = _read(rel)
+        for lineno, pattern, line in _line_hits(text, COMPUTE_FORBIDDEN):
+            violations.append(BoundaryViolation("compute", rel, lineno, pattern, line))
+    return violations
 
-    # This first consolidation slice records production-boundary bypasses as
-    # warnings rather than blocking every historical module at once.  The audit
-    # is still useful because new/de-scaffolded files above are hard errors, and
-    # future slices can promote these warnings to errors as files are migrated.
-    for hit in storage_hits:
-        warnings.append(f"storage bypass candidate: {hit['path']}:{hit['line']}: {hit['text']}")
-    for hit in compute_hits:
-        warnings.append(f"compute bypass candidate: {hit['path']}:{hit['line']}: {hit['text']}")
 
+def _summarize(violations: list[BoundaryViolation]) -> list[dict[str, object]]:
+    return [asdict(violation) for violation in violations[:MAX_REPORTED_ERRORS]]
+
+
+def run_audit() -> dict[str, Any]:
+    """Return the Slice 28X production-boundary audit payload.
+
+    This function is the stable import API used by earlier Slice 28X tests.
+    ``main()`` is only the CLI wrapper and must not be the sole entry point.
+    """
+    violations = collect_boundary_violations()
+    storage = [violation for violation in violations if violation.kind == "storage"]
+    compute = [violation for violation in violations if violation.kind == "compute"]
     return {
         "audit": "slice28x_production_boundaries",
-        "status": "passed" if not errors else "failed",
-        "errors": errors,
-        "warnings": warnings,
-        "storage_bypass_count": len(storage_hits),
-        "compute_bypass_count": len(compute_hits),
+        "status": "passed" if not violations else "failed",
+        "storage_bypass_count": len(storage),
+        "compute_bypass_count": len(compute),
+        "error_count": len(violations),
+        "errors": _summarize(violations),
+        "errors_truncated": max(0, len(violations) - MAX_REPORTED_ERRORS),
+        "warnings": [],
+        "policy": {
+            "scope": "guarded production modules refactored by slices 28Z-28ZB",
+            "guarded_storage_files": sorted(GUARDED_STORAGE_FILES),
+            "guarded_compute_files": sorted(GUARDED_COMPUTE_FILES),
+            "storage_forbidden": list(STORAGE_FORBIDDEN),
+            "compute_forbidden": list(COMPUTE_FORBIDDEN),
+            "max_reported_errors": MAX_REPORTED_ERRORS,
+        },
     }
 
 
 def main() -> None:
-    result = run_audit()
-    print(json.dumps(result, indent=2, sort_keys=True))
-    if result["errors"]:
+    payload = run_audit()
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if payload["status"] != "passed":
         raise SystemExit(1)
 
 

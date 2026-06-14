@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import polars as pl
 
 from pegasus.core.hashing import content_hash
 from pegasus.geo.support import SupportAlignmentResult, assert_municipality_year_support_aligned
 from pegasus.output.validate import validate_output_bundle
+from pegasus.output.table_io import read_rows, table_schema, write_rows_like
 from pegasus.she.population.sidra_anchor import SidraPopulationAnchor, load_sidra_population_total_anchor
 
 
@@ -29,43 +29,48 @@ def _load_json_field(value: Any) -> dict[str, Any]:
     return json.loads(str(value))
 
 
-def _remove_by_values(df: pl.DataFrame, column: str, values: set[str]) -> pl.DataFrame:
-    if column not in df.columns or not values:
-        return df
-    return df.filter(~pl.col(column).is_in(sorted(values)))
+def _remove_by_values(rows: list[dict[str, Any]], column: str, values: set[str]) -> list[dict[str, Any]]:
+    """Return rows excluding entries whose column value is in values.
+
+    Row-level filtering keeps this production attacher behind output.table_io and
+    pegasus.storage instead of calling Polars/PyArrow parquet APIs directly.
+    Both raw and stringified comparisons are accepted because bundle parquet
+    readers can preserve ids as Python strings while some test fixtures use
+    simple scalar values.
+    """
+    if not values:
+        return [dict(row) for row in rows]
+    raw_values = set(values)
+    text_values = {str(value) for value in values}
+    return [
+        dict(row)
+        for row in rows
+        if row.get(column) not in raw_values and str(row.get(column)) not in text_values
+    ]
 
 
 def _append_rows(path: Path, rows: list[dict[str, Any]], *, remove_column: str | None = None, remove_values: set[str] | None = None) -> None:
-    df = pl.read_parquet(path)
+    """Append rows to an existing bundle table through output.table_io.
 
+    Existing rows can be removed by a single key before append. Schema
+    preservation is delegated to write_rows_like(), which delegates to the
+    canonical pegasus.storage boundary.
+    """
+    existing = read_rows(path)
     if remove_column and remove_values:
-        df = _remove_by_values(df, remove_column, remove_values)
-
-    if not rows:
-        df.write_parquet(path)
-        return
-
-    add = pl.DataFrame(rows)
-
-    for col, dtype in df.schema.items():
-        if col not in add.columns:
-            add = add.with_columns(pl.lit(None).cast(dtype).alias(col))
-        else:
-            add = add.with_columns(pl.col(col).cast(dtype, strict=False))
-
-    add = add.select(df.columns)
-    pl.concat([df, add], how="vertical").write_parquet(path)
+        existing = _remove_by_values(existing, remove_column, remove_values)
+    write_rows_like(path, existing + [dict(row) for row in rows])
 
 
 def _row_for_columns(columns: list[str], payload: dict[str, Any]) -> dict[str, Any]:
     return {col: payload.get(col) for col in columns}
 
 
-def _get_field_by_name(v: pl.DataFrame, name: str) -> dict[str, Any]:
-    rows = v.filter(pl.col("name") == name).to_dicts()
-    if len(rows) != 1:
-        raise ValueError(f"Expected exactly one field named {name}; found {len(rows)}.")
-    return rows[0]
+def _get_field_by_name(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    matches = [dict(row) for row in rows if row.get("name") == name]
+    if len(matches) != 1:
+        raise ValueError(f"Expected exactly one V_fields row named {name!r}; found {len(matches)}.")
+    return matches[0]
 
 
 def _population_v_field(anchor: SidraPopulationAnchor, facts_path: Path) -> dict[str, Any]:
@@ -364,8 +369,8 @@ def attach_sidra_population_anchor_to_run(
         if not path.exists():
             raise FileNotFoundError(f"Run bundle is missing required file: {path}")
 
-    v = pl.read_parquet(v_path)
-    all_deaths = _get_field_by_name(v, "SIMDeathsAll")
+    v_rows = read_rows(v_path)
+    all_deaths = _get_field_by_name(v_rows, "SIMDeathsAll")
 
     population_row = _population_v_field(anchor, sidra_facts_path)
     support_alignment = assert_municipality_year_support_aligned(
@@ -384,8 +389,11 @@ def attach_sidra_population_anchor_to_run(
     new_field_ids = {population_row["field_id"], rate_row["field_id"]}
     new_names = {"SIDRAPopulationTotalAnchor", "SIMCrudeMortalitySIDRAOfficial"}
 
-    v_clean = v.filter(~pl.col("name").is_in(sorted(new_names)))
-    v_clean.write_parquet(v_path)
+    # Preserve the original behavior: remove prior rows with these semantic
+    # names first, then remove by ids during append so repeated attaches are
+    # idempotent even if a field id changes because source metadata changed.
+    v_rows = _remove_by_values(v_rows, "name", new_names)
+    write_rows_like(v_path, v_rows)
     _append_rows(v_path, [population_row, rate_row], remove_column="field_id", remove_values=new_field_ids)
 
     edge_rows = [
@@ -408,18 +416,17 @@ def attach_sidra_population_anchor_to_run(
             "created_at": _now(),
         },
     ]
-    e = pl.read_parquet(e_path)
-    e = e.filter(pl.col("child_field_id") != rate_row["field_id"])
-    e.write_parquet(e_path)
-    _append_rows(e_path, edge_rows)
+    _append_rows(e_path, edge_rows, remove_column="child_field_id", remove_values={rate_row["field_id"]})
 
     _append_rows(q_path, _q_rows(population_row=population_row, rate_row=rate_row), remove_column="field_id", remove_values=new_field_ids)
 
-    vd = pl.read_parquet(vd_path)
-    vd_columns = vd.columns
-    vd = vd.filter(~pl.col("field_id").is_in(sorted(new_field_ids)))
-    vd.write_parquet(vd_path)
-    _append_rows(vd_path, _vd_rows(vd_columns=vd_columns, population_row=population_row, rate_row=rate_row))
+    vd_columns = list(table_schema(vd_path).names)
+    _append_rows(
+        vd_path,
+        _vd_rows(vd_columns=vd_columns, population_row=population_row, rate_row=rate_row),
+        remove_column="field_id",
+        remove_values=new_field_ids,
+    )
 
     warning_rows = [
         {

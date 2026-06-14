@@ -23,3 +23,5 @@ The autonomous EFG build boundary records two metadata-only summaries on the
 summaries classify admitted fields into V_core-like seed roles and identify
 cross-field bridge opportunities without materializing tensors or adding new
 first-class output-bundle keys.
+
+Slice 28ZA extends the storage-boundary adoption to the SIDRA denominator anchor. The module may still use row-level Python transformations, but Parquet reads/writes are routed through output.table_io and pegasus.storage.

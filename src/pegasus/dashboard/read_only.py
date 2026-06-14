@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from pegasus.output.table_io import read_rows, table_row_count, table_schema
 
-import pyarrow.parquet as pq
 
 from pegasus.dashboard.contracts import assert_no_compute_trigger
 from pegasus.output.validate import validate_output_bundle
@@ -71,10 +71,9 @@ def _table_path(run_dir: Path, table_name: str) -> Path:
     return path
 
 
+
 def parquet_row_count(path: Path) -> int:
-    return int(pq.ParquetFile(path).metadata.num_rows)
-
-
+    return table_row_count(path)
 def list_tables(*, run_dir: str | Path) -> dict[str, Any]:
     assert_no_compute_trigger("list_tables")
     root = _run_dir(run_dir)
@@ -99,24 +98,23 @@ def list_tables(*, run_dir: str | Path) -> dict[str, Any]:
     return {"tables": tables, "artifact_tables": extra_tables}
 
 
+
 def read_table_head(*, run_dir: str | Path, table_name: str, limit: int = 10) -> dict[str, Any]:
     assert_no_compute_trigger("table_head")
     if limit < 0 or limit > 500:
         raise ValueError("Dashboard table head limit must be between 0 and 500.")
     root = _run_dir(run_dir)
     path = _table_path(root, table_name)
-    table = pq.read_table(path)
-    rows = table.to_pylist()[:limit]
+    rows = read_rows(path)[:limit]
+    schema_obj = table_schema(path)
     return {
         "table": table_name,
         "path": TABLE_FILES[table_name],
         "rows_returned": len(rows),
-        "row_count": parquet_row_count(path),
-        "columns": list(table.column_names),
+        "row_count": table_row_count(path),
+        "columns": list(schema_obj.names),
         "rows": rows,
     }
-
-
 def inspect_run(*, run_dir: str | Path, validate: bool = True) -> dict[str, Any]:
     assert_no_compute_trigger("inspect_run")
     root = _run_dir(run_dir)

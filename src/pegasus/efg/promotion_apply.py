@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from pegasus.output.table_io import append_replace_rows, read_rows, write_rows_like
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
 from pegasus.output.validate import validate_output_bundle
@@ -65,27 +65,15 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(_json(payload), encoding="utf-8")
 
 
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    table = pq.read_table(path)
-    return table.to_pylist()
 
+def _read_rows(path: Path) -> list[dict[str, Any]]:
+    return read_rows(path)
 
 def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
-    schema = pq.read_schema(path)
-    normalized = [{name: row.get(name) for name in schema.names} for row in rows]
-    table = pa.Table.from_pylist(normalized, schema=schema)
-    pq.write_table(table, path)
-
+    write_rows_like(path, rows)
 
 def _append_replace(path: Path, new_rows: list[dict[str, Any]], *, id_column: str) -> None:
-    if not new_rows:
-        return
-    existing = _read_rows(path)
-    ids = {str(row[id_column]) for row in new_rows if row.get(id_column) is not None}
-    kept = [row for row in existing if str(row.get(id_column)) not in ids]
-    _write_rows(path, kept + new_rows)
-
-
+    append_replace_rows(path, new_rows, id_column=id_column)
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []

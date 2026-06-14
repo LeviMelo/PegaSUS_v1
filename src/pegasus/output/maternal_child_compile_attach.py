@@ -4,9 +4,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from pegasus.output.table_io import append_rows, read_rows, write_rows, write_rows_like
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import polars as pl
 
 from pegasus.core.hashing import sha256_file, sha256_text
@@ -55,25 +55,16 @@ def _load_json(value: Any) -> dict[str, Any]:
         return {}
 
 
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    return pl.read_parquet(path).to_dicts()
 
+def _read_rows(path: Path) -> list[dict[str, Any]]:
+    return read_rows(path)
 
 def _write_rows_like(path: Path, rows: list[dict[str, Any]]) -> None:
-    schema = pq.read_table(path).schema
-    fixed = [{field.name: row.get(field.name) for field in schema} for row in rows]
-    table = pa.Table.from_pylist(fixed, schema=schema) if fixed else pa.Table.from_pylist([], schema=schema)
-    pq.write_table(table, path)
-
+    write_rows_like(path, rows)
 
 def _append_rows(path: Path, rows: list[dict[str, Any]], *, remove_column: str, remove_values: set[str]) -> None:
-    existing = _read_rows(path)
-    kept = [row for row in existing if str(row.get(remove_column)) not in remove_values]
-    _write_rows_like(path, kept + rows)
-
-
+    existing = [row for row in read_rows(path) if str(row.get(remove_column)) not in remove_values]
+    write_rows_like(path, existing + list(rows))
 def _append_edges(path: Path, rows: list[dict[str, Any]]) -> None:
     existing = _read_rows(path)
     edge_ids = {str(row["edge_id"]) for row in rows}
@@ -362,7 +353,7 @@ def _write_summary_table(run_dir: Path, summary: MaternalChildLinkedSummary) -> 
     }
     table_path = run_dir / "Tables" / "maternal_child_linkage_summary.parquet"
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame([row]).write_parquet(table_path)
+    write_rows(table_path, [row])
 
 
 def _update_json_outputs(run_dir: Path, *, sinasc_events_path: Path, sim_events_path: Path, summary: MaternalChildLinkedSummary) -> None:

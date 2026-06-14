@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from pegasus.output.table_io import append_replace_rows, read_rows, write_rows, write_rows_like
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import polars as pl
 
 from pegasus.core.hashing import sha256_file
@@ -24,21 +24,12 @@ POPULATION_TENSOR_WARNING_PREFIX = "population_tensor_"
 POPULATION_TENSOR_FAILED_BRANCH_IDS = {"failed_dense_national_population_tensor_above_threshold"}
 
 
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    return pq.read_table(path).to_pylist()
 
+def _read_rows(path: Path) -> list[dict[str, Any]]:
+    return read_rows(path)
 
 def _write_rows_like(path: Path, rows: list[dict[str, Any]]) -> None:
-    schema = pq.read_table(path).schema
-    shaped = [{name: row.get(name) for name in schema.names} for row in rows]
-    if shaped:
-        table = pa.Table.from_pylist(shaped, schema=schema)
-    else:
-        table = pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
-    pq.write_table(table, path)
-
+    write_rows_like(path, rows)
 
 def _append_replace(
     path: Path,
@@ -48,18 +39,18 @@ def _append_replace(
     remove_ids: set[str] | None = None,
     remove_prefixes: tuple[str, ...] = (),
 ) -> None:
-    remove_ids = remove_ids or set()
-    existing = _read_rows(path)
-
-    def keep(row: dict[str, Any]) -> bool:
-        value = str(row.get(id_column, ""))
-        if value in remove_ids:
-            return False
-        return not any(value.startswith(prefix) for prefix in remove_prefixes)
-
-    _write_rows_like(path, [row for row in existing if keep(row)] + rows)
-
-
+    existing = read_rows(path)
+    if remove_ids or remove_prefixes:
+        filtered: list[dict[str, Any]] = []
+        for row in existing:
+            value = str(row.get(id_column, ""))
+            if remove_ids and value in remove_ids:
+                continue
+            if remove_prefixes and any(value.startswith(prefix) for prefix in remove_prefixes):
+                continue
+            filtered.append(row)
+        write_rows_like(path, filtered)
+    append_replace_rows(path, rows, id_column=id_column)
 def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -127,7 +118,7 @@ def attach_population_tensor_compile_fields(
     _append_replace(run_dir / "FailedBranches.parquet", [failed_row], id_column="failed_branch_id", remove_ids=POPULATION_TENSOR_FAILED_BRANCH_IDS)
 
     (run_dir / "Tables").mkdir(exist_ok=True)
-    pl.DataFrame([meta]).write_parquet(run_dir / "Tables" / "population_tensor_diagnostics.parquet")
+    write_rows(run_dir / "Tables" / "population_tensor_diagnostics.parquet", [meta])
 
     for json_name in ["RunConfig.json", "ReproducibilityManifest.json", "P_vector.json"]:
         path = run_dir / json_name

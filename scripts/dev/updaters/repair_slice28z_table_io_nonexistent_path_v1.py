@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+
+ROOT = Path.cwd()
+
+TABLE_IO = r'''from __future__ import annotations
+
+from pathlib import Path
 from typing import Any, Iterable
 
 import pyarrow as pa
@@ -102,3 +109,45 @@ def empty_like(path: str | Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"cannot create empty_like for missing table: {path}")
     return write_rows_like(path, [])
+'''
+
+
+def write_text_if_changed(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = path.read_text(encoding="utf-8") if path.exists() else None
+    if old == text:
+        return
+    if path.exists():
+        backup = path.with_suffix(path.suffix + ".slice28z_nonexistent_path.bak")
+        backup.write_text(old or "", encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
+    print(f"wrote {path}")
+
+
+def patch_updater(updater: Path) -> None:
+    if not updater.exists():
+        return
+    text = updater.read_text(encoding="utf-8")
+    backup = updater.with_suffix(updater.suffix + ".slice28z_nonexistent_path.bak")
+    backup.write_text(text, encoding="utf-8")
+
+    # Replace a top-level TABLE_IO raw triple-quoted assignment if present.
+    pattern = re.compile(r"TABLE_IO\s*=\s*r?'''(?:.|\n)*?'''", re.MULTILINE)
+    replacement = "TABLE_IO = r'''\n" + TABLE_IO + "'''"
+    new_text, n = pattern.subn(replacement, text, count=1)
+    if n == 0:
+        print(f"warning: did not find TABLE_IO assignment in {updater}")
+        return
+    if new_text != text:
+        updater.write_text(new_text, encoding="utf-8")
+        print(f"patched {updater}")
+
+
+def main() -> None:
+    write_text_if_changed(ROOT / "src" / "pegasus" / "output" / "table_io.py", TABLE_IO)
+    patch_updater(ROOT / "scripts" / "dev" / "updaters" / "apply_slice28z_storage_boundary_adoption.py")
+    print("slice28z table_io nonexistent-path repair complete")
+
+
+if __name__ == "__main__":
+    main()

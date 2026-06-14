@@ -6,6 +6,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from pegasus.output.table_io import read_rows, write_rows, write_rows_like
 
 import polars as pl
 
@@ -41,29 +42,28 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
+
 def _append_rows(path: Path, rows: list[dict[str, Any]], *, id_column: str | None = None, remove_values: set[str] | None = None) -> None:
-    existing = pl.read_parquet(path)
-    if id_column and id_column in existing.columns:
-        ids = set(remove_values or set())
-        ids.update(str(row[id_column]) for row in rows if row.get(id_column) is not None)
-        if ids:
-            existing = existing.filter(~pl.col(id_column).cast(pl.Utf8).is_in(sorted(ids)))
-    if not rows:
-        existing.write_parquet(path)
-        return
-    new = pl.DataFrame(rows)
-    for column, dtype in existing.schema.items():
-        if column not in new.columns:
-            new = new.with_columns(pl.lit(None).cast(dtype).alias(column))
-        else:
-            new = new.with_columns(pl.col(column).cast(dtype, strict=False))
-    for column in new.columns:
-        if column not in existing.columns:
-            new = new.drop(column)
-    new = new.select(existing.columns)
-    pl.concat([existing, new], how="vertical").write_parquet(path)
-
-
+    existing = read_rows(path)
+    if id_column and remove_values:
+        existing = [row for row in existing if str(row.get(id_column)) not in remove_values]
+    if id_column:
+        incoming = {str(row.get(id_column)): row for row in rows}
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in existing:
+            key = str(row.get(id_column))
+            if key in incoming:
+                merged.append(incoming[key])
+                seen.add(key)
+            else:
+                merged.append(row)
+        for key, row in incoming.items():
+            if key not in seen:
+                merged.append(row)
+        write_rows_like(path, merged)
+    else:
+        write_rows_like(path, existing + list(rows))
 def _field_row(
     *,
     field_id: str,
@@ -382,7 +382,7 @@ def attach_race_bridge_to_run(
             "bridge_id": prior.bridge_id,
         })
     summary_path = run_dir / "Tables" / "race_bridge_summary.parquet"
-    pl.DataFrame(summary_rows).write_parquet(summary_path)
+    write_rows(summary_path, summary_rows)
 
     _append_rows(run_dir / "V_fields.parquet", rows["fields"], id_column="field_id", remove_values=RACE_BRIDGE_FIELD_IDS)
     _append_rows(run_dir / "Q_tensor.parquet", rows["q_rows"], id_column="field_id", remove_values=RACE_BRIDGE_FIELD_IDS)

@@ -1,12 +1,32 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for model_registry.yaml; not a calibrated analytic
-  registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A model registry aligned to PIRS execution surfaces.
 entries:
-- id: model_registry
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: pirs_ols_residual_model
+  status: active
+  family: gaussian_ols
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry pirs_ols_residual_model from
+    model_registry.yaml.
+- id: pirs_poisson_offset_model
+  status: planned_contract
+  family: poisson_log_offset
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  - denominator_offset
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
   warnings:
-  - scaffold_only
+  - requires_offset_contract
+  description: Macro-Slice 27A canonical registry entry pirs_poisson_offset_model
+    from model_registry.yaml.

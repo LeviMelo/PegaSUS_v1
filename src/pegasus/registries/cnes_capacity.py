@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
+
+from pegasus.registries.semantic import active_entries, match_entry
 
 
 class CNESCapacityRegistryError(ValueError):
@@ -27,6 +30,9 @@ CAPACITY_COMPONENTS: dict[str, CNESCapacityComponent] = {
 }
 
 
+REGISTRY_FILE = "cnes_capacity_registry.yaml"
+
+
 def get_capacity_component(raw_field: str) -> CNESCapacityComponent:
     key = raw_field.upper()
     if key not in CAPACITY_COMPONENTS:
@@ -44,5 +50,26 @@ def registry_manifest() -> dict[str, object]:
     return {
         "schema_version": "1.1",
         "registry": "cnes_capacity_vector",
-        "components": {k: v.__dict__ for k, v in CAPACITY_COMPONENTS.items()},
+        "components": {key: value.__dict__ for key, value in CAPACITY_COMPONENTS.items()},
+    }
+
+
+def capacity_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
+    return active_entries(REGISTRY_FILE, registry_root=registry_root)
+
+
+def capacity_entry_for_field(field: Any, *, registry_root: str | Path = "config/registries") -> dict[str, Any] | None:
+    return match_entry(field, capacity_entries(registry_root=registry_root))
+
+
+def capacity_evidence(field: Any, *, registry_root: str | Path = "config/registries") -> dict[str, Any] | None:
+    entry = capacity_entry_for_field(field, registry_root=registry_root)
+    if entry is None:
+        return None
+    return {
+        "registry": REGISTRY_FILE,
+        "entry_id": entry.get("id"),
+        "capacity_family": entry.get("capacity_family"),
+        "capacity_index": entry.get("capacity_index"),
+        "protected_non_equivalence": list(entry.get("protected_non_equivalence", []) or []),
     }

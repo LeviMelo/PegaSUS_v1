@@ -1,12 +1,134 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for diagnostic_topology.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A diagnostic topology registry. Defines ICD-bearing fields
+  as topology-bearing observer/event selectors, not generic additive numeric measures.
 entries:
-- id: diagnostic_topology
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: sim_underlying_cause_causabas
+  status: active
+  source_system: SIM-DO
+  field_patterns:
+  - CAUSABAS
+  - causa_basica
+  - underlying_cause
+  topology_role: underlying_cause
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: Deaths
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  - icd_leaf_count
+  forbidden_operators:
+  - numeric_sum
+  - generic_rate_numerator
+  - generic_cost_component
   warnings:
-  - scaffold_only
+  - diagnostic_topology_not_numeric_measure
+  description: Macro-Slice 27A canonical registry entry sim_underlying_cause_causabas
+    from diagnostic_topology.yaml.
+- id: sim_causal_chain_linhas
+  status: active
+  source_system: SIM-DO
+  field_patterns:
+  - LINHAA
+  - LINHAB
+  - LINHAC
+  - LINHAD
+  - LINHAII
+  - linha
+  topology_role: causal_chain
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: Deaths
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  forbidden_operators:
+  - numeric_sum
+  - generic_rate_numerator
+  warnings:
+  - causal_chain_not_underlying_cause
+  description: Macro-Slice 27A canonical registry entry sim_causal_chain_linhas from
+    diagnostic_topology.yaml.
+- id: sih_principal_diagnosis
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - DIAG_PRINC
+  - diag_princ
+  - principal_diagnosis
+  topology_role: principal_diagnosis
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: HospitalAdmissions
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  - admission_diagnosis_count
+  forbidden_operators:
+  - numeric_sum
+  - generic_cost_component
+  warnings:
+  - hospital_diagnosis_topology
+  description: Macro-Slice 27A canonical registry entry sih_principal_diagnosis from
+    diagnostic_topology.yaml.
+- id: sih_secondary_diagnosis
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - DIAG_SECUN
+  - diag_secun
+  - secondary_diagnosis
+  topology_role: secondary_diagnosis
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: HospitalAdmissions
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  forbidden_operators:
+  - numeric_sum
+  - generic_cost_component
+  warnings:
+  - secondary_diagnosis_sparse_optional
+  description: Macro-Slice 27A canonical registry entry sih_secondary_diagnosis from
+    diagnostic_topology.yaml.
+- id: sinasc_congenital_anomaly_icd
+  status: active
+  source_system: SINASC
+  field_patterns:
+  - CODANOMAL
+  - anomaly_icd
+  - congenital_anomaly
+  topology_role: congenital_anomaly
+  icd_system: ICD-10-Q
+  field_kind: observer_proxy
+  carrier: LiveBirths
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  - anomaly_prevalence_numerator
+  forbidden_operators:
+  - numeric_sum
+  - generic_rate_numerator_without_birth_denominator
+  warnings:
+  - congenital_anomaly_requires_birth_denominator
+  description: Macro-Slice 27A canonical registry entry sinasc_congenital_anomaly_icd
+    from diagnostic_topology.yaml.

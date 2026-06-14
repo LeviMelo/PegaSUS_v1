@@ -1,12 +1,63 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for icd_catalog.yaml; not a calibrated analytic
-  registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A minimal ICD-10 catalog sufficient for topology validation
+  and chapter/block projection.
 entries:
-- id: icd_catalog
-  status: deferred
-  description: Slice 0 placeholder registry.
-  warnings:
-  - scaffold_only
+- id: icd10_chapter_I
+  status: active
+  range:
+  - A00
+  - B99
+  label: Certain infectious and parasitic diseases
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_I from icd_catalog.yaml.
+- id: icd10_chapter_II
+  status: active
+  range:
+  - C00
+  - D48
+  label: Neoplasms
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_II from icd_catalog.yaml.
+- id: icd10_chapter_IX
+  status: active
+  range:
+  - I00
+  - I99
+  label: Diseases of the circulatory system
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_IX from icd_catalog.yaml.
+- id: icd10_chapter_X
+  status: active
+  range:
+  - J00
+  - J99
+  label: Diseases of the respiratory system
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_X from icd_catalog.yaml.
+- id: icd10_chapter_XVI
+  status: active
+  range:
+  - P00
+  - P96
+  label: Certain conditions originating in the perinatal period
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_XVI from icd_catalog.yaml.
+- id: icd10_chapter_XVII
+  status: active
+  range:
+  - Q00
+  - Q99
+  label: Congenital malformations, deformations and chromosomal abnormalities
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_XVII from icd_catalog.yaml.
+- id: icd10_chapter_XX
+  status: active
+  range:
+  - V01
+  - Y98
+  label: External causes of morbidity and mortality
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_XX from icd_catalog.yaml.

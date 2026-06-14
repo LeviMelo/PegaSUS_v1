@@ -1,12 +1,60 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for join_affordances.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A support join affordance registry.
 entries:
-- id: join_affordances
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: sim_sidra_population_denominator
+  status: active
+  left_system: SIM-DO
+  right_system: SIDRA
+  support_axes:
+  - municipality
+  - year
+  allowed_operators:
+  - RN
+  - crude_mortality_rate
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sim_sidra_population_denominator
+    from join_affordances.yaml.
+- id: sinasc_sidra_population_denominator
+  status: active
+  left_system: SINASC
+  right_system: SIDRA
+  support_axes:
+  - municipality
+  - year
+  allowed_operators:
+  - crude_birth_rate
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sinasc_sidra_population_denominator
+    from join_affordances.yaml.
+- id: sim_sinasc_birth_denominator
+  status: active
+  left_system: SIM-DO
+  right_system: SINASC
+  support_axes:
+  - municipality
+  - year
+  allowed_operators:
+  - infant_mortality_rate
+  - neonatal_mortality_rate
+  - postneonatal_mortality_rate
   warnings:
-  - scaffold_only
+  - birth_denominator_linkage
+  description: Macro-Slice 27A canonical registry entry sim_sinasc_birth_denominator
+    from join_affordances.yaml.
+- id: sih_cnes_capacity_context
+  status: active_warning
+  left_system: SIH-RD
+  right_system: CNES-ST
+  support_axes:
+  - municipality
+  - period
+  allowed_operators:
+  - admission_per_bed_ratio
+  - facility_capacity_context
+  warnings:
+  - capacity_context_not_case_denominator
+  description: Macro-Slice 27A canonical registry entry sih_cnes_capacity_context
+    from join_affordances.yaml.

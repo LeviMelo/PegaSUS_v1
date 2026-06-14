@@ -89,6 +89,48 @@ def _specialized_semantics_ok(field: FieldNode) -> tuple[bool, list[str]]:
     return True, warnings
 
 
+
+
+def _registry_root_for_evidence(registries) -> str:
+    root = getattr(registries, "root", None)
+    if root is not None:
+        return str(root)
+    if isinstance(registries, (str, bytes)):
+        return str(registries)
+    return "config/registries"
+
+
+
+def _append_registry_evidence(parents, operator, warnings, registries=None):
+    """Attach compact registry evidence without changing DeltaResult schema."""
+    merged = list(warnings or [])
+    root = _registry_root_for_evidence(registries)
+    evidence: list[str] = []
+    try:
+        from pegasus.registries.diagnostic_topology import diagnostic_evidence
+        from pegasus.registries.cnes_capacity import capacity_evidence
+        from pegasus.registries.sih_cost import cost_evidence
+    except Exception:
+        return merged
+    for parent in parents or []:
+        diagnostic = diagnostic_evidence(parent, registry_root=root)
+        if diagnostic:
+            evidence.append(f"diagnostic_topology={diagnostic.get('entry_id')}")
+        capacity = capacity_evidence(parent, registry_root=root)
+        if capacity:
+            evidence.append(f"cnes_capacity={capacity.get('entry_id')}")
+        cost = cost_evidence(parent, registry_root=root)
+        if cost:
+            evidence.append(f"sih_cost={cost.get('entry_id')}")
+    if evidence:
+        if "registry_evidence_attached" not in merged:
+            merged.append("registry_evidence_attached")
+        for item in evidence:
+            token = f"registry_evidence:{item}"
+            if token not in merged:
+                merged.append(token)
+    return merged
+
 def evaluate_delta(
     *,
     parents: list[FieldNode],

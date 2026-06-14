@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from pegasus.registries.semantic import active_entries, match_entry
 
 
 class SIHCostRegistryError(ValueError):
@@ -24,6 +28,9 @@ COST_COMPONENTS: dict[str, SIHCostComponent] = {
 }
 
 
+REGISTRY_FILE = "sih_cost_registry.yaml"
+
+
 def get_cost_component(raw_field: str) -> SIHCostComponent:
     key = raw_field.upper()
     if key not in COST_COMPONENTS:
@@ -38,4 +45,28 @@ def require_component_specific_cost(raw_field: str | None) -> SIHCostComponent:
 
 
 def registry_manifest() -> dict[str, object]:
-    return {"schema_version": "1.0", "registry": "sih_cost_components", "components": {k: v.__dict__ for k, v in COST_COMPONENTS.items()}}
+    return {
+        "schema_version": "1.0",
+        "registry": "sih_cost_components",
+        "components": {key: value.__dict__ for key, value in COST_COMPONENTS.items()},
+    }
+
+
+def cost_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
+    return active_entries(REGISTRY_FILE, registry_root=registry_root)
+
+
+def cost_component_for_field(field: Any, *, registry_root: str | Path = "config/registries") -> dict[str, Any] | None:
+    return match_entry(field, cost_entries(registry_root=registry_root))
+
+
+def cost_evidence(field: Any, *, registry_root: str | Path = "config/registries") -> dict[str, Any] | None:
+    entry = cost_component_for_field(field, registry_root=registry_root)
+    if entry is None:
+        return None
+    return {
+        "registry": REGISTRY_FILE,
+        "entry_id": entry.get("id"),
+        "cost_component": entry.get("cost_component"),
+        "protected_non_equivalence": list(entry.get("protected_non_equivalence", []) or []),
+    }

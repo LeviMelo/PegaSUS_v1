@@ -1,128 +1,196 @@
 registry_set:
   name: PegaSUS_core
-  version: v1.0
+  version: v2.0.slice27a27b
   created_at: '2026-06-06'
+  updated_at: '2026-06-13'
   owner: local
   git_commit: uninitialized
   dirty_allowed: false
 registries:
-  source_fields:
-    path: source_fields.yaml
+  aggregation:
+    path: aggregation.yaml
     schema_version: '1.0'
-    sha256: e2b2df59406fb78c92e3283c4176c18abd12c1445e4dbc80b4470b85b0b7cca3
-  composite_decoders:
-    path: composite_decoders.yaml
-    schema_version: '1.0'
-    sha256: 0b4adddcba1cacde074210186b4dabd8f41ef83d01767490838f38e357c60bbf
-  carrier_registry:
-    path: carrier_registry.yaml
-    schema_version: '1.0'
-    sha256: 102c0bf918933b8209024870ff9ee3922dad757b89c1c1c9415f71c0937d8f57
-  unit_registry:
-    path: unit_registry.yaml
-    schema_version: '1.0'
-    sha256: 6b68f7ea975f9ad502ecb735fddc6cc3a36da9fcfb1860d35a5d302ed8bd2865
+    registry_version: aggregation_registry_v1
+    sha256: 147c2b6343ea1925dc93adcd57a598e9e51f396e9757e3336966b17b677861d7
   aggregation_registry:
     path: aggregation_registry.yaml
     schema_version: '1.0'
-    sha256: b880c52f01ccbdd5158b898b1eb676fa7816a471c8828ad1a74b5911975c6f20
+    registry_version: v2.0
+    sha256: d2b86b0b7d38f937e93ece0d5142343cf4553565ce2e53b198a95a263235bbf8
+  bridge_grammars:
+    path: bridge_grammars.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 2da772416cd32a21aa4f0ce8b97caccaa45a816f65a179ad6c7c8401a0c143d9
+  carrier:
+    path: carrier.yaml
+    schema_version: '1.0'
+    registry_version: carrier_registry_v1
+    sha256: 1b91dcdd605a142ea9a0ed9880f1bc2d79ecf42e9a42e7142338929ede7a4a49
+  carrier_registry:
+    path: carrier_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 072dbccbc936007608e220405f1728648ca37fbc3398a04d415185d54c1d2480
+  clinical_event_definitions:
+    path: clinical_event_definitions.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 56e5d2ece6da8dd0142782af42c3352891b0d1093ac5e9812e2d76ebf269f7dc
+  cnes_capacity_registry:
+    path: cnes_capacity_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: bd5eba0d8d66c63d7b48ff4a12f0a7892ef6d8b4990fa19e26ed8b6e1ace2300
+  composite_decoders:
+    path: composite_decoders.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 0b4adddcba1cacde074210186b4dabd8f41ef83d01767490838f38e357c60bbf
+  diagnostic_topology:
+    path: diagnostic_topology.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: e321d20530d23781e495ab501b93da289b2d30dd612c893c1f0e74422c8ada95
+  hsic_registry:
+    path: hsic_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: db2f25c07521240180538a731fc1f9cd15783430166230aafde8136016c26d73
+  icd_catalog:
+    path: icd_catalog.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 0a86155f69f6e4d732debca81c3ec3c928a7b8ae36b66550932dd8011fb5cd17
+  icd_quality_groups:
+    path: icd_quality_groups.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 15bd8a493d9cd0557137f5f8e95b5e6dca163e9191070e17f3a3fd4c061fe64b
+  join_affordances:
+    path: join_affordances.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 7761e3f53121a8b218f6d4eddcc5d7451b515618ff06ac11c7b3184b521a8ac8
+  model_registry:
+    path: model_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 8bcb53cb99980deafdf035ae0d235db6d78a70ea624ef313b8226d413045919e
+  municipality_crosswalk_sources:
+    path: municipality_crosswalk_sources.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: b8fb1fb7f21ada71c7eb7be487b2e0524c3480d61ff7ae7ce07360e30fda9e41
+  null_registry:
+    path: null_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: ce161830ab79c0e9a320875d8c682148cba8b44a978b877a0a9709f103c168af
+  output_schema:
+    path: output_schema.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 99ff619d94dfb7c6b5851c233fa096c766bfd60b3aa686f9b232dee58f12e4f9
+  population_solver_registry:
+    path: population_solver_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 01ced0e081ed93204b388daf801a71489a1f293794d1a6ad61856850d1eadd03
+  provenance:
+    path: provenance.yaml
+    schema_version: '1.0'
+    registry_version: provenance_registry_v1
+    sha256: 281965b510b360749cd7fd7feb2f27277d599a277dee48c267a4ccb2c5194774
   provenance_registry:
     path: provenance_registry.yaml
     schema_version: '1.0'
-    sha256: 1ec966f3ef60082e3f3d53bd2eb334d62d7863c53874412ee76e218fa4383196
+    registry_version: v2.0
+    sha256: fe69a84a1279681d7c964172f954e3e417366459373c7d03e198fc5e9cc4557d
+  quality:
+    path: quality.yaml
+    schema_version: '1.0'
+    registry_version: quality_registry_v1
+    sha256: c475e548ad497add61aa18092e7d3cf1c7c710e73367712b455fdc471ad35608
   quality_permissions:
     path: quality_permissions.yaml
     schema_version: '1.0'
+    registry_version: v1.0
     sha256: b7ad09ed865f11114c1b3b759f318e16a47d6d034c6532e9d4abcce162101320
   race_axis_registry:
     path: race_axis_registry.yaml
     schema_version: '1.0'
-    sha256: e7d3dd08abcf81752905ff36bf32d05b5d94d3fb90898ed7ca7d4cd30411d532
+    registry_version: v2.0
+    sha256: c44ca83b783de8c71d19be4780d06f8d24eeded09f91d95da9a1354b0a160d07
   race_bridge_priors:
     path: race_bridge_priors.yaml
     schema_version: '1.0'
-    sha256: fe0e630f8ffe20e5ae637e179288a6ee2c0eb97d98505798d10bf2629a4ae346
-  icd_catalog:
-    path: icd_catalog.yaml
-    schema_version: '1.0'
-    sha256: 239a5370b3058fa48f310a80d7bcad06f38516aa6b2ad793530179afcc682e2d
-  icd_quality_groups:
-    path: icd_quality_groups.yaml
-    schema_version: '1.0'
-    sha256: 8f69b40a58dec98a03981b730bdc5f9c5daa652c9870f08b750e2dfc94d52a60
-  diagnostic_topology:
-    path: diagnostic_topology.yaml
-    schema_version: '1.0'
-    sha256: f0fe4e8bca75e028a05e1ac123a25f6cebda70b12c44dc0479e8393516213095
-  clinical_event_definitions:
-    path: clinical_event_definitions.yaml
-    schema_version: '1.0'
-    sha256: 36f113b4d3010ada168c25cd2bb78ca11ee1ca6fc2196c4bccf1c55dee9ff723
-  cnes_capacity_registry:
-    path: cnes_capacity_registry.yaml
-    schema_version: '1.0'
-    sha256: 13c190a0379342cd558121f331c03b68bb723fa488bb3fbac0611d2cef50c2b6
-  sih_cost_registry:
-    path: sih_cost_registry.yaml
-    schema_version: '1.0'
-    sha256: 36e50f70058b5c1467c501195252a8ca72ce6f6b51c8d2ae1ae04dc123d753b9
-  sidra_views:
-    path: sidra_views.yaml
-    schema_version: '1.0'
-    sha256: 233b820e6d041fb1c23473bc6395c75cffef46ac71ad62a7880b82303704c5ba
-  sidra_category_maps:
-    path: sidra_category_maps.yaml
-    schema_version: '1.0'
-    sha256: d2a14e33afa33b9cfbc1650e575e2ccfbd64da1984c1a2ddc6917e184ef13694
-  sidra_stitching:
-    path: sidra_stitching.yaml
-    schema_version: '1.0'
-    sha256: 8bfe581dab813c7275f34505398d3a43ca9d81b6db8bdc0d67061ba5208fece4
-  sidra_regime_registry:
-    path: sidra_regime_registry.yaml
-    schema_version: '1.0'
-    sha256: 18b7bd44708668d49c63112b8d47ed7adbe93cb9ab0da4837e1f2fe9c614dc4b
-  municipality_crosswalk_sources:
-    path: municipality_crosswalk_sources.yaml
-    schema_version: '1.0'
-    sha256: 5d29ea9439c9b89a3c54205353f2dec5d868d4bba4ba4d56f6ed5d1b576de709
-  join_affordances:
-    path: join_affordances.yaml
-    schema_version: '1.0'
-    sha256: f190bf630d9406d7d79170254dca08b5602822d5618c9b498370e6e4233d6eec
-  bridge_grammars:
-    path: bridge_grammars.yaml
-    schema_version: '1.0'
-    sha256: 0c4199384a6315f3664918a59dd1625d72e47701899bd7e1d02a953691999364
-  stdfm_registry:
-    path: stdfm_registry.yaml
-    schema_version: '1.0'
-    sha256: 5e5c12ddfe3862d6ff2b777b60550bc1ef7fb178b448e779202b075a43795957
-  population_solver_registry:
-    path: population_solver_registry.yaml
-    schema_version: '1.0'
-    sha256: fd55cca8a7e1b42816326bbba31cbb44b3b9b041b63aad0584e871176cc7301c
-  model_registry:
-    path: model_registry.yaml
-    schema_version: '1.0'
-    sha256: 29cf00b60aab3e8faac642f5671e727fd0b886a1662f8e62d5850a689ed5222d
+    registry_version: race_bridge_priors.v1.slice4b
+    sha256: a7742568cf1f3c7c0299af521e7d9c941d8e11e3580ce3146d4948abe39b346a
   residual_registry:
     path: residual_registry.yaml
     schema_version: '1.0'
-    sha256: 01ea54cc472014fec9a76ecb6f46c8c26a4a9a6de367c942fab7a216d5a2f14d
-  hsic_registry:
-    path: hsic_registry.yaml
+    registry_version: v2.0
+    sha256: 9526de4a88cada914ff1899eddf3c95fc1be6746bf2a5b6c0d127d3094e9d49a
+  sidra_category_maps:
+    path: sidra_category_maps.yaml
     schema_version: '1.0'
-    sha256: 15839eb3819b7f955b7092f3880fa06e8834c1ccc155c49f3346e794d12fc799
-  null_registry:
-    path: null_registry.yaml
+    registry_version: v1.0
+    sha256: d2a14e33afa33b9cfbc1650e575e2ccfbd64da1984c1a2ddc6917e184ef13694
+  sidra_regime_registry:
+    path: sidra_regime_registry.yaml
     schema_version: '1.0'
-    sha256: b611de28579445961b97b0a717afea6d61fdb279c539eb8b3c9dcc5406dcae9d
-  output_schema:
-    path: output_schema.yaml
+    registry_version: v1.0
+    sha256: 18b7bd44708668d49c63112b8d47ed7adbe93cb9ab0da4837e1f2fe9c614dc4b
+  sidra_stitching:
+    path: sidra_stitching.yaml
     schema_version: '1.0'
-    sha256: 99ff619d94dfb7c6b5851c233fa096c766bfd60b3aa686f9b232dee58f12e4f9
+    registry_version: v1.0
+    sha256: 8bfe581dab813c7275f34505398d3a43ca9d81b6db8bdc0d67061ba5208fece4
+  sidra_views:
+    path: sidra_views.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 233b820e6d041fb1c23473bc6395c75cffef46ac71ad62a7880b82303704c5ba
+  sih_cost_registry:
+    path: sih_cost_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 9124a93a326a161efa7e71316f2091e4db5f42ef59725787f0ccef0de3eb3292
+  source_fields:
+    path: source_fields.yaml
+    schema_version: '1.0'
+    registry_version: '1.0'
+    sha256: b85563837d528ea039a48e04cd66c8113485e4fd473c9eaf62a32ffaa750396d
+  stdfm_registry:
+    path: stdfm_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 99aa9df09ae2f8a1f4c105eb75aee875332f49e9489f0d07d840ebc17eed82cb
+  unit:
+    path: unit.yaml
+    schema_version: '1.0'
+    registry_version: unit_registry_v1
+    sha256: 6c24ab117b653be325fdd43530dd3c4b26d40ce049f31788a10d0590753bd74f
+  unit_registry:
+    path: unit_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 98c3d690ad96a0ba33e203dcc99f0770409ed642f3643080c5b7e47fbb144e8e
   sidra_table_seed:
     path: sidra_table_seed.jsonl
-    schema_version: '1.0'
+    schema_version: jsonl
+    registry_version: seed
     sha256: a7bcfc6b9e364fa8bdbf3ed3a570b3229088ea0acd2b2a8a202e58e09a5eedd6
+entries:
+- id: registry_manifest_v2
+  status: active
+  description: Registry manifest with per-registry content hashes after Slice 27A/27B
+    canonicalization.
+  warnings: []
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A registry manifest regenerated after registry canonicalization
+  and repair v1.

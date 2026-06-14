@@ -1,12 +1,124 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for cnes_capacity_registry.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A CNES-ST capacity registry. Protects indexed facility-capacity
+  components from generic count semantics.
 entries:
-- id: cnes_capacity_registry
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: cnes_facility_stock
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - CNES
+  - facility_id
+  - estabelecimento
+  - TP_UNID
+  capacity_family: facility_stock
+  carrier: Facilities
+  unit: counts
+  aggregation: additive
+  support_axes:
+  - facility
+  - municipality
+  - period
+  allowed_operators:
+  - facility_count
+  - facility_type_stratification
+  - capacity_density_with_population
+  forbidden_operators:
+  - generic_admission_count
+  - sih_cost_sum
+  protected_non_equivalence:
+  - facility_type
+  - sus_binding
+  - management_regime
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry cnes_facility_stock from cnes_capacity_registry.yaml.
+- id: cnes_bed_capacity_qtleit
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - QTLEIT
+  - LEITOS
+  - beds
+  - bed_capacity
+  capacity_family: bed_capacity
+  capacity_index: QTLEIT
+  carrier: Facilities
+  unit: beds
+  aggregation: additive
+  support_axes:
+  - facility
+  - municipality
+  - period
+  - bed_type
+  allowed_operators:
+  - bed_capacity_sum
+  - bed_capacity_density
+  - admission_per_bed_ratio
+  forbidden_operators:
+  - facility_count_equivalence
+  - generic_population_denominator
+  protected_non_equivalence:
+  - bed_type
+  - sus_binding
+  - specialty
   warnings:
-  - scaffold_only
+  - capacity_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry cnes_bed_capacity_qtleit from
+    cnes_capacity_registry.yaml.
+- id: cnes_installation_capacity_qtinst
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - QTINST
+  - INSTAL
+  - installation_capacity
+  - equipment_capacity
+  capacity_family: installation_capacity
+  capacity_index: QTINST
+  carrier: Facilities
+  unit: counts
+  aggregation: additive
+  support_axes:
+  - facility
+  - municipality
+  - period
+  - installation_type
+  allowed_operators:
+  - installation_capacity_sum
+  - capacity_density
+  forbidden_operators:
+  - bed_capacity_equivalence
+  - facility_count_equivalence
+  protected_non_equivalence:
+  - installation_type
+  - equipment_type
+  warnings:
+  - capacity_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry cnes_installation_capacity_qtinst
+    from cnes_capacity_registry.yaml.
+- id: cnes_sus_binding
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - VINC_SUS
+  - sus_binding
+  capacity_family: facility_attribute
+  carrier: Facilities
+  unit: binary_flag
+  aggregation: non_aggregable
+  support_axes:
+  - facility
+  - municipality
+  - period
+  allowed_operators:
+  - facility_filter
+  - sus_capacity_stratification
+  forbidden_operators:
+  - numeric_sum_without_filter_semantics
+  protected_non_equivalence:
+  - sus_binding
+  warnings:
+  - facility_attribute_not_capacity_measure
+  description: Macro-Slice 27A canonical registry entry cnes_sus_binding from cnes_capacity_registry.yaml.

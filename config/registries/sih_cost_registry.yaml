@@ -1,12 +1,106 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for sih_cost_registry.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A SIH-RD cost-component registry. Protects AIH cost components
+  from unsafe generic BRL collapse.
 entries:
-- id: sih_cost_registry
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: sih_total_cost_val_tot
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_TOT
+  - total_cost
+  - valor_total
+  cost_component: total
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - cost_sum
+  - cost_per_admission
+  - cost_density_population
+  forbidden_operators:
+  - component_equivalence_with_professional_or_hospital_service
+  protected_non_equivalence:
+  - VAL_SH
+  - VAL_SP
+  - VAL_SADT
+  - VAL_RN
+  - VAL_UTI
   warnings:
-  - scaffold_only
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_total_cost_val_tot from
+    sih_cost_registry.yaml.
+- id: sih_hospital_service_val_sh
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_SH
+  - hospital_service
+  - servico_hospitalar
+  cost_component: hospital_service
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - cost_component_sum
+  - cost_component_share
+  forbidden_operators:
+  - total_cost_equivalence
+  - professional_service_equivalence
+  protected_non_equivalence:
+  - VAL_TOT
+  - VAL_SP
+  warnings:
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_hospital_service_val_sh
+    from sih_cost_registry.yaml.
+- id: sih_professional_service_val_sp
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_SP
+  - professional_service
+  - servico_profissional
+  cost_component: professional_service
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - cost_component_sum
+  - cost_component_share
+  forbidden_operators:
+  - total_cost_equivalence
+  - hospital_service_equivalence
+  protected_non_equivalence:
+  - VAL_TOT
+  - VAL_SH
+  warnings:
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_professional_service_val_sp
+    from sih_cost_registry.yaml.
+- id: sih_uti_cost_component
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_UTI
+  - UTI
+  - uti_cost
+  cost_component: intensive_care
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - uti_cost_sum
+  - uti_cost_per_admission
+  forbidden_operators:
+  - generic_total_cost_equivalence
+  protected_non_equivalence:
+  - VAL_TOT
+  - VAL_SH
+  - VAL_SP
+  warnings:
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_uti_cost_component from
+    sih_cost_registry.yaml.

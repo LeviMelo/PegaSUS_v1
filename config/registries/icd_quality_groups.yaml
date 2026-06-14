@@ -1,12 +1,31 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for icd_quality_groups.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A ICD quality grouping registry for diagnostic topology
+  warnings.
 entries:
-- id: icd_quality_groups
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: icd10_well_formed
+  status: active
+  predicate: normalized_icd10_code
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_well_formed from icd_quality_groups.yaml.
+- id: icd10_missing
+  status: active_observer
+  predicate: missing_or_blank_code
   warnings:
-  - scaffold_only
+  - diagnostic_code_missing
+  description: Macro-Slice 27A canonical registry entry icd10_missing from icd_quality_groups.yaml.
+- id: icd10_ill_defined
+  status: active_warning
+  predicate: R00_R99_or_unspecified
+  warnings:
+  - ill_defined_condition_group
+  description: Macro-Slice 27A canonical registry entry icd10_ill_defined from icd_quality_groups.yaml.
+- id: icd10_external_cause
+  status: active
+  predicate: V01_Y98
+  warnings:
+  - external_cause_topology
+  description: Macro-Slice 27A canonical registry entry icd10_external_cause from
+    icd_quality_groups.yaml.

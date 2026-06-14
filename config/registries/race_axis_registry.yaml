@@ -1,23 +1,56 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for race_axis_registry.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A race-axis declaration registry.
 entries:
-- id: IBGE.self_declared
-  status: stable
-  description: IBGE self-declared race axis.
-  warnings: []
-- id: SIM-DO.administrative_death_declaration
-  status: stable
-  description: SIM death declaration race axis.
-  warnings: []
-- id: SIH-RD.billing_record
-  status: stable
-  description: SIH billing race axis.
-  warnings: []
-- id: SINASC.administrative_mixed
-  status: stable
-  description: SINASC administrative mixed race axis.
-  warnings: []
+- id: administrative_race_color
+  status: active_warning
+  declaration_process: administrative_observed_or_recorded
+  categories:
+  - branca
+  - preta
+  - amarela
+  - parda
+  - indigena
+  - ignored
+  allowed_direct_comparisons:
+  - administrative_race_color
+  bridge_required_to:
+  - posterior_self_declared_race_color
+  - census_self_declared_race_color
+  warnings:
+  - administrative_race_not_self_declared
+  description: Macro-Slice 27A canonical registry entry administrative_race_color
+    from race_axis_registry.yaml.
+- id: posterior_self_declared_race_color
+  status: active
+  declaration_process: bridge_posterior_distribution
+  categories:
+  - branca
+  - preta
+  - amarela
+  - parda
+  - indigena
+  allowed_direct_comparisons:
+  - posterior_self_declared_race_color
+  bridge_required_to:
+  - administrative_race_color
+  warnings:
+  - race_bridge_posterior_uncertainty
+  description: Macro-Slice 27A canonical registry entry posterior_self_declared_race_color
+    from race_axis_registry.yaml.
+- id: missing_race_observer
+  status: active_observer
+  declaration_process: missingness_observer
+  categories:
+  - missing
+  - ignored
+  - not_recorded
+  allowed_direct_comparisons:
+  - missing_race_observer
+  bridge_required_to: []
+  warnings:
+  - missingness_not_population_race_axis
+  description: Macro-Slice 27A canonical registry entry missing_race_observer from
+    race_axis_registry.yaml.

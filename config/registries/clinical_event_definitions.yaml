@@ -1,12 +1,69 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for clinical_event_definitions.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A clinical event definitions for source-agnostic EFG event
+  carriers.
 entries:
-- id: clinical_event_definitions
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: sim_all_cause_death_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: Deaths
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - mortality_rate
+  - infant_mortality_rate
+  - neonatal_mortality_rate
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sim_all_cause_death_event
+    from clinical_event_definitions.yaml.
+- id: sinasc_live_birth_event
+  status: active
+  source_system: SINASC
+  event_carrier: LiveBirths
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - crude_birth_rate
+  - anomaly_prevalence
+  - low_birth_weight_prevalence
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sinasc_live_birth_event from
+    clinical_event_definitions.yaml.
+- id: sih_hospital_admission_event
+  status: active
+  source_system: SIH-RD
+  event_carrier: HospitalAdmissions
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  - Facilities
+  default_aggregation: additive
+  allowed_rates:
+  - hospitalization_rate
+  - admission_per_bed_ratio
   warnings:
-  - scaffold_only
+  - administrative_admission_not_incidence
+  description: Macro-Slice 27A canonical registry entry sih_hospital_admission_event
+    from clinical_event_definitions.yaml.
+- id: cnes_facility_capacity_event
+  status: active
+  source_system: CNES-ST
+  event_carrier: Facilities
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - facility_density
+  - bed_density
+  warnings:
+  - capacity_snapshot_period_semantics
+  description: Macro-Slice 27A canonical registry entry cnes_facility_capacity_event
+    from clinical_event_definitions.yaml.

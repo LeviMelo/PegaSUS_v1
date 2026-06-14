@@ -1,12 +1,65 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for bridge_grammars.yaml; not a calibrated analytic
-  registry.
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A bridge grammar registry for EFG declaration, support,
+  and denominator bridge legality.
 entries:
-- id: bridge_grammars
-  status: deferred
-  description: Slice 0 placeholder registry.
+- id: race_admin_to_posterior_bridge
+  status: active
+  bridge_type: race_axis
+  from_axis: administrative_race_color
+  to_axis: posterior_self_declared_race_color
+  operators:
+  - Bridge_R
+  - Bridge_R_fixedC_dynamicW
+  - Bridge_R_posteriorC
+  required_metadata:
+  - race_bridge_prior
+  - posterior_uncertainty
+  - missing_race_observer
   warnings:
-  - scaffold_only
+  - race_bridge_uncertainty_required
+  description: Macro-Slice 27A canonical registry entry race_admin_to_posterior_bridge
+    from bridge_grammars.yaml.
+- id: geography_geneallocation_bridge
+  status: active_artifact_required
+  bridge_type: geospatial_support
+  operators:
+  - geneallocation_measure_pushforward
+  - amc_contraction
+  required_metadata:
+  - crosswalk_manifest_hash
+  - mass_conservation_proof
+  forbidden_payloads:
+  - direct_rate_allocation
+  warnings:
+  - geospatial_artifact_required
+  description: Macro-Slice 27A canonical registry entry geography_geneallocation_bridge
+    from bridge_grammars.yaml.
+- id: population_denominator_bridge
+  status: active
+  bridge_type: denominator_support
+  operators:
+  - RN
+  - crude_rate
+  - denominator_link
+  required_metadata:
+  - support_intersection
+  - denominator_fragility
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry population_denominator_bridge
+    from bridge_grammars.yaml.
+- id: facility_admission_support_bridge
+  status: active_warning
+  bridge_type: facility_admission_support
+  operators:
+  - admission_per_bed_ratio
+  - admission_capacity_context
+  required_metadata:
+  - facility_period_support
+  - admission_period_support
+  warnings:
+  - facility_capacity_not_case_denominator
+  description: Macro-Slice 27A canonical registry entry facility_admission_support_bridge
+    from bridge_grammars.yaml.

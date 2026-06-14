@@ -16,3 +16,10 @@ fallbacks.
 
 Legacy fixture bundle writers remain quarantined compatibility surfaces until
 parity and deletion are explicitly executed.
+## Slice 28Y semantic manifest evidence
+
+The autonomous EFG build boundary records two metadata-only summaries on the
+`EFGResult` manifest: `core_seed_summary` and `bridge_plan_summary`. These
+summaries classify admitted fields into V_core-like seed roles and identify
+cross-field bridge opportunities without materializing tensors or adding new
+first-class output-bundle keys.

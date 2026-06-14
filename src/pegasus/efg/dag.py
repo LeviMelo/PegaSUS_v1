@@ -225,7 +225,7 @@ def _dedupe_edges(edges: Iterable[EFGEdge], canonical: dict[str, str]) -> tuple[
     return tuple(output.values())
 
 
-def build_efg(
+def _build_efg_base(
     *,
     substrate: SubstrateBundle,
     registry_root: str | Path = "config/registries",
@@ -442,3 +442,76 @@ def build_efg(
         legality_summary=legality,
         operator_mode=operator_mode,
     )
+
+# ---- Slice 28Y EFG semantic manifest integration ----
+# The autonomous DAG now records metadata-only core-seed and bridge-plan evidence
+# without changing first-class output-bundle keys and without materializing tensors.
+from functools import wraps as _slice28y_wraps
+
+from pegasus.efg.bridges import bridge_summary as _slice28y_bridge_summary
+from pegasus.efg.bridges import plan_bridge_candidates as _slice28y_plan_bridge_candidates
+from pegasus.efg.core_seed import build_core_seed_set as _slice28y_build_core_seed_set
+from pegasus.efg.core_seed import core_seed_summary as _slice28y_core_seed_summary
+
+
+def _slice28y_empty_core_seed_summary() -> dict[str, object]:
+    return {
+        "registry_root": "config/registries",
+        "seed_count": 0,
+        "blocked_count": 0,
+        "role_counts": {},
+        "seeds": [],
+        "blocked": [],
+    }
+
+
+def _slice28y_empty_bridge_plan_summary() -> dict[str, object]:
+    return {
+        "candidate_count": 0,
+        "blocked_count": 0,
+        "bridge_type_counts": {},
+        "candidates": [],
+        "blocked": [],
+    }
+
+
+if not hasattr(EFGResult, "_slice28y_base_as_manifest"):
+    EFGResult._slice28y_base_as_manifest = EFGResult.as_manifest  # type: ignore[attr-defined]
+
+
+def _slice28y_efgresult_as_manifest(self):
+    payload = self._slice28y_base_as_manifest()  # type: ignore[attr-defined]
+    payload.setdefault(
+        "core_seed_summary",
+        getattr(self, "_slice28y_core_seed_summary", _slice28y_empty_core_seed_summary()),
+    )
+    payload.setdefault(
+        "bridge_plan_summary",
+        getattr(self, "_slice28y_bridge_plan_summary", _slice28y_empty_bridge_plan_summary()),
+    )
+    payload.setdefault("semantic_manifest_schema", "28Y.1")
+    return payload
+
+
+EFGResult.as_manifest = _slice28y_efgresult_as_manifest  # type: ignore[method-assign]
+
+
+@_slice28y_wraps(_build_efg_base)
+def build_efg(*args, **kwargs):
+    result = _build_efg_base(*args, **kwargs)
+    fields = tuple(getattr(result, "fields", ()) or ())
+    registry_root = kwargs.get("registry_root", "config/registries")
+    intent = kwargs.get("intent")
+    try:
+        seed_set = _slice28y_build_core_seed_set(fields, registry_root=registry_root, intent=intent)
+        bridge_plan = _slice28y_plan_bridge_candidates(fields, registry_root=registry_root, intent=intent)
+        object.__setattr__(result, "_slice28y_core_seed_summary", _slice28y_core_seed_summary(seed_set))
+        object.__setattr__(result, "_slice28y_bridge_plan_summary", _slice28y_bridge_summary(bridge_plan))
+    except Exception as exc:  # pragma: no cover - defensive metadata guard only
+        object.__setattr__(result, "_slice28y_core_seed_summary", _slice28y_empty_core_seed_summary())
+        object.__setattr__(result, "_slice28y_bridge_plan_summary", {
+            **_slice28y_empty_bridge_plan_summary(),
+            "blocked": [{"reason": "semantic_manifest_failed", "error": str(exc)}],
+            "blocked_count": 1,
+        })
+    return result

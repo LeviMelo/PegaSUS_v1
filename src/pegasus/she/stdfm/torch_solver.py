@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from statistics import median
 from typing import Any
 
+from pegasus.compute.devices import resolve_torch_device
+from pegasus.compute.kernels import tensor_nbytes
+from pegasus.compute.random import seed_everything
+from pegasus.compute.torch_backend import torch_runtime
+from pegasus.core.exceptions import ComputeBackendError
 from pegasus.she.stdfm.blocked import blocked_solver_pending
 from pegasus.she.stdfm.objective import transform_observations, validate_stdfm_problem
 from pegasus.she.stdfm.schema import (
@@ -65,9 +70,7 @@ def _fit_start(
     learning_rate: float,
     tolerance: float,
 ) -> _Fit:
-    torch.manual_seed(seed)
-    if device.type == "cuda":
-        torch.cuda.manual_seed_all(seed)
+    seed_everything(seed, torch_module=torch)
     space, time, fields = problem.shape
     factors_count = problem.n_factors
     y = torch.tensor(transformed, dtype=dtype, device=device).reshape(space, time, fields)
@@ -206,17 +209,20 @@ def solve_stdfm(
             field_id=input_schema.field_id,
             reason="ST-DFM numerical observations and masks were not supplied.",
         )
-    try:
-        import torch
-    except ImportError:
-        return blocked_solver_pending(field_id=input_schema.field_id, reason="PyTorch backend is unavailable.")
     validate_stdfm_problem(problem)
     if input_schema.observation_shape != problem.shape[:2]:
         raise ValueError("ST-DFM input schema support does not match numerical problem support.")
-    if require_cuda and not torch.cuda.is_available():
-        return blocked_solver_pending(field_id=input_schema.field_id, reason="cuda_required_unavailable")
-    device = torch.device("cuda" if (require_cuda or prefer_cuda) and torch.cuda.is_available() else "cpu")
-    dtype = torch.float64
+    try:
+        plan = resolve_torch_device(
+            "stdfm_solver",
+            cuda_required=require_cuda,
+            prefer_cuda=prefer_cuda,
+            seed=problem.seed,
+            estimated_bytes=tensor_nbytes(problem.shape, copies=12),
+        )
+        torch, device, dtype = torch_runtime(plan)
+    except ComputeBackendError as exc:
+        return blocked_solver_pending(field_id=input_schema.field_id, reason=str(exc))
     transformed, transform_warnings = transform_observations(problem)
     fits = [
         _fit_start(

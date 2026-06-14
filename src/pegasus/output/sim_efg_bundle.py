@@ -9,7 +9,6 @@ from typing import Any
 
 import polars as pl
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from pegasus.core.enums import FieldState, MaterializationState
 from pegasus.core.schemas import FailedBranch, FieldNode, QState, WarningRecord
@@ -20,6 +19,7 @@ from pegasus.efg.lineage import make_lineage
 from pegasus.efg.node import make_field_node
 from pegasus.efg.q_tensor import compute_q_state
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
+from pegasus.storage import write_table
 
 
 def _now() -> str:
@@ -31,9 +31,7 @@ def _json(value: Any) -> str:
 
 
 def _write_table(path: Path, rows: list[dict[str, Any]], schema: pa.Schema) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    table = pa.Table.from_pylist(rows, schema=schema)
-    pq.write_table(table, path)
+    write_table(path, rows, schema=schema)
 
 
 def _field_row(field: FieldNode) -> dict[str, Any]:
@@ -553,7 +551,7 @@ def _make_associated_condition_observer(
     )
 
 
-def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNode], list[FailedBranch], list[WarningRecord]]:
+def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNode], list[FailedBranch], list[WarningRecord]]:
     sim_events_path = Path(sim_events_path)
     df = pl.read_parquet(sim_events_path)
 
@@ -836,7 +834,7 @@ def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNod
     return fields, [failed_branch], warnings
 
 
-def write_sim_fixture_efg_bundle(
+def write_sim_compiler_bundle(
     *,
     sim_events_path: str | Path,
     run_dir: str | Path,
@@ -846,7 +844,7 @@ def write_sim_fixture_efg_bundle(
     (run_dir / "Tables").mkdir(exist_ok=True)
     (run_dir / "Maps").mkdir(exist_ok=True)
 
-    fields, failed_branches, warnings = build_sim_fixture_fields(sim_events_path)
+    fields, failed_branches, warnings = build_sim_compiler_fields(sim_events_path)
     q_states = [
         compute_q_state(field=f, provenance=f.provenance, warnings=warnings)
         for f in fields
@@ -1144,3 +1142,15 @@ def write_sim_fixture_efg_bundle(
         raise RuntimeError(f"Invalid first-class bundle keys. extra={sorted(extra)} missing={sorted(missing)}")
 
     return run_dir
+
+
+def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNode], list[FailedBranch], list[WarningRecord]]:
+    """Compatibility fixture API; production compile uses build_sim_compiler_fields."""
+
+    return build_sim_compiler_fields(sim_events_path)
+
+
+def write_sim_fixture_efg_bundle(*, sim_events_path: str | Path, run_dir: str | Path) -> Path:
+    """Compatibility fixture API; production compile uses write_sim_compiler_bundle."""
+
+    return write_sim_compiler_bundle(sim_events_path=sim_events_path, run_dir=run_dir)

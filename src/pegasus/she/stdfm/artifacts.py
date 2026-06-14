@@ -23,6 +23,7 @@ def materialize_stdfm_fit(
     reconstruction_path = output_dir / "stdfm_reconstructed_fields.parquet"
     uncertainty_path = output_dir / "stdfm_uncertainty.parquet"
     certification_path = output_dir / "stdfm_certification.parquet"
+    objective_trace_path = output_dir / "stdfm_objective_trace.parquet"
 
     pl.DataFrame(
         [
@@ -65,6 +66,12 @@ def materialize_stdfm_fit(
         [dict(row, uncertainty=result.uncertainty[index]) for index, row in enumerate(rows)]
     ).write_parquet(uncertainty_path)
     pl.DataFrame([result.certification]).write_parquet(certification_path)
+    pl.DataFrame(
+        [
+            {"iteration": 0, "objective": result.telemetry.initial_objective},
+            {"iteration": result.telemetry.iterations, "objective": result.telemetry.final_objective},
+        ]
+    ).write_parquet(objective_trace_path)
 
     output = replace(
         result.output,
@@ -73,5 +80,6 @@ def materialize_stdfm_fit(
         reconstructed_fields_path=str(reconstruction_path),
         certification_table_path=str(certification_path),
         uncertainty_path=str(uncertainty_path),
+        objective_trace_path=str(objective_trace_path),
     )
     return replace(result, output=output)

@@ -5,9 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from pegasus.acceptance.contracts import summarize_run
+from pegasus.acceptance.contracts import evaluate_level3_acceptance, summarize_run
+from pegasus.source_artifacts.contracts import inspect_source_artifact, write_source_artifact_manifest
 from pegasus.source_artifacts.compile_policy import CompileSourceRealityError
-from pegasus.workflows.compile import run_compile
+from pegasus.workflows.compile import _write_sidra_smoke_facts, run_compile
+from pegasus.workflows.datasus import run_datasus_normalize_sim
+from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 
 
 def test_slice12b_compile_records_missing_manifest_as_fixture_only(tmp_path: Path) -> None:
@@ -43,3 +46,35 @@ def test_slice12b_compile_strict_mode_aborts_without_manifest(tmp_path: Path) ->
             run_dir=tmp_path / "strict_compile",
             require_materialized_external=True,
         )
+
+
+def test_strict_compile_uses_materialized_external_inputs_and_reaches_production_candidate(tmp_path: Path) -> None:
+    sim_path = tmp_path / "sim_events.parquet"
+    sinasc_path = tmp_path / "sinasc_events.parquet"
+    sidra_path = tmp_path / "sidra_facts.parquet"
+    run_datasus_normalize_sim(
+        input_path="tests/fixtures/datasus/sim_do_fixture.csv", output_path=sim_path,
+        source_manifest_hash="external_sim_request",
+    )
+    run_datasus_normalize_sinasc(
+        input_path="tests/fixtures/datasus/sinasc_fixture.csv", output_path=sinasc_path,
+        source_manifest_hash="external_sinasc_request",
+    )
+    _write_sidra_smoke_facts(output_path=sidra_path)
+    artifacts = [
+        inspect_source_artifact(path=sim_path, source_system="SIM-DO", artifact_role="processed_events", provenance_mode="materialized_external", source_manifest_hash="external_sim_request"),
+        inspect_source_artifact(path=sinasc_path, source_system="SINASC", artifact_role="processed_events", provenance_mode="materialized_external", source_manifest_hash="external_sinasc_request"),
+        inspect_source_artifact(path=sidra_path, source_system="SIDRA", artifact_role="normalized_facts", provenance_mode="materialized_external", source_manifest_hash="external_sidra_request"),
+    ]
+    source_manifest = write_source_artifact_manifest(artifacts=artifacts, output_path=tmp_path / "source_manifest.json")
+    run_dir = tmp_path / "production_run"
+    result = run_compile(
+        intent_path="config/intents/alagoas_smoke.json", run_dir=run_dir,
+        data_root=tmp_path / "data", source_manifest=source_manifest,
+        require_materialized_external=True,
+    )
+    assert result["validation"].ok
+    acceptance = evaluate_level3_acceptance(run_dir)
+    assert acceptance.ok, acceptance.errors
+    assert acceptance.status == "production_candidate"
+    assert acceptance.production_candidate is True

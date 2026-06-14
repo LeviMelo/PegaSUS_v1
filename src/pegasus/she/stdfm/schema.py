@@ -3,7 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-STDFMState = Literal["blocked_solver_pending", "fitted", "failed", "uncertified", "verified"]
+STDFMState = Literal[
+    "blocked_solver_pending",
+    "blocked_invalid_support",
+    "fitted",
+    "failed",
+    "failed_certification",
+    "fragile",
+    "uncertified",
+    "verified",
+]
 
 
 @dataclass(frozen=True)
@@ -114,6 +123,7 @@ class STDFMOutputSchema:
     reconstructed_fields_path: str | None = None
     certification_table_path: str | None = None
     uncertainty_path: str | None = None
+    objective_trace_path: str | None = None
     telemetry: STDFMSolverTelemetry | None = None
 
     def as_manifest(self) -> dict[str, Any]:
@@ -130,6 +140,7 @@ class STDFMOutputSchema:
             "reconstructed_fields_path": self.reconstructed_fields_path,
             "certification_table_path": self.certification_table_path,
             "uncertainty_path": self.uncertainty_path,
+            "objective_trace_path": self.objective_trace_path,
             "telemetry": self.telemetry.as_manifest() if self.telemetry else None,
         }
 

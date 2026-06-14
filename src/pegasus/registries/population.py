@@ -40,7 +40,7 @@ class PopulationSolverSpec:
         }
 
 
-SOLVER_REGISTRY_VERSION = "population_solver_registry_v2"
+SOLVER_REGISTRY_VERSION = "population_solver_registry_v3"
 DENSE_NATIONAL_CELL_THRESHOLD = 10_000_000
 
 POPULATION_SOLVERS: dict[str, PopulationSolverSpec] = {
@@ -59,6 +59,23 @@ POPULATION_SOLVERS: dict[str, PopulationSolverSpec] = {
         sparse_jacobian=True,
         max_cells=DENSE_NATIONAL_CELL_THRESHOLD,
         status="active_warning",
+        warning_code="sim_informed_population_feedback_risk",
+    ),
+    "sparse_block_coordinate_v1": PopulationSolverSpec(
+        solver_id="sparse_block_coordinate_v1",
+        mode="independent_denominator",
+        backend="sparse_block_coordinate_analytic",
+        sparse_jacobian=True,
+        max_cells=250_000_000,
+        status="active_sparse",
+    ),
+    "sparse_block_coordinate_sim_informed_v1": PopulationSolverSpec(
+        solver_id="sparse_block_coordinate_sim_informed_v1",
+        mode="sim_informed_denominator",
+        backend="sparse_block_coordinate_analytic",
+        sparse_jacobian=True,
+        max_cells=250_000_000,
+        status="active_sparse_warning",
         warning_code="sim_informed_population_feedback_risk",
     ),
     "independent_sidra_anchor_v1": PopulationSolverSpec(
@@ -97,16 +114,18 @@ def get_population_solver(solver_id: str) -> PopulationSolverSpec:
         raise PopulationRegistryError(f"Unknown population tensor solver: {solver_id}") from exc
 
 
-def select_population_solver(*, mode: str, solver_id: str | None = None) -> PopulationSolverSpec:
+def select_population_solver(*, mode: str, solver_id: str | None = None, n_cells: int | None = None) -> PopulationSolverSpec:
     if solver_id is not None:
         spec = get_population_solver(solver_id)
         if spec.mode != mode:
             raise PopulationRegistryError(f"Solver {solver_id} has mode {spec.mode}, not requested mode {mode}.")
         return spec
 
-    for spec in POPULATION_SOLVERS.values():
-        if spec.mode == mode and spec.status.startswith("active"):
-            return spec
+    candidates = [spec for spec in POPULATION_SOLVERS.values() if spec.mode == mode and spec.status.startswith("active")]
+    if n_cells is not None and n_cells > DENSE_NATIONAL_CELL_THRESHOLD:
+        candidates.sort(key=lambda spec: not spec.backend.startswith("sparse_block_coordinate"))
+    for spec in candidates:
+        return spec
     raise PopulationRegistryError(f"No population tensor solver registered for mode: {mode}")
 
 

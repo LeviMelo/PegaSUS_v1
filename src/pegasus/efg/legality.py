@@ -91,18 +91,26 @@ def _specialized_semantics_ok(field: FieldNode) -> tuple[bool, list[str]]:
 
 
 
-def _registry_root_for_evidence(registries) -> str:
+def _registry_root_for_evidence(registries: Any) -> str:
+    if isinstance(registries, (str, Path)):
+        return str(registries)
+    if isinstance(registries, dict) and registries.get("registry_root"):
+        return str(registries["registry_root"])
     root = getattr(registries, "root", None)
     if root is not None:
         return str(root)
-    if isinstance(registries, (str, bytes)):
-        return str(registries)
     return "config/registries"
 
 
 
-def _append_registry_evidence(parents, operator, warnings, registries=None):
+def _append_registry_evidence(
+    parents: list[FieldNode],
+    operator: OperatorSpec,
+    warnings: list[str],
+    registries: Any = None,
+) -> list[str]:
     """Attach compact registry evidence without changing DeltaResult schema."""
+    del operator
     merged = list(warnings or [])
     root = _registry_root_for_evidence(registries)
     evidence: list[str] = []
@@ -260,6 +268,12 @@ def evaluate_delta(
             "parents": [parent.id for parent in parents],
             "failed": failed,
         })[:24]
+    result_warnings = _append_registry_evidence(
+        parents,
+        operator,
+        warnings,
+        registries=registries,
+    )
     return DeltaResult(
         legal=legal,
         delta_support=deltas["support"],
@@ -271,7 +285,7 @@ def evaluate_delta(
         delta_quality=deltas["quality"],
         delta_declaration=deltas["declaration"],
         failed_terms=failed,
-        warnings=list(dict.fromkeys(warnings)),
+        warnings=list(dict.fromkeys(result_warnings)),
         failed_branch_id=failed_id,
     )
 

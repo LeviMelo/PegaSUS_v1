@@ -9,9 +9,11 @@ from pegasus.she.high_dimensional import HighDimensionalExposureError, bound_hig
 from pegasus.she.stdfm.artifacts import materialize_stdfm_fit
 from pegasus.she.stdfm.blocked import blocked_solver_pending
 from pegasus.she.stdfm.certification import STDFMCertificationError, assert_verified_promotion_allowed, blocked_certification_row
+from pegasus.she.stdfm.certification import STDFMCertificationPolicy, certify_stdfm_metrics
 from pegasus.she.stdfm.objective import stdfm_objective_pseudocode_contract
 from pegasus.she.stdfm.schema import STDFMFitResult, STDFMProblem, build_stdfm_input_schema
 from pegasus.she.stdfm.torch_solver import solve_stdfm
+from pegasus.she.stdfm.pipeline import run_stdfm_pipeline
 
 
 def test_sidra_stitching_preserves_segment_provenance() -> None:
@@ -193,3 +195,67 @@ def test_stdfm_materializes_typed_artifacts(tmp_path) -> None:
     ):
         assert path is not None
         assert Path(path).exists()
+    assert result.output.objective_trace_path is None
+
+
+def test_stdfm_certification_policy_distinguishes_fragile_and_failed() -> None:
+    fragile = certify_stdfm_metrics(
+        field_id="f",
+        metrics={"mape_holdout": 0.2, "residual_variance_ratio": 0.3, "factor_stability": 0.9},
+        observed_fraction=0.8,
+        periods=5,
+        localities=1,
+        spatial_penalty=0.0,
+        multi_starts=2,
+    )
+    failed = certify_stdfm_metrics(
+        field_id="f",
+        metrics={"mape_holdout": 0.8, "residual_variance_ratio": 0.9, "factor_stability": 0.2},
+        observed_fraction=0.8,
+        periods=5,
+        localities=1,
+        spatial_penalty=0.0,
+        multi_starts=2,
+    )
+    assert fragile.status == "fragile"
+    assert failed.status == "failed_certification"
+
+
+def test_stdfm_pipeline_blocks_invalid_support_without_fitting(tmp_path) -> None:
+    problem = STDFMProblem(
+        field_ids=("a",),
+        shape=(1, 4, 1),
+        observations=(1.0, 0.0, 0.0, 4.0),
+        observed_mask=(True, False, False, True),
+        link_function_by_field=("identity",),
+        gamma_spatial=0.0,
+        multi_starts=1,
+    )
+    result = run_stdfm_pipeline(
+        _numerical_input(periods=4),
+        problem,
+        output_dir=tmp_path,
+        policy=STDFMCertificationPolicy(minimum_observed_fraction=0.75),
+    )
+    assert result.output.status == "blocked_invalid_support"
+    assert result.fit is None
+    assert not list(tmp_path.iterdir())
+
+
+def test_stdfm_pipeline_materializes_certified_artifacts(tmp_path) -> None:
+    problem = STDFMProblem(
+        field_ids=("a",),
+        shape=(1, 5, 1),
+        observations=(1.0, 2.0, 3.0, 4.0, 5.0),
+        observed_mask=(True,) * 5,
+        validation_mask=(False, False, False, True, False),
+        link_function_by_field=("identity",),
+        gamma_spatial=0.0,
+        multi_starts=2,
+        seed=17,
+    )
+    result = run_stdfm_pipeline(_numerical_input(periods=5), problem, output_dir=tmp_path)
+    assert result.fit is not None
+    assert result.output.status in {"verified", "fragile", "failed_certification"}
+    assert result.output.objective_trace_path is not None
+    assert Path(result.output.objective_trace_path).exists()

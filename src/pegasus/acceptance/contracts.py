@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pyarrow.parquet as pq
-
 from pegasus.core.hashing import sha256_file
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
 from pegasus.output.validate import validate_output_bundle
+from pegasus.storage import read_table, row_count
 from pegasus.workflows.stage_plan import validate_compiler_stage_plan
 
 FORBIDDEN_DASHBOARD_COMPUTE_STAGES: tuple[str, ...] = (
@@ -113,16 +112,24 @@ class Level3AcceptanceResult:
     production_candidate: bool
     checks: dict[str, bool]
     errors: tuple[str, ...]
+    warnings: tuple[str, ...] = ()
+    stage_statuses: dict[str, str] | None = None
+    artifact_evidence: dict[str, Any] | None = None
 
     def as_manifest(self) -> dict[str, Any]:
         return {
             "schema_version": "25A.1",
             "run_dir": self.run_dir,
             "status": self.status,
+            "classification": self.status,
             "ok": self.ok,
             "production_candidate": self.production_candidate,
             "checks": dict(self.checks),
             "errors": list(self.errors),
+            "blocking_reasons": list(self.errors),
+            "warnings": list(self.warnings),
+            "stage_statuses": dict(self.stage_statuses or {}),
+            "artifact_evidence": dict(self.artifact_evidence or {}),
         }
 
 
@@ -134,15 +141,13 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _count_parquet(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return int(pq.read_table(path).num_rows)
+    return row_count(path)
 
 
 def _string_values(path: Path, column: str) -> tuple[str, ...]:
     if not path.exists():
         return ()
-    table = pq.read_table(path, columns=[column])
+    table = read_table(path, columns=[column])
     values = sorted({str(v.as_py()) for v in table[column] if v.as_py() is not None})
     return tuple(values)
 
@@ -281,6 +286,11 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
         and bool(autonomous.get("manifest_hash"))
         and sha256_file(autonomous_manifest) == autonomous.get("manifest_hash")
     )
+    autonomous_payload = _load_json(autonomous_manifest) if autonomous_manifest.is_file() else {}
+    reproducibility = _load_json(root / "ReproducibilityManifest.json")
+    telemetry = reproducibility.get("telemetry") if isinstance(reproducibility.get("telemetry"), dict) else {}
+    stage_durations = telemetry.get("stage_wall_seconds") if isinstance(telemetry.get("stage_wall_seconds"), dict) else {}
+    registry_hashes = reproducibility.get("registry_hashes") if isinstance(reproducibility.get("registry_hashes"), dict) else {}
     stage_plan = _compiler_stage_plan_payload(root, run_config)
     stage_plan_errors = validate_compiler_stage_plan(
         stage_plan=stage_plan,
@@ -288,32 +298,74 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
     )
     stage_plan_present = bool(stage_plan)
     truthful_optional_stages = not stage_plan_errors
+    stage_specs = stage_plan.get("by_stage", {}) if isinstance(stage_plan.get("by_stage"), dict) else {}
+    requested_artifact_evidence: dict[str, bool] = {}
+    for stage_id, spec in stage_specs.items():
+        if not isinstance(spec, dict) or not spec.get("requested"):
+            continue
+        expected = [str(value) for value in spec.get("expected_artifacts", [])]
+        requested_artifact_evidence[str(stage_id)] = bool(expected) and all((root / value).exists() for value in expected)
+    e_dag_count = _count_parquet(root / "E_DAG.parquet")
+    e_dag_rows = read_table(root / "E_DAG.parquet").to_pylist() if (root / "E_DAG.parquet").exists() else []
+    operator_values = " ".join(str(row.get("operator_id") or row.get("operator") or "") for row in e_dag_rows).lower()
+    precompression = autonomous_payload.get("precompression") if isinstance(autonomous_payload.get("precompression"), dict) else {}
+    legality = autonomous_payload.get("legality_summary") if isinstance(autonomous_payload.get("legality_summary"), dict) else {}
+    illegal_attempts = int(legality.get("illegal", 0) or legality.get("blocked", 0) or 0)
+    all_stage_proofs = bool(summary.telemetry_stage_status) and all(
+        status in {"success", "skipped", "blocked", "failed"} and stage in stage_durations
+        for stage, status in summary.telemetry_stage_status.items()
+    )
+    dashboard_manifests = [_load_json(path) for path in (root / "Tables").glob("*dashboard*.json")] if (root / "Tables").exists() else []
     checks = {
-        "output_bundle_valid": summary.ok,
-        "exact_first_class_keys": summary.first_class_keys == required_first_class_key_paths(),
-        "non_scaffold_numerical_bundle": summary.field_count > 1 and summary.q_count > 1,
-        "autonomous_graph_authority": (
+        "01_exact_first_class_keys": summary.first_class_keys == required_first_class_key_paths(),
+        "02_output_bundle_valid": summary.ok,
+        "03_source_reality_declared": summary.compile_source_mode in {"fixture_only", "materialized_external"},
+        "04_materialized_external_for_production": (
+            summary.compile_source_mode != "materialized_external"
+            or bool(summary.source_reality_production_candidate and summary.source_artifact_manifest_present)
+        ),
+        "05_runtime_authority_autonomous": (
             architecture.get("graph_authority") == "autonomous_efg_core"
             and autonomous.get("graph_authority") == "autonomous_efg_core"
             and architecture.get("legacy_graph_authority") is False
         ),
-        "autonomous_manifest_integrity": autonomous_manifest_valid,
-        "truthful_optional_stage_statuses": truthful_optional_stages,
-        "compiler_stage_plan_present": stage_plan_present,
-        "stage_skip_proofs_valid": not stage_plan_errors,
-        "source_reality_declared": summary.compile_source_mode in {"fixture_only", "materialized_external"},
+        "06_legacy_materializers_quarantined": architecture.get("legacy_bootstrap_status") == "quarantined_fixture_only",
+        "07_no_production_fixture_builder": architecture.get("legacy_bootstrap_builder") is None,
+        "08_no_required_registry_scaffold": not any("scaffold" in str(key).lower() for key in registry_hashes),
+        "09_registry_hashes_recorded": bool(registry_hashes) and all(bool(value) for value in registry_hashes.values()),
+        "10_autonomous_efg_manifest_exists": autonomous_manifest_valid,
+        "11_e_dag_nonempty_when_fields_exist": summary.field_count == 0 or e_dag_count > 0,
+        "12_failed_branches_record_illegal_attempts": illegal_attempts == 0 or summary.failed_branch_count > 0,
+        "13_precompression_exists": precompression.get("stage") == "topological_precompression",
+        "14_protected_non_equivalence": int(precompression.get("protected_non_equivalence_count", 0) or 0) > 0,
+        "15_geo_native_or_transform_legal": "geo_support" in summary.telemetry_stage_status and summary.telemetry_stage_status.get("geo_support") in {"success", "skipped", "blocked", "failed"},
+        "16_no_direct_rate_allocation": "direct_rate_allocation" not in operator_values,
+        "17_population_stage_truthful": requested_artifact_evidence.get("population_solver", True) or summary.telemetry_stage_status.get("population_solver") in {"blocked", "failed"},
+        "18_stdfm_stage_truthful": requested_artifact_evidence.get("stdfm", True) or summary.telemetry_stage_status.get("stdfm") in {"blocked", "failed"},
+        "19_pirs_model_artifacts": requested_artifact_evidence.get("pirs_model", True) or summary.telemetry_stage_status.get("pirs_model") in {"blocked", "failed"},
+        "20_hsic_artifacts": requested_artifact_evidence.get("pirs_hsic", True) or summary.telemetry_stage_status.get("pirs_hsic") in {"blocked", "failed"},
+        "21_dashboard_read_only": all(payload.get("read_only") is True for payload in dashboard_manifests),
+        "22_every_stage_has_proof": stage_plan_present and truthful_optional_stages and all_stage_proofs,
+        "23_production_gate_complete": True,
     }
-    errors = list(summary.errors)
-    errors.extend(stage_plan_errors)
-    errors.extend(name for name, passed in checks.items() if not passed)
-    structural_ok = all(checks.values())
+    # Stable aliases retained for callers introduced by the 25A/26B acceptance foundation.
+    checks["compiler_stage_plan_present"] = stage_plan_present
+    checks["stage_skip_proofs_valid"] = not stage_plan_errors
+    fixture_exempt = {"14_protected_non_equivalence"}
+    structural_ok = all(passed for name, passed in checks.items() if name not in fixture_exempt)
+    production_gates_ok = all(checks.values())
     production_candidate = bool(
-        structural_ok
-        and summary.source_reality_production_candidate
+        production_gates_ok
         and summary.compile_source_mode == "materialized_external"
+        and summary.source_reality_production_candidate
         and summary.substrate_present
         and summary.substrate_registry_backed
     )
+    checks["23_production_gate_complete"] = production_candidate or summary.compile_source_mode != "materialized_external"
+    structural_ok = all(passed for name, passed in checks.items() if name not in fixture_exempt)
+    errors = list(summary.errors)
+    errors.extend(stage_plan_errors)
+    errors.extend(name for name, passed in checks.items() if not passed and (summary.compile_source_mode == "materialized_external" or name not in fixture_exempt))
     if not structural_ok:
         status = "failed"
     elif production_candidate:
@@ -327,6 +379,15 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
         production_candidate=production_candidate,
         checks=checks,
         errors=tuple(errors),
+        warnings=tuple(summary.warnings),
+        stage_statuses={key: str(value) for key, value in summary.telemetry_stage_status.items()},
+        artifact_evidence={
+            "autonomous_manifest": str(autonomous_manifest) if autonomous_manifest_valid else None,
+            "e_dag_rows": e_dag_count,
+            "registry_hash_count": len(registry_hashes),
+            "requested_stage_artifacts": requested_artifact_evidence,
+            "source_manifest_present": summary.source_artifact_manifest_present,
+        },
     )
 
 

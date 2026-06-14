@@ -8,13 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-
 from pegasus.core.hashing import sha256_file
 from pegasus.efg.dag import EFGResult
 from pegasus.efg.lineage import lineage_hash
 from pegasus.output.validate import validate_output_bundle
+from pegasus.storage import append_replace, read_table, write_table
 
 
 def _now() -> str:
@@ -26,22 +24,15 @@ def _json(value: Any) -> str:
 
 
 def _read_rows(path: Path) -> list[dict[str, Any]]:
-    return pq.read_table(path).to_pylist()
+    return read_table(path).to_pylist()
 
 
 def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
-    schema = pq.read_schema(path)
-    normalized = [{name: row.get(name) for name in schema.names} for row in rows]
-    pq.write_table(pa.Table.from_pylist(normalized, schema=schema), path)
+    write_table(path, rows, schema_policy="preserve")
 
 
 def _append_replace(path: Path, rows: list[dict[str, Any]], *, id_column: str) -> None:
-    if not rows:
-        return
-    existing = _read_rows(path)
-    ids = {str(row[id_column]) for row in rows if row.get(id_column) is not None}
-    kept = [row for row in existing if str(row.get(id_column)) not in ids]
-    _write_rows(path, kept + rows)
+    append_replace(path, rows, id_column=id_column)
 
 
 def _v_row(field) -> dict[str, Any]:

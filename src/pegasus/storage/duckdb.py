@@ -1,12 +1,20 @@
-"""
-Slice 0 scaffold module: storage/duckdb.py
+"""Optional DuckDB query adapter."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from __future__ import annotations
 
-from pegasus.core.exceptions import BlockedModuleError
+from typing import Any
+
+from pegasus.core.exceptions import StorageBackendError
 
 
-def blocked(*, module: str = "storage/duckdb.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def query_arrow(sql: str, *, parameters: list[Any] | None = None):
+    try:
+        import duckdb
+    except ImportError as exc:
+        raise StorageBackendError("DuckDB backend is unavailable") from exc
+    connection = duckdb.connect(database=":memory:")
+    try:
+        relation = connection.execute(sql, parameters or [])
+        return relation.fetch_arrow_table()
+    finally:
+        connection.close()

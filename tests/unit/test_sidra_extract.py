@@ -5,7 +5,8 @@ import polars as pl
 from pegasus.sidra.api import SidraClient, SidraClientConfig
 from pegasus.sidra.cache import SidraJsonCache
 from pegasus.sidra.extract import extract_one_chunk
-from pegasus.sidra.schemas import SIDRAChunk
+from pegasus.sidra.schemas import SIDRAChunk, SIDRAMetadata, SIDRARequest, SIDRATableMetadata
+from pegasus.workflows.ingest_sidra import ingest_sidra
 
 
 def test_extract_one_chunk_writes_raw_and_facts_from_real_flat_shape(tmp_path: Path):
@@ -106,3 +107,26 @@ def test_extract_one_chunk_writes_raw_and_facts_from_real_flat_shape(tmp_path: P
     assert row["unit"] == "Pessoas"
     assert '"2","Sexo"' in row["classification_tuple"].replace(" ", "")
     assert '"2","6794"' in row["category_tuple"].replace(" ", "")
+
+
+def test_ingest_sidra_materializes_external_source_manifest(tmp_path: Path):
+    payload = [
+        {"NC": "Nível Territorial (Código)", "NN": "Nível Territorial", "MC": "Unidade de Medida (Código)", "MN": "Unidade de Medida", "V": "Valor", "D1C": "Município (Código)", "D1N": "Município", "D2C": "Ano (Código)", "D2N": "Ano", "D3C": "Variável (Código)", "D3N": "Variável"},
+        {"NC": "6", "NN": "Município", "MC": "45", "MN": "Pessoas", "V": "10", "D1C": "2704302", "D1N": "Maceió", "D2C": "2022", "D2N": "2022", "D3C": "93", "D3N": "População residente"},
+    ]
+    client = SidraClient(
+        config=SidraClientConfig(max_retries=0), cache=SidraJsonCache(tmp_path / "cache"),
+        transport=lambda url, params, timeout: (200, payload),
+    )
+    request = SIDRARequest(table_id="9606", variables=["93"], periods=["2022"], locality_level="N6", localities=["2704302"])
+    metadata = SIDRAMetadata(tables={"9606": SIDRATableMetadata(
+        table_id="9606", name="population", variables=["93"], periods=["2022"],
+        locality_levels=["N6"], localities_by_level={"N6": ["2704302"]}, units_by_variable={"93": "Pessoas"},
+    )})
+    result = ingest_sidra(
+        request=request, metadata=metadata, client=client, concurrency=1,
+        work_dir=tmp_path / "sidra", output_manifest=tmp_path / "source_manifest.json",
+    )
+    assert result["ok"] is True
+    assert result["validation"]["compile_source_mode"] == "materialized_external"
+    assert Path(result["source_manifest"]).exists()

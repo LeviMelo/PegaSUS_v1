@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from pegasus.workflows.compile import _compiler_architecture_metadata
 from pegasus.workflows.stage_plan import build_compile_stage_plan, validate_compiler_stage_plan
 
@@ -15,6 +18,13 @@ def test_slice26a_architecture_quarantines_legacy_runtime_authority() -> None:
     assert metadata["legacy_bootstrap_status"] == "quarantined_fixture_only"
     assert "compatibility_materializer" not in str(metadata)
     assert "pegasus.workflows.efg.run_build_sim_fixture" not in str(metadata)
+
+
+def test_slice26a_compile_ast_does_not_reference_fixture_builders() -> None:
+    tree = ast.parse(Path("src/pegasus/workflows/compile.py").read_text(encoding="utf-8"))
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    assert "run_build_sim_fixture" not in names
+    assert "build_sim_fixture_efg_run" not in names
 
 
 def test_slice26b_unrequested_optional_stages_have_skip_proofs() -> None:

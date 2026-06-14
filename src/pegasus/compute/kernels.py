@@ -1,12 +1,15 @@
-"""
-Slice 0 scaffold module: compute/kernels.py
+"""Shared numerical kernel sizing helpers."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
-
-from pegasus.core.exceptions import BlockedModuleError
+from __future__ import annotations
 
 
-def blocked(*, module: str = "compute/kernels.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def tensor_nbytes(shape: tuple[int, ...], *, dtype: str = "float64", copies: int = 1) -> int:
+    if any(dimension < 0 for dimension in shape) or copies < 1:
+        raise ValueError("tensor dimensions must be nonnegative and copies positive")
+    itemsize = {"float32": 4, "float64": 8}.get(dtype)
+    if itemsize is None:
+        raise ValueError(f"unsupported tensor dtype: {dtype}")
+    elements = 1
+    for dimension in shape:
+        elements *= dimension
+    return elements * itemsize * copies

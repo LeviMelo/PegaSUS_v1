@@ -7,7 +7,13 @@ from pathlib import Path
 
 import polars as pl
 
-from pegasus.geo.geodata import GeoArtifact, GeoArtifactError, load_geo_artifact
+from pegasus.geo.geodata import (
+    GeoArtifact,
+    GeoArtifactError,
+    GeoTransformManifest,
+    load_geo_artifact,
+    load_geo_transform_manifest,
+)
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,7 @@ class AMCResult:
     input_total: float
     output_total: float
     conserved: bool
+    manifest: GeoTransformManifest
 
 
 def contract_to_amc(
@@ -28,6 +35,8 @@ def contract_to_amc(
     year_column: str = "year",
     aggregation: str = "additive",
     tolerance: float = 1e-9,
+    manifest_path: str | Path | None = None,
+    require_official: bool = False,
 ) -> AMCResult:
     if aggregation != "additive":
         raise GeoArtifactError("AMC contraction of rates/intensive fields is illegal; contract measures and denominators separately")
@@ -49,4 +58,12 @@ def contract_to_amc(
     conserved = abs(input_total - output_total) <= tolerance * max(1.0, abs(input_total))
     if not conserved:
         raise GeoArtifactError(f"AMC conservation failure: input={input_total} output={output_total}")
-    return AMCResult(output, artifact, input_total, output_total, conserved)
+    manifest = load_geo_transform_manifest(
+        artifact,
+        manifest_path=manifest_path,
+        source_geography=municipality_column,
+        target_geography="amc_id",
+        tolerance=tolerance,
+        require_official=require_official,
+    )
+    return AMCResult(output, artifact, input_total, output_total, conserved, manifest)

@@ -1,12 +1,16 @@
-"""
-Slice 0 scaffold module: storage/arrow.py
+"""Arrow conversion helpers used by the storage boundary."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from __future__ import annotations
 
-from pegasus.core.exceptions import BlockedModuleError
+from typing import Any
+
+import pyarrow as pa
 
 
-def blocked(*, module: str = "storage/arrow.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+def as_arrow_table(value: Any, *, schema: pa.Schema | None = None) -> pa.Table:
+    if isinstance(value, pa.Table):
+        return value.cast(schema) if schema is not None else value
+    if isinstance(value, pa.RecordBatch):
+        table = pa.Table.from_batches([value])
+        return table.cast(schema) if schema is not None else table
+    return pa.Table.from_pylist(list(value), schema=schema)

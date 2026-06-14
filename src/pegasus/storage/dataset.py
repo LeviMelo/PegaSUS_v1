@@ -1,12 +1,5 @@
-"""
-Slice 0 scaffold module: storage/dataset.py
+"""Dataset-level scan API."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from pegasus.storage.parquet import scan_table
 
-from pegasus.core.exceptions import BlockedModuleError
-
-
-def blocked(*, module: str = "storage/dataset.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+__all__ = ["scan_table"]

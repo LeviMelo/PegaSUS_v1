@@ -9,6 +9,16 @@ FORBIDDEN_ARCHITECTURE_VALUES = {
     "compatibility_materializer",
     "pegasus.workflows.efg.run_build_sim_fixture",
 }
+FORBIDDEN_COMPILE_SYMBOLS = {
+    "build_sim_fixture_efg_run",
+    "build_sinasc_fixture_efg_run",
+    "build_cnes_sih_fixture_bundle",
+    "build_sidra_stdfm_fixture_bundle",
+    "build_hsic_fixture_bundle",
+    "build_population_tensor_fixture_bundle",
+    "run_build_sim_fixture",
+    "run_build_cnes_sih_fixture",
+}
 REQUIRED_ARCHITECTURE_VALUES = {
     "autonomous_efg_core",
     "autonomous_compiler_services",
@@ -43,6 +53,8 @@ def main() -> int:
     args = parser.parse_args()
     errors: list[str] = []
     compile_path = Path("src/pegasus/workflows/compile.py")
+    compile_source = compile_path.read_text(encoding="utf-8")
+    compile_tree = ast.parse(compile_source)
     try:
         metadata = _literal_return_dict(_function(compile_path, "_compiler_architecture_metadata"))
     except Exception as exc:  # pragma: no cover - audit diagnostic path
@@ -63,6 +75,20 @@ def main() -> int:
         errors.append("legacy_bootstrap_builder must be None/empty in quarantined architecture")
     if metadata.get("legacy_bootstrap_status") != "quarantined_fixture_only":
         errors.append("legacy_bootstrap_status must be quarantined_fixture_only")
+    imported_or_called = {
+        node.id
+        for node in ast.walk(compile_tree)
+        if isinstance(node, ast.Name)
+    }
+    imported_or_called.update(
+        alias.name
+        for node in ast.walk(compile_tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    )
+    forbidden_runtime = sorted(FORBIDDEN_COMPILE_SYMBOLS.intersection(imported_or_called))
+    if forbidden_runtime:
+        errors.append(f"production compile references fixture runtime symbols: {forbidden_runtime}")
     if not Path("src/pegasus/workflows/stage_plan.py").exists():
         errors.append("stage_plan workflow module missing")
     contracts_text = Path("src/pegasus/acceptance/contracts.py").read_text(encoding="utf-8")

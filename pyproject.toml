@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pegasus"
 version = "0.1.0"
-description = "PegaSUS epidemiological compiler monolithic scaffold"
+description = "PegaSUS evidence-field epidemiological compiler"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

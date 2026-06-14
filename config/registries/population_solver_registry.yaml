@@ -1,5 +1,5 @@
 schema_version: '1.0'
-registry_version: v2.0
+registry_version: v3.0
 created_at: '2026-06-06'
 updated_at: '2026-06-13'
 provenance: Macro-Slice 22A population solver registry.
@@ -30,6 +30,23 @@ entries:
   max_cells: 10000000
   warnings:
   - legacy_identity_solver
+- id: sparse_block_coordinate_v1
+  description: Memory-preflighted sparse block-coordinate optimizer for regional and national independent tensors.
+  mode: independent_denominator
+  backend: sparse_block_coordinate_analytic
+  status: active_sparse
+  sparse_jacobian: true
+  max_cells: 250000000
+  warnings: []
+- id: sparse_block_coordinate_sim_informed_v1
+  description: Sparse block-coordinate optimizer with explicit SIM death-prior feedback warning.
+  mode: sim_informed_denominator
+  backend: sparse_block_coordinate_analytic
+  status: active_sparse_warning
+  sparse_jacobian: true
+  max_cells: 250000000
+  warnings:
+  - sim_informed_population_feedback_risk
 - id: sim_informed_sparse_admm_scaffold_v1
   description: Legacy warning scaffold retained only for reproducibility of earlier runs.
   mode: sim_informed_denominator

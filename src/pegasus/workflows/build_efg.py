@@ -8,11 +8,11 @@ import polars as pl
 
 from pegasus.efg.dag import EFGResult, build_efg
 from pegasus.efg.materialization_manifest import load_substrate_bundle_for_efg
-from pegasus.output.sim_efg_bundle import write_sim_fixture_efg_bundle
+from pegasus.output.sim_efg_bundle import write_sim_compiler_bundle
 from pegasus.she.substrate import SubstrateBundle
 
 
-def build_sim_fixture_efg_run(
+def build_sim_compiler_run(
     *,
     sim_events_path: str | Path,
     run_dir: str | Path,
@@ -31,9 +31,24 @@ def build_sim_fixture_efg_run(
         filtered.write_parquet(filtered_path)
         source_events_path = filtered_path
 
-    return write_sim_fixture_efg_bundle(
+    return write_sim_compiler_bundle(
         sim_events_path=source_events_path,
         run_dir=run_dir,
+    )
+
+
+def build_sim_fixture_efg_run(
+    *,
+    sim_events_path: str | Path,
+    run_dir: str | Path,
+    municipality_cod6: str | None = None,
+) -> Path:
+    """Compatibility fixture workflow; canonical compile calls build_sim_compiler_run."""
+
+    return build_sim_compiler_run(
+        sim_events_path=sim_events_path,
+        run_dir=run_dir,
+        municipality_cod6=municipality_cod6,
     )
 
 

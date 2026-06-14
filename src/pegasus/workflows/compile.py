@@ -24,7 +24,8 @@ from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
 from pegasus.she.substrate import build_substrate_bundle
 from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes, run_datasus_normalize_sih
 from pegasus.workflows.datasus import run_datasus_normalize_sim
-from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
+from pegasus.workflows.build_efg import build_sim_compiler_run
+from pegasus.workflows.efg import run_attach_sidra_denominator
 from pegasus.workflows.race_bridge import run_attach_race_bridge
 from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 
@@ -190,6 +191,32 @@ def _compiler_architecture_metadata() -> dict[str, Any]:
     }
 
 
+def _external_compile_inputs(source_manifest: str | Path, *, include_cnes_sih: bool) -> dict[str, Path]:
+    payload = json.loads(Path(source_manifest).read_text(encoding="utf-8"))
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise ValueError("Source artifact manifest must contain an artifacts list.")
+    required = {
+        "sim_events": ("SIM-DO", "processed_events"),
+        "sinasc_events": ("SINASC", "processed_events"),
+        "sidra_facts": ("SIDRA", "normalized_facts"),
+    }
+    if include_cnes_sih:
+        required.update({
+            "cnes_events": ("CNES-ST", "processed_events"),
+            "sih_events": ("SIH-RD", "processed_events"),
+        })
+    resolved: dict[str, Path] = {}
+    for key, (system, role) in required.items():
+        matches = [Path(str(item.get("path"))) for item in artifacts if item.get("source_system") == system and item.get("artifact_role") == role]
+        if len(matches) != 1:
+            raise ValueError(f"Production compile requires exactly one {system}:{role} artifact; found {len(matches)}.")
+        if not matches[0].is_file():
+            raise FileNotFoundError(f"Production source artifact is missing: {matches[0]}")
+        resolved[key] = matches[0]
+    return resolved
+
+
 def _run_compile_impl(
     *,
     intent_path: str | Path,
@@ -246,14 +273,15 @@ def _run_compile_impl(
     raw_sinasc_fixture_source = Path("tests/fixtures/datasus/sinasc_fixture.csv")
     raw_cnes_fixture_source = Path("tests/fixtures/datasus/cnes_st_fixture.csv")
     raw_sih_fixture_source = Path("tests/fixtures/datasus/sih_rd_fixture.csv")
-    if not raw_fixture_source.exists():
-        raise FileNotFoundError(f"Missing SIM smoke fixture: {raw_fixture_source}")
-    if not raw_sinasc_fixture_source.exists():
-        raise FileNotFoundError(f"Missing SINASC smoke fixture: {raw_sinasc_fixture_source}")
-    if include_cnes_sih and not raw_cnes_fixture_source.exists():
-        raise FileNotFoundError(f"Missing CNES-ST smoke fixture: {raw_cnes_fixture_source}")
-    if include_cnes_sih and not raw_sih_fixture_source.exists():
-        raise FileNotFoundError(f"Missing SIH-RD smoke fixture: {raw_sih_fixture_source}")
+    if compile_source_reality.compile_source_mode != "materialized_external":
+        if not raw_fixture_source.exists():
+            raise FileNotFoundError(f"Missing SIM smoke fixture: {raw_fixture_source}")
+        if not raw_sinasc_fixture_source.exists():
+            raise FileNotFoundError(f"Missing SINASC smoke fixture: {raw_sinasc_fixture_source}")
+        if include_cnes_sih and not raw_cnes_fixture_source.exists():
+            raise FileNotFoundError(f"Missing CNES-ST smoke fixture: {raw_cnes_fixture_source}")
+        if include_cnes_sih and not raw_sih_fixture_source.exists():
+            raise FileNotFoundError(f"Missing SIH-RD smoke fixture: {raw_sih_fixture_source}")
 
     compile_manifest_path = data_root / "manifests" / "runs" / f"{run_id}.compile_manifest.json"
     raw_cache_path = data_root / "raw" / "datasus" / "SIM-DO" / "fixture" / "sim_do_fixture.csv"
@@ -265,6 +293,17 @@ def _run_compile_impl(
     cnes_events_path = data_root / "processed" / "datasus" / "CNES-ST" / "fixture" / "cnes_events.parquet"
     sih_events_path = data_root / "processed" / "datasus" / "SIH-RD" / "fixture" / "sih_events.parquet"
     sidra_facts_path = data_root / "processed" / "sidra" / "facts" / "9606" / "compile_smoke_maceio.parquet"
+    external_inputs: dict[str, Path] = {}
+    if compile_source_reality.compile_source_mode == "materialized_external":
+        if source_manifest is None:
+            raise ValueError("materialized_external compile requires a source manifest path")
+        external_inputs = _external_compile_inputs(source_manifest, include_cnes_sih=include_cnes_sih)
+        sim_events_path = external_inputs["sim_events"]
+        sinasc_events_path = external_inputs["sinasc_events"]
+        sidra_facts_path = external_inputs["sidra_facts"]
+        if include_cnes_sih:
+            cnes_events_path = external_inputs["cnes_events"]
+            sih_events_path = external_inputs["sih_events"]
 
     with telemetry.stage("datasus_manifest"):
         compile_manifest_path = _write_compile_manifest(
@@ -277,44 +316,33 @@ def _run_compile_impl(
         source_hashes["compile_manifest"] = sha256_file(compile_manifest_path)
 
     with telemetry.stage("datasus_acquire"):
-        raw_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        raw_sinasc_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(raw_fixture_source, raw_cache_path)
-        shutil.copyfile(raw_sinasc_fixture_source, raw_sinasc_cache_path)
-        source_hashes["sim_raw_fixture"] = sha256_file(raw_cache_path)
-        source_hashes["sinasc_raw_fixture"] = sha256_file(raw_sinasc_cache_path)
-        if include_cnes_sih:
-            raw_cnes_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            raw_sih_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(raw_cnes_fixture_source, raw_cnes_cache_path)
-            shutil.copyfile(raw_sih_fixture_source, raw_sih_cache_path)
-            source_hashes["cnes_raw_fixture"] = sha256_file(raw_cnes_cache_path)
-            source_hashes["sih_raw_fixture"] = sha256_file(raw_sih_cache_path)
+        if external_inputs:
+            source_hashes.update({f"external_{key}": sha256_file(path) for key, path in external_inputs.items()})
+        else:
+            raw_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_sinasc_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(raw_fixture_source, raw_cache_path)
+            shutil.copyfile(raw_sinasc_fixture_source, raw_sinasc_cache_path)
+            source_hashes["sim_raw_fixture"] = sha256_file(raw_cache_path)
+            source_hashes["sinasc_raw_fixture"] = sha256_file(raw_sinasc_cache_path)
+            if include_cnes_sih:
+                raw_cnes_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                raw_sih_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(raw_cnes_fixture_source, raw_cnes_cache_path)
+                shutil.copyfile(raw_sih_fixture_source, raw_sih_cache_path)
+                source_hashes["cnes_raw_fixture"] = sha256_file(raw_cnes_cache_path)
+                source_hashes["sih_raw_fixture"] = sha256_file(raw_sih_cache_path)
 
     with telemetry.stage("datasus_decode"):
-        run_datasus_normalize_sim(
-            input_path=raw_cache_path,
-            output_path=sim_events_path,
-            source_manifest_hash=source_hashes["compile_manifest"],
-        )
-        run_datasus_normalize_sinasc(
-            input_path=raw_sinasc_cache_path,
-            output_path=sinasc_events_path,
-            source_manifest_hash=source_hashes["compile_manifest"],
-        )
+        if not external_inputs:
+            run_datasus_normalize_sim(input_path=raw_cache_path, output_path=sim_events_path, source_manifest_hash=source_hashes["compile_manifest"])
+            run_datasus_normalize_sinasc(input_path=raw_sinasc_cache_path, output_path=sinasc_events_path, source_manifest_hash=source_hashes["compile_manifest"])
         source_hashes["sim_processed_events"] = sha256_file(sim_events_path)
         source_hashes["sinasc_processed_events"] = sha256_file(sinasc_events_path)
         if include_cnes_sih:
-            run_datasus_normalize_cnes(
-                input_path=raw_cnes_cache_path,
-                output_path=cnes_events_path,
-                source_manifest_hash=source_hashes["compile_manifest"],
-            )
-            run_datasus_normalize_sih(
-                input_path=raw_sih_cache_path,
-                output_path=sih_events_path,
-                source_manifest_hash=source_hashes["compile_manifest"],
-            )
+            if not external_inputs:
+                run_datasus_normalize_cnes(input_path=raw_cnes_cache_path, output_path=cnes_events_path, source_manifest_hash=source_hashes["compile_manifest"])
+                run_datasus_normalize_sih(input_path=raw_sih_cache_path, output_path=sih_events_path, source_manifest_hash=source_hashes["compile_manifest"])
             source_hashes["cnes_processed_events"] = sha256_file(cnes_events_path)
             source_hashes["sih_processed_events"] = sha256_file(sih_events_path)
 
@@ -324,12 +352,13 @@ def _run_compile_impl(
     telemetry.flush()
 
     with telemetry.stage("sidra_normalize"):
-        _write_sidra_smoke_facts(output_path=sidra_facts_path)
+        if not external_inputs:
+            _write_sidra_smoke_facts(output_path=sidra_facts_path)
         source_hashes["sidra_facts"] = sha256_file(sidra_facts_path)
 
     autonomous_efg_metadata: dict[str, Any] | None = None
     with telemetry.stage("efg_build"):
-        run_build_sim_fixture(
+        build_sim_compiler_run(
             sim_events_path=sim_events_path,
             run_dir=run_dir,
             municipality_cod6=municipality_cod6,

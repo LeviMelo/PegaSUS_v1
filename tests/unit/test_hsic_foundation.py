@@ -53,6 +53,8 @@ def test_hsic_scan_and_fdr_emit_diagnostics() -> None:
     assert out.statistic is not None and out.statistic > 0.0
     assert out.p_value is not None and out.p_value <= 0.05
     assert out.approximation_diagnostics["permutations_executed"] == 99
+    assert out.approximation_diagnostics["compute_plan"]["task_id"] == "pirs_hsic_exact"
+    assert out.approximation_diagnostics["compute_plan"]["device"] == "cpu"
     fdr = correct_p_values([out.p_value], method="BY")
     assert fdr.q_values[0] is not None
     assert linear_hsic_statistic([1, 2, 3], [1, 2, 3]) > 0.9
@@ -96,3 +98,41 @@ def test_monthly_null_preserves_calendar_month() -> None:
         rng=random.Random(7),
     )
     assert all((target % 12) == (source % 12) for target, source in enumerate(indices))
+
+
+def test_hsic_rejects_mismatched_lengths() -> None:
+    with pytest.raises(ValueError, match="identical support length"):
+        run_hsic_scan(
+            outcome_residual_field_id="r", covariate_field_id="x",
+            residuals=[1.0, 2.0], covariate=[1.0], support_intersection={},
+            budget="fast", null_strategy="unrestricted_permutation", fdr_method="BH", permutations=9,
+        )
+
+
+def test_hsic_filters_nonfinite_and_disables_constant_covariate() -> None:
+    out = run_hsic_scan(
+        outcome_residual_field_id="r", covariate_field_id="x",
+        residuals=[float(i) for i in range(120)] + [float("nan")],
+        covariate=[1.0] * 121, support_intersection={}, budget="fast",
+        null_strategy="unrestricted_permutation", fdr_method="BH", permutations=9,
+    )
+    assert out.hsic_mode == "disabled"
+    assert out.n_eff == 120
+    assert "hsic_descriptive_only_constant_covariate" in out.warnings
+    assert out.approximation_diagnostics["dropped_nonfinite_rows"] == 1
+    assert out.approximation_diagnostics["permutations_executed"] == 0
+
+
+def test_hsic_manifest_records_null_calibration_evidence() -> None:
+    values = [float(i) for i in range(120)]
+    out = run_hsic_scan(
+        outcome_residual_field_id="r", covariate_field_id="x",
+        residuals=[value % 7 for value in values], covariate=values,
+        support_intersection={}, budget="fast", null_strategy="unrestricted_permutation",
+        fdr_method="BY", permutations=7,
+    )
+    diagnostics = out.approximation_diagnostics
+    assert diagnostics["permutations_requested"] == 7
+    assert diagnostics["permutations_executed"] == 7
+    assert diagnostics["null_regime_id"] == "unrestricted_permutation"
+    assert diagnostics["fdr_family"] == "BY"

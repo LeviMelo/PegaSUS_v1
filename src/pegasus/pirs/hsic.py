@@ -9,6 +9,9 @@ from statistics import median
 from typing import Any, Literal
 
 from pegasus.pirs.nulls import generate_null_indices
+from pegasus.compute.devices import resolve_torch_device
+from pegasus.compute.kernels import tensor_nbytes
+from pegasus.compute.torch_backend import torch_runtime
 
 HSICMode = Literal["exact", "nystrom", "rff", "disabled", "cuda_unavailable_abort"]
 
@@ -111,17 +114,6 @@ def residual_mode_for_hsic(*, budget: str) -> str:
 def validate_residual_mode_for_hsic(*, budget: str, residual_mode: str) -> None:
     if budget in {"standard", "deep"} and residual_mode == "in_sample":
         raise ValueError("standard/deep HSIC must not consume in-sample residuals")
-
-
-def _torch_backend(*, cuda_required: bool, cuda_available: bool):
-    try:
-        import torch
-    except ImportError as exc:
-        raise RuntimeError("PyTorch is required for HSIC numerical kernels.") from exc
-    if cuda_required and not cuda_available:
-        raise RuntimeError("cuda_required_unavailable")
-    device = torch.device("cuda" if cuda_required and torch.cuda.is_available() else "cpu")
-    return torch, device
 
 
 def _bandwidth(values: list[float], *, seed: int) -> float:
@@ -244,7 +236,20 @@ def run_hsic_scan(
     kernel: str = "rbf",
     mode_override: str | None = None,
 ) -> HSICOutput:
-    n_eff = min(len(residuals), len(covariate))
+    if len(residuals) != len(covariate):
+        raise ValueError("HSIC inputs must have identical support length")
+    paired: list[tuple[float, float]] = []
+    for residual, value in zip(residuals, covariate, strict=True):
+        try:
+            residual_value = float(residual)
+            covariate_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(residual_value) and math.isfinite(covariate_value):
+            paired.append((residual_value, covariate_value))
+    y_values = [pair[0] for pair in paired]
+    x_values = [pair[1] for pair in paired]
+    n_eff = len(paired)
     residual_mode = residual_mode_for_hsic(budget=budget)
     validate_residual_mode_for_hsic(budget=budget, residual_mode=residual_mode)
     mode = select_hsic_mode(
@@ -259,18 +264,52 @@ def run_hsic_scan(
             raise ValueError("HSIC mode_override must be exact, nystrom, or rff.")
         mode = mode_override
     warnings: list[str] = []
-    diagnostics: dict[str, Any] = {"kernel": kernel, "seed": seed, "n_eff": n_eff, "budget": budget}
+    diagnostics: dict[str, Any] = {
+        "kernel": kernel, "seed": seed, "n_eff": n_eff, "input_rows": len(residuals),
+        "dropped_nonfinite_rows": len(residuals) - n_eff, "budget": budget,
+        "null_regime_id": null_strategy, "permutations_requested": int(permutations), "fdr_family": fdr_method,
+    }
     statistic: float | None = None
     p_value: float | None = None
+    constant_residual = n_eff > 0 and len(set(y_values)) <= 1
+    constant_covariate = n_eff > 0 and len(set(x_values)) <= 1
+    spatial_block_count = len(set(str(value) for value in support_intersection.get("spatial_blocks", [])))
+    panel_shape = support_intersection.get("panel_shape", [0, 0])
+    temporal_block_count = int(support_intersection.get("temporal_block_count") or (panel_shape[-1] if panel_shape else 0) or 0)
+    diagnostics.update({"spatial_block_count": spatial_block_count, "temporal_block_count": temporal_block_count})
+    if n_eff == 0:
+        mode = "disabled"
+        warnings.append("hsic_disabled_no_mutually_observed_finite_rows")
+    elif constant_residual:
+        mode = "disabled"
+        warnings.append("hsic_descriptive_only_constant_residual")
+    elif constant_covariate:
+        mode = "disabled"
+        warnings.append("hsic_descriptive_only_constant_covariate")
+    elif null_strategy not in {"unrestricted_permutation", "permutation_linear_centered"} and (
+        (spatial_block_count and spatial_block_count < 5) or (temporal_block_count and temporal_block_count < 5)
+    ):
+        mode = "disabled"
+        warnings.append("hsic_descriptive_only_insufficient_null_blocks")
     if mode == "disabled":
-        warnings.append("hsic_disabled_insufficient_support" if n_eff < 100 else "hsic_disabled_by_user")
+        if not warnings:
+            warnings.append("hsic_disabled_insufficient_support" if n_eff < 100 else "hsic_disabled_by_user")
+        diagnostics["descriptive_only_reason"] = warnings[-1]
+        diagnostics["permutations_executed"] = 0
     elif mode == "cuda_unavailable_abort":
         warnings.append("cuda_required_unavailable")
     else:
-        torch, device = _torch_backend(cuda_required=cuda_required, cuda_available=cuda_available)
-        dtype = torch.float64
-        x_values = [float(value) for value in covariate[:n_eff]]
-        y_values = [float(value) for value in residuals[:n_eff]]
+        task_id = f"pirs_hsic_{mode}"
+        representation_width = n_eff if mode == "exact" else min(512, max(128, int(math.sqrt(n_eff) * 4)))
+        plan = resolve_torch_device(
+            task_id,
+            cuda_required=cuda_required,
+            prefer_cuda=True,
+            seed=seed,
+            estimated_bytes=tensor_nbytes((n_eff, representation_width), copies=4),
+            cuda_available_override=cuda_available,
+        )
+        torch, device, dtype = torch_runtime(plan)
         x = torch.tensor(x_values, dtype=dtype, device=device)
         y = torch.tensor(y_values, dtype=dtype, device=device)
         bandwidth_x = _bandwidth(x_values, seed=seed)
@@ -320,6 +359,7 @@ def run_hsic_scan(
                 "permutations_executed": len(null_statistics),
                 "null_mean": sum(null_statistics) / len(null_statistics),
                 "device": str(device),
+                "compute_plan": plan.as_manifest(),
             }
         )
         if residual_mode.startswith("cross_fitted"):

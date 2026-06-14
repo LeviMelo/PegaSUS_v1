@@ -17,6 +17,7 @@ from pegasus.she.population.schema import (
     PopulationTensorResult,
 )
 from pegasus.she.population.sidra_anchor import load_sidra_population_total_anchor
+from pegasus.she.population.sparse_admm import solve_sparse_population
 
 
 def solve_population_tensor_problem(
@@ -26,16 +27,21 @@ def solve_population_tensor_problem(
     max_iterations: int = 5_000,
     tolerance: float = 1e-5,
 ) -> PopulationOptimizationResult:
-    solver = select_population_solver(mode=problem.mode, solver_id=solver_id)
-    assert_dense_population_tensor_allowed(
-        localities=problem.shape[0],
-        periods=problem.shape[1],
-        strata=problem.shape[2] * problem.shape[3] * problem.shape[4],
-        threshold=solver.max_cells,
-    )
-    if not solver.backend.startswith("projected_gradient_small"):
-        raise ValueError(f"Solver {solver.solver_id} does not implement population optimization.")
-    return solve_projected_gradient_small(problem, max_iterations=max_iterations, tolerance=tolerance)
+    solver = select_population_solver(mode=problem.mode, solver_id=solver_id, n_cells=problem.n_cells)
+    if problem.n_cells > solver.max_cells:
+        raise ValueError(f"Population problem cells={problem.n_cells} exceeds solver policy max_cells={solver.max_cells}.")
+    if solver.backend.startswith("projected_gradient_small"):
+        assert_dense_population_tensor_allowed(
+            localities=problem.shape[0], periods=problem.shape[1],
+            strata=problem.shape[2] * problem.shape[3] * problem.shape[4], threshold=solver.max_cells,
+        )
+        return solve_projected_gradient_small(problem, max_iterations=max_iterations, tolerance=tolerance)
+    if solver.backend.startswith("sparse_block_coordinate"):
+        result, _ = solve_sparse_population(
+            problem, solver_id=solver.solver_id, max_iterations=max_iterations, tolerance=tolerance,
+        )
+        return result
+    raise ValueError(f"Solver {solver.solver_id} does not implement population optimization.")
 
 
 def solve_population_tensor_from_sidra_anchor(

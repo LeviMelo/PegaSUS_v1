@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import yaml
 
 from pegasus.core.hashing import sha256_file
+from pegasus.efg.declaration import OperatorSpec
 from pegasus.efg.legality import evaluate_delta
 from pegasus.registries.cnes_capacity import capacity_evidence
 from pegasus.registries.diagnostic_topology import diagnostic_evidence
@@ -86,7 +87,18 @@ def main() -> int:
         errors.append("CNES capacity evidence helper failed")
     if not cost_evidence(sih):
         errors.append("SIH cost evidence helper failed")
-    delta = evaluate_delta(parents=[diagnostic], operator=SimpleNamespace(name="raw_field"))
+    diagnostic.id = diagnostic.field_id
+    diagnostic.kind = "observer_proxy"
+    diagnostic.support = {}
+    diagnostic.axes = {}
+    diagnostic.role = ["diagnostic_topology"]
+    diagnostic.source = ["SIM-DO"]
+    diagnostic.provenance = ["official"]
+    diagnostic.materialization_state = _state("metadata_only")
+    delta = evaluate_delta(
+        parents=[diagnostic],
+        operator=OperatorSpec(name="raw_field", role="registry_evidence", params={}),
+    )
     if "registry_evidence_attached" not in set(delta.warnings):
         errors.append("DeltaResult warnings missing registry evidence marker")
 

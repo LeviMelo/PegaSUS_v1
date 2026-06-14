@@ -1,12 +1,21 @@
-"""
-Slice 0 scaffold module: storage/materialization.py
+"""Public production storage API."""
 
-This module intentionally contains no domain logic. Future implementation slices
-must replace blocked stubs through typed contracts.
-"""
+from pegasus.storage.parquet import (
+    append_replace,
+    hash_table,
+    read_table,
+    row_count,
+    scan_table,
+    schema,
+    write_table,
+)
 
-from pegasus.core.exceptions import BlockedModuleError
-
-
-def blocked(*, module: str = "storage/materialization.py", reason: str = "slice0_scaffold_only") -> None:
-    raise BlockedModuleError(module=module, reason=reason)
+__all__ = [
+    "append_replace",
+    "hash_table",
+    "read_table",
+    "row_count",
+    "scan_table",
+    "schema",
+    "write_table",
+]

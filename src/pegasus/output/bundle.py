@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
+from pegasus.storage import write_table
 
 
 def _now() -> str:
@@ -17,9 +17,7 @@ def _now() -> str:
 
 
 def _write_table(path: Path, rows: list[dict], schema: pa.Schema) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    table = pa.Table.from_pylist(rows, schema=schema)
-    pq.write_table(table, path)
+    write_table(path, rows, schema=schema)
 
 
 def create_empty_output_bundle(run_dir: str | Path) -> Path:

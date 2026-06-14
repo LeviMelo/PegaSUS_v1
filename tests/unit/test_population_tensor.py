@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from pegasus.core.exceptions import MemoryPreflightError
 from pegasus.registries.population import PopulationTensorScaleError, get_population_solver, select_population_solver
 from pegasus.she.population.schema import PopulationObjectiveWeights, PopulationTensorProblem
 from pegasus.she.population.solvers import (
@@ -9,6 +10,8 @@ from pegasus.she.population.solvers import (
     solve_population_tensor_from_sidra_anchor,
     solve_population_tensor_problem,
 )
+from pegasus.she.population.sparse_admm import plan_sparse_population_solver, solve_sparse_population
+from pegasus.she.population.state_space import build_population_state_space
 from pegasus.sidra.facts import normalize_fixture_json_to_facts
 
 
@@ -113,3 +116,40 @@ def test_population_optimizer_applies_race_composition_prior():
     result = solve_population_tensor_problem(problem)
     assert result.telemetry.final_objective < result.telemetry.initial_objective
     assert result.population == pytest.approx((50.0, 50.0), abs=0.1)
+
+
+def test_sparse_population_matches_simple_projected_solution():
+    problem = PopulationTensorProblem(
+        shape=(1, 1, 2, 1, 1),
+        anchors=(4.0, 6.0),
+        closure_totals=(10.0,),
+        migration_bounds=(1.0, 1.0),
+        weights=PopulationObjectiveWeights(death=0.0),
+    )
+    result, plan = solve_sparse_population(problem, max_iterations=200)
+    assert result.population == pytest.approx((4.0, 6.0), abs=1e-5)
+    assert sum(result.population) == pytest.approx(10.0)
+    assert plan.state_space.anchor_indices == (0, 1)
+
+
+def test_sparse_state_space_records_transition_and_constraint_groups():
+    problem = PopulationTensorProblem(
+        shape=(2, 2, 3, 1, 2),
+        anchors=(None,) * 24,
+        closure_totals=(10.0,) * 4,
+        weights=PopulationObjectiveWeights(death=0.0),
+    )
+    state = build_population_state_space(problem)
+    assert len(state.aging_edges) == 8
+    assert len(state.birth_edges) == 4
+    assert len(state.race_groups) == 12
+    assert len(state.closure_groups) == 4
+
+
+def test_sparse_population_memory_preflight_aborts():
+    problem = PopulationTensorProblem(
+        shape=(2, 2, 3, 1, 2), anchors=(None,) * 24,
+        weights=PopulationObjectiveWeights(death=0.0),
+    )
+    with pytest.raises(MemoryPreflightError):
+        plan_sparse_population_solver(problem, available_bytes=64)

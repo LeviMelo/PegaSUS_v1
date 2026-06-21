@@ -114,7 +114,8 @@ def _request_identity(
         "month_end": month_end,
         "information_system": system,
         "fetch_function": "fetch_datasus",
-        "process_function": "process_datasus",
+        "process_function": "pegasus_process_datasus_dispatch",
+        "processing_contract_version": "datasus_r_bridge_v2_raw_canonical_plus_microdatasus_sidecar",
     }
 
 

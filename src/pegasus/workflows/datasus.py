@@ -52,7 +52,7 @@ def run_datasus_ingest(
 
         if result.status == "blocked":
             blocked = True
-        elif result.status != "success":
+        elif result.status not in {"success", "cached"}:
             failed = True
 
     return {

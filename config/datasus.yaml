@@ -1,4 +1,5 @@
 datasus:
+  r_library_path: ".r-library"
   backend: "microdatasus"
   rscript_path: "Rscript"
   preserve_raw: true

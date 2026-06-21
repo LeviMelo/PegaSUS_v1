@@ -40,8 +40,10 @@ class DatasusConfig:
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "DatasusConfig":
+        r_library_path = payload.get("r_library_path")
         return cls(
             rscript_path=str(payload.get("rscript_path", "Rscript")),
+            r_library_path=None if r_library_path in {None, ""} else str(r_library_path),
             r_timeout_seconds=int(payload.get("r_timeout_seconds", 7200)),
             heartbeat_timeout_seconds=int(payload.get("heartbeat_timeout_seconds", 900)),
         )
@@ -141,6 +143,10 @@ def fetch_datasus_chunk(
     if manifest_path.exists() and raw_path.exists() and processed_path.exists():
         try:
             cached_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if cached_payload.get("status") != "success":
+                raise ValueError("cached R manifest is not successful")
+            if cached_payload.get("processing_contract_version") != "datasus_r_bridge_v2_raw_canonical_plus_microdatasus_sidecar":
+                raise ValueError("cached R manifest uses an obsolete DATASUS bridge contract")
             return _finish(
                 request,
                 started=started,
@@ -183,6 +189,8 @@ def fetch_datasus_chunk(
         str(processed_path),
         "--out-dir",
         str(raw_path.parent),
+        "--timeout-seconds",
+        str(timeout_seconds),
     ]
     if request.month_start is not None:
         command.extend(["--month-start", str(request.month_start)])

@@ -47,18 +47,41 @@ if (!is.null(month_end)) fetch_args$month_end <- as.integer(month_end)
 
 raw <- tryCatch(do.call(microdatasus::fetch_datasus, fetch_args), error = function(e) {
   cat(conditionMessage(e), file = stderr())
+  if (system_id %in% c("SIM-DO", "SINASC")) return(NULL)
   quit(status = 40)
 })
-saveRDS(raw, raw_path)
-write_heartbeat("processing", if (is.data.frame(raw)) nrow(raw) else 0, "raw acquisition complete")
 
-processed <- tryCatch(
-  microdatasus::process_datasus(raw, information_system = information_system),
-  error = function(e) {
-    cat(conditionMessage(e), file = stderr())
-    quit(status = 50)
+acquisition_transport <- "microdatasus_fetch_datasus"
+if (is.null(raw) && system_id %in% c("SIM-DO", "SINASC")) {
+  options(timeout = max(300, getOption("timeout")))
+  url_for <- function(system, uf, year) {
+    if (system == "SIM-DO") {
+      return(sprintf("ftp://ftp.datasus.gov.br/dissemin/publicos/SIM/CID10/DORES/DO%s%s.dbc", uf, year))
+    }
+    sprintf("ftp://ftp.datasus.gov.br/dissemin/publicos/SINASC/1996_/Dados/DNRES/DN%s%s.dbc", uf, year)
   }
-)
+  decoded <- lapply(seq.int(year_start, year_end), function(year) {
+    url <- url_for(system_id, uf, year)
+    dbc_path <- file.path(out_dir, basename(url))
+    tryCatch(
+      utils::download.file(url, dbc_path, mode = "wb", method = "libcurl", quiet = TRUE),
+      error = function(e) {
+        cat(paste("Direct official DATASUS FTP download failed:", conditionMessage(e)), file = stderr())
+        quit(status = 40)
+      }
+    )
+    read.dbc::read.dbc(dbc_path)
+  })
+  raw <- do.call(rbind, decoded)
+  acquisition_transport <- "direct_official_ftp_dbc_fallback"
+}
+if (is.null(raw) || !is.data.frame(raw) || nrow(raw) == 0) {
+  cat("DATASUS fetch returned no records", file = stderr())
+  quit(status = 40)
+}
+saveRDS(raw, raw_path)
+write_heartbeat("processing", nrow(raw), "raw coded acquisition complete; preserving codes for Python normalization")
+processed <- raw
 arrow::write_parquet(processed, processed_path)
 rows <- if (is.data.frame(processed)) nrow(processed) else 0
 columns <- if (is.data.frame(processed)) names(processed) else character()
@@ -71,7 +94,9 @@ manifest <- list(
   column_lists = list(raw = if (is.data.frame(raw)) names(raw) else character(), processed = columns),
   r_version = R.version.string,
   microdatasus_version = as.character(utils::packageVersion("microdatasus")),
-  read_dbc_version = as.character(utils::packageVersion("read.dbc"))
+  read_dbc_version = as.character(utils::packageVersion("read.dbc")),
+  acquisition_transport = acquisition_transport,
+  processing_mode = "raw_codes_preserved_for_python_normalizer"
 )
 jsonlite::write_json(manifest, file.path(out_dir, "manifest.json"), auto_unbox = TRUE, pretty = TRUE)
 write_heartbeat("done", rows, "materialization complete")

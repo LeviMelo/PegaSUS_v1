@@ -35,6 +35,7 @@ data/manifests/**
 data/intermediate/**
 data/runs/**
 data/diagnostics/**
+data/actual_smokes/**
 
 !data/raw/.gitkeep
 !data/processed/.gitkeep
@@ -57,4 +58,6 @@ MSD.md
 
 #Codex
 .codex-tmp/
+.r-library/
+.r-makevars
 src/codebase_dump_src.txt

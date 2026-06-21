@@ -425,7 +425,7 @@ def normalize_sim_do_events(
         for row in rows
     ]
 
-    df = pl.DataFrame(normalized_rows)
+    df = pl.DataFrame(normalized_rows, infer_schema_length=None)
 
     for column in SIM_DO_NORMALIZED_COLUMNS:
         if column not in df.columns:

@@ -34,6 +34,7 @@ def datasus_dependency_unavailable(*, dependency: str, detail: str) -> str:
 @dataclass(frozen=True)
 class DatasusConfig:
     rscript_path: str = "Rscript"
+    r_library_path: str | None = None
     r_timeout_seconds: int = 7200
     heartbeat_timeout_seconds: int = 900
 
@@ -136,12 +137,37 @@ def fetch_datasus_chunk(
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     processed_path.parent.mkdir(parents=True, exist_ok=True)
 
+    manifest_path = raw_path.parent / "manifest.json"
+    if manifest_path.exists() and raw_path.exists() and processed_path.exists():
+        try:
+            cached_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            return _finish(
+                request,
+                started=started,
+                status="cached",
+                exit_code=0,
+                error_message=None,
+                updates={
+                    "raw_sha256": sha256_file(raw_path),
+                    "processed_sha256": sha256_file(processed_path),
+                    "row_counts": cached_payload.get("row_counts", {}),
+                    "column_lists": cached_payload.get("column_lists", {}),
+                    "r_version": cached_payload.get("r_version"),
+                    "microdatasus_version": cached_payload.get("microdatasus_version"),
+                    "read_dbc_version": cached_payload.get("read_dbc_version"),
+                },
+            )
+        except (OSError, ValueError, TypeError):
+            pass
+
     heartbeat_path = Path(request.heartbeat_path)
     stdout_path = Path(request.stdout_path)
     stderr_path = Path(request.stderr_path)
+    heartbeat_path.unlink(missing_ok=True)
 
     command = [
         rscript,
+        "--vanilla",
         str(script),
         "--system",
         request.system,
@@ -166,7 +192,10 @@ def fetch_datasus_chunk(
     cache.write_request(request.request_hash, request.model_dump(mode="json"))
 
     with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
-        process = subprocess.Popen(command, stdout=stdout, stderr=stderr)
+        environment = os.environ.copy()
+        if config.r_library_path:
+            environment["R_LIBS_USER"] = config.r_library_path
+        process = subprocess.Popen(command, stdout=stdout, stderr=stderr, env=environment)
         while process.poll() is None:
             elapsed = time.time() - started
             if elapsed > timeout_seconds or _heartbeat_stale(heartbeat_path, heartbeat_timeout_seconds):
@@ -179,8 +208,6 @@ def fetch_datasus_chunk(
                     error_message="R subprocess timed out or heartbeat became stale.",
                 )
             time.sleep(1.0)
-
-    manifest_path = raw_path.parent / "manifest.json"
 
     if process.returncode != 0:
         return _finish(

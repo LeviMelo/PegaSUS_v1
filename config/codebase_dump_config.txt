@@ -1,0 +1,2490 @@
+Project structure for '/c/Users/Galaxy/LEVI/PegaSUS/config':
+===============================================================================
+  compute.yaml
+  datasus.yaml
+  intents/alagoas_2022_actual_grid_smoke.json
+  intents/alagoas_maceio_2022_actual_smoke.json
+  intents/alagoas_maternal_child.json
+  intents/alagoas_sim_only.json
+  intents/alagoas_smoke.json
+  intents/alagoas_smoke_cnes_sih.json
+  intents/alagoas_smoke_population_tensor.json
+  intents/alagoas_smoke_population_tensor_sim_informed.json
+  intents/alagoas_smoke_race_bridge.json
+  intents/national_blocked.json
+  intents/northeast_region.json
+  output.yaml
+  paths.yaml
+  project.yaml
+  registries/aggregation.yaml
+  registries/aggregation_registry.yaml
+  registries/bridge_grammars.yaml
+  registries/carrier.yaml
+  registries/carrier_registry.yaml
+  registries/clinical_event_definitions.yaml
+  registries/cnes_capacity_registry.yaml
+  registries/composite_decoders.yaml
+  registries/diagnostic_topology.yaml
+  registries/hsic_registry.yaml
+  registries/icd_catalog.yaml
+  registries/icd_quality_groups.yaml
+  registries/join_affordances.yaml
+  registries/model_registry.yaml
+  registries/municipality_crosswalk_sources.yaml
+  registries/null_registry.yaml
+  registries/output_schema.yaml
+  registries/population_solver_registry.yaml
+  registries/provenance.yaml
+  registries/provenance_registry.yaml
+  registries/quality.yaml
+  registries/quality_permissions.yaml
+  registries/race_axis_registry.yaml
+  registries/race_bridge_priors.yaml
+  registries/registry_manifest.yaml
+  registries/residual_registry.yaml
+  registries/sidra_category_maps.yaml
+  registries/sidra_regime_registry.yaml
+  registries/sidra_stitching.yaml
+  registries/sidra_table_seed.jsonl
+  registries/sidra_views.yaml
+  registries/sih_cost_registry.yaml
+  registries/source_fields.yaml
+  registries/stdfm_registry.yaml
+  registries/unit.yaml
+  registries/unit_registry.yaml
+  sidra.yaml
+
+
+
+###############################################################################
+### FILE: compute.yaml
+###############################################################################
+compute:
+  data_backend: "duckdb_polars_arrow"
+  production_pandas_allowed: false
+  numerical_backend: "pytorch"
+  rapids_enabled: false
+  wsl_required: false
+
+  cuda:
+    enabled_for:
+      - "pirs_hsic_exact"
+      - "pirs_hsic_nystrom"
+      - "pirs_hsic_rff"
+      - "race_bridge_posterior"
+      - "race_bridge_tensor_embedded"
+      - "stdfm_solver"
+      - "population_tensor_kernels"
+    require_cuda_for_region_hsic: true
+    dtype: "float32"
+    max_vram_fraction: 0.80
+
+
+
+###############################################################################
+### FILE: datasus.yaml
+###############################################################################
+datasus:
+  r_library_path: ".r-library"
+  backend: "microdatasus"
+  rscript_path: "Rscript"
+  preserve_raw: true
+  preserve_processed: true
+  r_timeout_seconds: 7200
+  heartbeat_timeout_seconds: 900
+
+  systems:
+    - "SIM-DO"
+    - "SINASC"
+    - "SIH-RD"
+    - "CNES-ST"
+
+  chunking:
+    SIM-DO: "uf_year"
+    SINASC: "uf_year"
+    SIH-RD: "uf_year_or_month_by_size"
+    CNES-ST: "uf_month_or_year_by_source"
+
+  optional_ftp_discovery: false
+
+
+
+###############################################################################
+### FILE: intents/alagoas_2022_actual_grid_smoke.json
+###############################################################################
+{
+  "budget": "standard",
+  "context_policy": ["actual_source_grid", "official_sidra_anchor", "sinasc_maternal_child_compile", "live_birth_denominator_linkage"],
+  "exclude_systems": [],
+  "execution_scale": "state",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {"codes": [], "level": "municipality", "uf": ["AL"]},
+  "health_seeds": ["all_cause_mortality", "icd_chapter", "icd_block"],
+  "mandatory_fields": ["SIMDeathsAll", "SIMCrudeMortalitySIDRAOfficial", "SIDRAPopulationTotalAnchor", "SINASCLiveBirthsAll", "SINASCCrudeBirthRateSIDRAOfficial", "SINASCLowBirthWeightPrevalence", "SINASCPrematurityPrevalence", "SINASCCongenitalAnomalyPrevalence", "SIMInfantMortalitySINASCBirths", "SIMNeonatalMortalitySINASCBirths", "SIMPostNeonatalMortalitySINASCBirths"],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {"SIDRA": 1.0, "SIM-DO": 1.0, "SINASC": 1.0},
+  "time": {"end_month": null, "end_year": 2022, "start_month": null, "start_year": 2022}
+}
+
+
+
+###############################################################################
+### FILE: intents/alagoas_maceio_2022_actual_smoke.json
+###############################################################################
+{
+  "budget": "fast",
+  "context_policy": ["actual_source_smoke", "official_sidra_anchor", "sinasc_maternal_child_compile", "live_birth_denominator_linkage"],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {"codes": ["2704302"], "level": "municipality", "uf": ["AL"]},
+  "health_seeds": ["all_cause_mortality", "icd_chapter", "icd_block"],
+  "mandatory_fields": ["SIMDeathsAll", "SIMCrudeMortalitySIDRAOfficial", "SIDRAPopulationTotalAnchor", "SINASCLiveBirthsAll", "SINASCCrudeBirthRateSIDRAOfficial", "SINASCLowBirthWeightPrevalence", "SINASCPrematurityPrevalence", "SINASCCongenitalAnomalyPrevalence", "SIMInfantMortalitySINASCBirths", "SIMNeonatalMortalitySINASCBirths", "SIMPostNeonatalMortalitySINASCBirths"],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {"SIDRA": 1.0, "SIM-DO": 1.0, "SINASC": 1.0},
+  "time": {"end_month": null, "end_year": 2022, "start_month": null, "start_year": 2022}
+}
+
+
+
+###############################################################################
+### FILE: intents/alagoas_maternal_child.json
+###############################################################################
+{
+  "geography": {
+    "level": "UF",
+    "codes": [
+      "27"
+    ],
+    "uf": [
+      "AL"
+    ]
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022
+  },
+  "health_seeds": [],
+  "mandatory_fields": [
+    "V_B01",
+    "V_C01",
+    "V_C02"
+  ],
+  "system_weights": {
+    "SIM-DO": 1.0,
+    "SINASC": 1.0,
+    "SIDRA": 1.0
+  },
+  "context_policy": [
+    "maternal_child"
+  ],
+  "budget": "standard",
+  "geo_mode": "native",
+  "force_selectors": [],
+  "exclude_systems": [],
+  "execution_scale": "state",
+  "race_tensor_mode": "decoupled",
+  "population_mode": "official_sidra_anchor"
+}
+
+
+###############################################################################
+### FILE: intents/alagoas_sim_only.json
+###############################################################################
+{
+  "geography": {
+    "level": "UF",
+    "codes": [
+      "27"
+    ],
+    "uf": [
+      "AL"
+    ]
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022
+  },
+  "health_seeds": [],
+  "mandatory_fields": [
+    "V_M01"
+  ],
+  "system_weights": {
+    "SIM-DO": 1.0
+  },
+  "context_policy": [],
+  "budget": "fast",
+  "geo_mode": "native",
+  "force_selectors": [],
+  "exclude_systems": [
+    "SIH-RD",
+    "SINASC",
+    "CNES-ST",
+    "SIDRA"
+  ],
+  "execution_scale": "smoke",
+  "race_tensor_mode": "decoupled",
+  "population_mode": "blocked_missing"
+}
+
+
+###############################################################################
+### FILE: intents/alagoas_smoke.json
+###############################################################################
+{
+  "budget": "fast",
+  "context_policy": [
+    "compile_smoke",
+    "maceio_fixture",
+    "official_sidra_anchor",
+    "sinasc_maternal_child_compile",
+    "live_birth_denominator_linkage"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [
+      "2704302"
+    ],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block"
+  ],
+  "mandatory_fields": [
+    "SIMDeathsAll",
+    "SIMCrudeMortalitySIDRAOfficial",
+    "SIDRAPopulationTotalAnchor",
+    "SINASCLiveBirthsAll",
+    "SINASCCrudeBirthRateSIDRAOfficial",
+    "SINASCLowBirthWeightPrevalence",
+    "SINASCPrematurityPrevalence",
+    "SINASCCongenitalAnomalyPrevalence",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths"
+  ],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0
+  },
+  "time": {
+    "end_month": null,
+    "end_year": 2022,
+    "start_month": null,
+    "start_year": 2022
+  }
+}
+
+
+
+###############################################################################
+### FILE: intents/alagoas_smoke_cnes_sih.json
+###############################################################################
+{
+  "budget": "fast",
+  "context_policy": [
+    "include_cnes_sih"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [
+      "2704302"
+    ],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "mortality",
+    "maternal_child",
+    "hospitalization",
+    "capacity"
+  ],
+  "mandatory_fields": [],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {
+    "CNES-ST": 1.0,
+    "SIDRA": 1.0,
+    "SIH-RD": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0
+  },
+  "time": {
+    "end_year": 2022,
+    "start_year": 2022
+  }
+}
+
+
+
+###############################################################################
+### FILE: intents/alagoas_smoke_population_tensor.json
+###############################################################################
+{
+  "budget": "fast",
+  "context_policy": [
+    "compile_smoke",
+    "include_population_tensor",
+    "live_birth_denominator_linkage",
+    "maceio_fixture",
+    "official_sidra_anchor",
+    "sinasc_maternal_child_compile"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [
+      "2704302"
+    ],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block"
+  ],
+  "mandatory_fields": [
+    "SIMDeathsAll",
+    "SIMCrudeMortalitySIDRAOfficial",
+    "SIDRAPopulationTotalAnchor",
+    "SINASCLiveBirthsAll",
+    "SINASCCrudeBirthRateSIDRAOfficial",
+    "SINASCLowBirthWeightPrevalence",
+    "SINASCPrematurityPrevalence",
+    "SINASCCongenitalAnomalyPrevalence",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths"
+  ],
+  "population_mode": "independent_population_tensor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0
+  },
+  "time": {
+    "end_month": null,
+    "end_year": 2022,
+    "start_month": null,
+    "start_year": 2022
+  }
+}
+
+
+
+###############################################################################
+### FILE: intents/alagoas_smoke_population_tensor_sim_informed.json
+###############################################################################
+{
+  "budget": "fast",
+  "context_policy": [
+    "compile_smoke",
+    "include_population_tensor",
+    "live_birth_denominator_linkage",
+    "maceio_fixture",
+    "official_sidra_anchor",
+    "sinasc_maternal_child_compile"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [
+      "2704302"
+    ],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block"
+  ],
+  "mandatory_fields": [
+    "SIMDeathsAll",
+    "SIMCrudeMortalitySIDRAOfficial",
+    "SIDRAPopulationTotalAnchor",
+    "SINASCLiveBirthsAll",
+    "SINASCCrudeBirthRateSIDRAOfficial",
+    "SINASCLowBirthWeightPrevalence",
+    "SINASCPrematurityPrevalence",
+    "SINASCCongenitalAnomalyPrevalence",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths"
+  ],
+  "population_mode": "sim_informed_population_tensor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0
+  },
+  "time": {
+    "end_month": null,
+    "end_year": 2022,
+    "start_month": null,
+    "start_year": 2022
+  }
+}
+
+
+
+###############################################################################
+### FILE: intents/alagoas_smoke_race_bridge.json
+###############################################################################
+{
+  "budget": "fast",
+  "context_policy": [
+    "compile_smoke",
+    "maceio_fixture",
+    "official_sidra_anchor",
+    "sinasc_maternal_child_compile",
+    "live_birth_denominator_linkage",
+    "race_bridge_downstream",
+    "raw_admin_race_preserved",
+    "missing_race_observer_preserved"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "smoke",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [
+      "2704302"
+    ],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block"
+  ],
+  "mandatory_fields": [
+    "SIMDeathsAll",
+    "SIMCrudeMortalitySIDRAOfficial",
+    "SIDRAPopulationTotalAnchor",
+    "SINASCLiveBirthsAll",
+    "SINASCCrudeBirthRateSIDRAOfficial",
+    "SINASCLowBirthWeightPrevalence",
+    "SINASCPrematurityPrevalence",
+    "SINASCCongenitalAnomalyPrevalence",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths",
+    "SIMRaceAdminRawCount_1",
+    "SIMRaceBridgeMissingRaceObserver",
+    "SIMRaceBridgePosteriorCount_parda",
+    "SIMRaceBridgePosteriorCount_branca"
+  ],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "downstream_bridge",
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0
+  },
+  "time": {
+    "end_month": null,
+    "end_year": 2022,
+    "start_month": null,
+    "start_year": 2022
+  }
+}
+
+
+
+###############################################################################
+### FILE: intents/national_blocked.json
+###############################################################################
+{
+  "geography": {
+    "level": "country",
+    "codes": [
+      "BR"
+    ],
+    "uf": []
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022
+  },
+  "health_seeds": [],
+  "mandatory_fields": [],
+  "system_weights": {},
+  "context_policy": [],
+  "budget": "deep",
+  "geo_mode": "AMC",
+  "force_selectors": [],
+  "exclude_systems": [],
+  "execution_scale": "national_blocked",
+  "race_tensor_mode": "embedded_posteriorC",
+  "population_mode": "blocked_missing"
+}
+
+
+###############################################################################
+### FILE: intents/northeast_region.json
+###############################################################################
+{
+  "geography": {
+    "level": "region",
+    "codes": [
+      "2"
+    ],
+    "uf": []
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022
+  },
+  "health_seeds": [],
+  "mandatory_fields": [],
+  "system_weights": {},
+  "context_policy": [],
+  "budget": "standard",
+  "geo_mode": "AMC",
+  "force_selectors": [],
+  "exclude_systems": [],
+  "execution_scale": "region",
+  "race_tensor_mode": "downstream_bridge",
+  "population_mode": "official_sidra_anchor"
+}
+
+
+###############################################################################
+### FILE: output.yaml
+###############################################################################
+output:
+  exact_first_class_keys: 17
+  require_global_telemetry: true
+  write_partial_telemetry_on_abort: true
+
+
+
+###############################################################################
+### FILE: paths.yaml
+###############################################################################
+paths:
+  data_root: "data"
+  raw: "data/raw"
+  processed: "data/processed"
+  metadata: "data/metadata"
+  cache: "data/cache"
+  manifests: "data/manifests"
+  intermediate: "data/intermediate"
+  runs: "data/runs"
+  diagnostics: "data/diagnostics"
+
+
+
+###############################################################################
+### FILE: project.yaml
+###############################################################################
+project:
+  name: "PegaSUS"
+  package: "pegasus"
+  version: "0.1.0"
+  registry_version: "v1.0"
+  timezone: "America/Maceio"
+  default_locale: "pt-BR"
+
+
+
+###############################################################################
+### FILE: registries/aggregation.yaml
+###############################################################################
+schema_version: "1.0"
+registry_id: "aggregation_registry_v1"
+aggregations:
+  additive:
+    description: "Can be summed over compatible support after legal alignment."
+    allowed_for_rates_numerator: true
+    allowed_for_denominator: true
+  weighted_mean:
+    description: "Requires explicit weights; cannot be naively summed."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false
+  statistical_functional:
+    description: "Derived functional such as median, quantile, or model residual."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false
+  compositional:
+    description: "Composition vector or share; requires simplex-aware handling."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false
+  non_aggregable:
+    description: "Identifiers, states, JSON, raw symbols, and other audit metadata."
+    allowed_for_rates_numerator: false
+    allowed_for_denominator: false
+
+
+
+###############################################################################
+### FILE: registries/aggregation_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A compatibility alias. Canonical aggregation semantics live in aggregation.yaml; this file remains required by registry validators.
+entries:
+- id: aggregation_registry_alias
+  status: active_alias
+  canonical_registry: aggregation.yaml
+  description: Compatibility manifest for the canonical aggregation registry.
+  warnings: [canonical_registry_is_aggregation_yaml]
+
+
+
+###############################################################################
+### FILE: registries/bridge_grammars.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A bridge grammar registry for EFG declaration, support,
+  and denominator bridge legality.
+entries:
+- id: race_admin_to_posterior_bridge
+  status: active
+  bridge_type: race_axis
+  from_axis: administrative_race_color
+  to_axis: posterior_self_declared_race_color
+  operators:
+  - Bridge_R
+  - Bridge_R_fixedC_dynamicW
+  - Bridge_R_posteriorC
+  required_metadata:
+  - race_bridge_prior
+  - posterior_uncertainty
+  - missing_race_observer
+  warnings:
+  - race_bridge_uncertainty_required
+  description: Macro-Slice 27A canonical registry entry race_admin_to_posterior_bridge
+    from bridge_grammars.yaml.
+- id: geography_geneallocation_bridge
+  status: active_artifact_required
+  bridge_type: geospatial_support
+  operators:
+  - geneallocation_measure_pushforward
+  - amc_contraction
+  required_metadata:
+  - crosswalk_manifest_hash
+  - mass_conservation_proof
+  forbidden_payloads:
+  - direct_rate_allocation
+  warnings:
+  - geospatial_artifact_required
+  description: Macro-Slice 27A canonical registry entry geography_geneallocation_bridge
+    from bridge_grammars.yaml.
+- id: population_denominator_bridge
+  status: active
+  bridge_type: denominator_support
+  operators:
+  - RN
+  - crude_rate
+  - denominator_link
+  required_metadata:
+  - support_intersection
+  - denominator_fragility
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry population_denominator_bridge
+    from bridge_grammars.yaml.
+- id: facility_admission_support_bridge
+  status: active_warning
+  bridge_type: facility_admission_support
+  operators:
+  - admission_per_bed_ratio
+  - admission_capacity_context
+  required_metadata:
+  - facility_period_support
+  - admission_period_support
+  warnings:
+  - facility_capacity_not_case_denominator
+  description: Macro-Slice 27A canonical registry entry facility_admission_support_bridge
+    from bridge_grammars.yaml.
+
+
+
+###############################################################################
+### FILE: registries/carrier.yaml
+###############################################################################
+schema_version: '1.0'
+registry_id: carrier_registry_v1
+carriers:
+  Deaths:
+    label: Death events
+    description: Individual death events and derived death counts from SIM-DO.
+    allowed_units:
+    - counts
+    default_aggregation: additive
+  LiveBirths:
+    label: Live birth events
+    description: Individual live-birth events and derived live-birth counts from SINASC.
+    allowed_units:
+    - counts
+    default_aggregation: additive
+  HospitalAdmissions:
+    label: Hospital admissions
+    description: SIH-RD hospitalization/admission records.
+    allowed_units:
+    - counts
+    - days
+    - BRL
+    default_aggregation: additive
+  Facilities:
+    label: Health facilities
+    description: CNES-ST establishment/facility-period records.
+    allowed_units:
+    - counts
+    - beds
+    - binary_flag
+    default_aggregation: additive
+  Population:
+    label: Population denominator
+    description: SIDRA or population-tensor person-year denominator carrier.
+    allowed_units:
+    - person_years
+    - persons
+    default_aggregation: additive
+  ContextCells:
+    label: SIDRA contextual cells
+    description: Long-form SIDRA contextual fact cells before epidemiological projection.
+    allowed_units:
+    - raw_sidra_value
+    - index
+    - percent
+    - BRL
+    - persons
+    - counts
+    default_aggregation: non_aggregable
+  AuditMetadata:
+    label: Audit metadata
+    description: Identifiers, hashes, raw JSON payloads, parse states, and other non-analytic metadata.
+    allowed_units:
+    - identifier
+    - state
+    - hash
+    - json
+    - none
+    default_aggregation: non_aggregable
+entries: {}
+
+
+
+###############################################################################
+### FILE: registries/carrier_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A compatibility alias. Canonical carrier semantics live in carrier.yaml; this file remains required by registry validators.
+entries:
+- id: carrier_registry_alias
+  status: active_alias
+  canonical_registry: carrier.yaml
+  description: Compatibility manifest for the canonical carrier registry.
+  warnings: [canonical_registry_is_carrier_yaml]
+
+
+
+###############################################################################
+### FILE: registries/clinical_event_definitions.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A clinical event definitions for source-agnostic EFG event
+  carriers.
+entries:
+- id: sim_all_cause_death_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: Deaths
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - mortality_rate
+  - infant_mortality_rate
+  - neonatal_mortality_rate
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sim_all_cause_death_event
+    from clinical_event_definitions.yaml.
+- id: sinasc_live_birth_event
+  status: active
+  source_system: SINASC
+  event_carrier: LiveBirths
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - crude_birth_rate
+  - anomaly_prevalence
+  - low_birth_weight_prevalence
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sinasc_live_birth_event from
+    clinical_event_definitions.yaml.
+- id: sih_hospital_admission_event
+  status: active
+  source_system: SIH-RD
+  event_carrier: HospitalAdmissions
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  - Facilities
+  default_aggregation: additive
+  allowed_rates:
+  - hospitalization_rate
+  - admission_per_bed_ratio
+  warnings:
+  - administrative_admission_not_incidence
+  description: Macro-Slice 27A canonical registry entry sih_hospital_admission_event
+    from clinical_event_definitions.yaml.
+- id: cnes_facility_capacity_event
+  status: active
+  source_system: CNES-ST
+  event_carrier: Facilities
+  numerator_unit: counts
+  denominator_carriers:
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - facility_density
+  - bed_density
+  warnings:
+  - capacity_snapshot_period_semantics
+  description: Macro-Slice 27A canonical registry entry cnes_facility_capacity_event
+    from clinical_event_definitions.yaml.
+
+
+
+###############################################################################
+### FILE: registries/cnes_capacity_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A CNES-ST capacity registry. Protects indexed facility-capacity
+  components from generic count semantics.
+entries:
+- id: cnes_facility_stock
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - CNES
+  - facility_id
+  - estabelecimento
+  - TP_UNID
+  capacity_family: facility_stock
+  carrier: Facilities
+  unit: counts
+  aggregation: additive
+  support_axes:
+  - facility
+  - municipality
+  - period
+  allowed_operators:
+  - facility_count
+  - facility_type_stratification
+  - capacity_density_with_population
+  forbidden_operators:
+  - generic_admission_count
+  - sih_cost_sum
+  protected_non_equivalence:
+  - facility_type
+  - sus_binding
+  - management_regime
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry cnes_facility_stock from cnes_capacity_registry.yaml.
+- id: cnes_bed_capacity_qtleit
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - QTLEIT
+  - LEITOS
+  - beds
+  - bed_capacity
+  capacity_family: bed_capacity
+  capacity_index: QTLEIT
+  carrier: Facilities
+  unit: beds
+  aggregation: additive
+  support_axes:
+  - facility
+  - municipality
+  - period
+  - bed_type
+  allowed_operators:
+  - bed_capacity_sum
+  - bed_capacity_density
+  - admission_per_bed_ratio
+  forbidden_operators:
+  - facility_count_equivalence
+  - generic_population_denominator
+  protected_non_equivalence:
+  - bed_type
+  - sus_binding
+  - specialty
+  warnings:
+  - capacity_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry cnes_bed_capacity_qtleit from
+    cnes_capacity_registry.yaml.
+- id: cnes_installation_capacity_qtinst
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - QTINST
+  - INSTAL
+  - installation_capacity
+  - equipment_capacity
+  capacity_family: installation_capacity
+  capacity_index: QTINST
+  carrier: Facilities
+  unit: counts
+  aggregation: additive
+  support_axes:
+  - facility
+  - municipality
+  - period
+  - installation_type
+  allowed_operators:
+  - installation_capacity_sum
+  - capacity_density
+  forbidden_operators:
+  - bed_capacity_equivalence
+  - facility_count_equivalence
+  protected_non_equivalence:
+  - installation_type
+  - equipment_type
+  warnings:
+  - capacity_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry cnes_installation_capacity_qtinst
+    from cnes_capacity_registry.yaml.
+- id: cnes_sus_binding
+  status: active
+  source_system: CNES-ST
+  field_patterns:
+  - VINC_SUS
+  - sus_binding
+  capacity_family: facility_attribute
+  carrier: Facilities
+  unit: binary_flag
+  aggregation: non_aggregable
+  support_axes:
+  - facility
+  - municipality
+  - period
+  allowed_operators:
+  - facility_filter
+  - sus_capacity_stratification
+  forbidden_operators:
+  - numeric_sum_without_filter_semantics
+  protected_non_equivalence:
+  - sus_binding
+  warnings:
+  - facility_attribute_not_capacity_measure
+  description: Macro-Slice 27A canonical registry entry cnes_sus_binding from cnes_capacity_registry.yaml.
+
+
+
+###############################################################################
+### FILE: registries/composite_decoders.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for composite_decoders.yaml; not a calibrated
+  analytic registry.
+entries:
+- id: Decode_SIM_IDADE
+  status: stable
+  description: SIM structural age decoder.
+  warnings: []
+- id: Decode_SIH_AGE
+  status: stable
+  description: SIH age decoder using COD_IDADE.
+  warnings: []
+- id: Decode_PESO
+  status: stable
+  description: Physical scalar decoder for birth weight.
+  warnings: []
+- id: Decode_count2
+  status: stable
+  description: Two-character count decoder.
+  warnings: []
+- id: Clamp_bool
+  status: stable
+  description: Sentinel-safe boolean decoder.
+  warnings: []
+- id: Filter_CNPJ
+  status: stable
+  description: CNPJ sanitizer and all-zero nullifier.
+  warnings: []
+- id: Decode_cat
+  status: stable
+  description: Categorical socioeconomic decoder.
+  warnings: []
+
+
+
+###############################################################################
+### FILE: registries/diagnostic_topology.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A diagnostic topology registry. Defines ICD-bearing fields
+  as topology-bearing observer/event selectors, not generic additive numeric measures.
+entries:
+- id: sim_underlying_cause_causabas
+  status: active
+  source_system: SIM-DO
+  field_patterns:
+  - CAUSABAS
+  - causa_basica
+  - underlying_cause
+  topology_role: underlying_cause
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: Deaths
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  - icd_leaf_count
+  forbidden_operators:
+  - numeric_sum
+  - generic_rate_numerator
+  - generic_cost_component
+  warnings:
+  - diagnostic_topology_not_numeric_measure
+  description: Macro-Slice 27A canonical registry entry sim_underlying_cause_causabas
+    from diagnostic_topology.yaml.
+- id: sim_causal_chain_linhas
+  status: active
+  source_system: SIM-DO
+  field_patterns:
+  - LINHAA
+  - LINHAB
+  - LINHAC
+  - LINHAD
+  - LINHAII
+  - linha
+  topology_role: causal_chain
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: Deaths
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  forbidden_operators:
+  - numeric_sum
+  - generic_rate_numerator
+  warnings:
+  - causal_chain_not_underlying_cause
+  description: Macro-Slice 27A canonical registry entry sim_causal_chain_linhas from
+    diagnostic_topology.yaml.
+- id: sih_principal_diagnosis
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - DIAG_PRINC
+  - diag_princ
+  - principal_diagnosis
+  topology_role: principal_diagnosis
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: HospitalAdmissions
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  - admission_diagnosis_count
+  forbidden_operators:
+  - numeric_sum
+  - generic_cost_component
+  warnings:
+  - hospital_diagnosis_topology
+  description: Macro-Slice 27A canonical registry entry sih_principal_diagnosis from
+    diagnostic_topology.yaml.
+- id: sih_secondary_diagnosis
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - DIAG_SECUN
+  - diag_secun
+  - secondary_diagnosis
+  topology_role: secondary_diagnosis
+  icd_system: ICD-10
+  field_kind: observer_proxy
+  carrier: HospitalAdmissions
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  forbidden_operators:
+  - numeric_sum
+  - generic_cost_component
+  warnings:
+  - secondary_diagnosis_sparse_optional
+  description: Macro-Slice 27A canonical registry entry sih_secondary_diagnosis from
+    diagnostic_topology.yaml.
+- id: sinasc_congenital_anomaly_icd
+  status: active
+  source_system: SINASC
+  field_patterns:
+  - CODANOMAL
+  - anomaly_icd
+  - congenital_anomaly
+  topology_role: congenital_anomaly
+  icd_system: ICD-10-Q
+  field_kind: observer_proxy
+  carrier: LiveBirths
+  unit: ICD10
+  aggregation: non_aggregable
+  allowed_operators:
+  - diagnostic_topology_annotation
+  - icd_chapter_projection
+  - icd_block_projection
+  - anomaly_prevalence_numerator
+  forbidden_operators:
+  - numeric_sum
+  - generic_rate_numerator_without_birth_denominator
+  warnings:
+  - congenital_anomaly_requires_birth_denominator
+  description: Macro-Slice 27A canonical registry entry sinasc_congenital_anomaly_icd
+    from diagnostic_topology.yaml.
+
+
+
+###############################################################################
+### FILE: registries/hsic_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 24A HSIC kernel registry.
+entries:
+- id: exact_centered_hsic_v1
+  status: active
+  description: Exact centered-kernel HSIC for bounded support.
+  warnings: []
+- id: nystrom_hsic_v1
+  status: active_approximation
+  description: Seeded uniform-landmark Nyström HSIC with approximation diagnostics.
+  warnings:
+  - hsic_approximation_diagnostics_emitted
+- id: rff_hsic_v1
+  status: active_approximation
+  description: Seeded random Fourier feature HSIC with median bandwidth.
+  warnings:
+  - hsic_approximation_diagnostics_emitted
+
+
+
+###############################################################################
+### FILE: registries/icd_catalog.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A minimal ICD-10 catalog sufficient for topology validation
+  and chapter/block projection.
+entries:
+- id: icd10_chapter_I
+  status: active
+  range:
+  - A00
+  - B99
+  label: Certain infectious and parasitic diseases
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_I from icd_catalog.yaml.
+- id: icd10_chapter_II
+  status: active
+  range:
+  - C00
+  - D48
+  label: Neoplasms
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_II from icd_catalog.yaml.
+- id: icd10_chapter_IX
+  status: active
+  range:
+  - I00
+  - I99
+  label: Diseases of the circulatory system
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_IX from icd_catalog.yaml.
+- id: icd10_chapter_X
+  status: active
+  range:
+  - J00
+  - J99
+  label: Diseases of the respiratory system
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_X from icd_catalog.yaml.
+- id: icd10_chapter_XVI
+  status: active
+  range:
+  - P00
+  - P96
+  label: Certain conditions originating in the perinatal period
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_XVI from icd_catalog.yaml.
+- id: icd10_chapter_XVII
+  status: active
+  range:
+  - Q00
+  - Q99
+  label: Congenital malformations, deformations and chromosomal abnormalities
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_XVII from icd_catalog.yaml.
+- id: icd10_chapter_XX
+  status: active
+  range:
+  - V01
+  - Y98
+  label: External causes of morbidity and mortality
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_chapter_XX from icd_catalog.yaml.
+
+
+
+###############################################################################
+### FILE: registries/icd_quality_groups.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A ICD quality grouping registry for diagnostic topology
+  warnings.
+entries:
+- id: icd10_well_formed
+  status: active
+  predicate: normalized_icd10_code
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry icd10_well_formed from icd_quality_groups.yaml.
+- id: icd10_missing
+  status: active_observer
+  predicate: missing_or_blank_code
+  warnings:
+  - diagnostic_code_missing
+  description: Macro-Slice 27A canonical registry entry icd10_missing from icd_quality_groups.yaml.
+- id: icd10_ill_defined
+  status: active_warning
+  predicate: R00_R99_or_unspecified
+  warnings:
+  - ill_defined_condition_group
+  description: Macro-Slice 27A canonical registry entry icd10_ill_defined from icd_quality_groups.yaml.
+- id: icd10_external_cause
+  status: active
+  predicate: V01_Y98
+  warnings:
+  - external_cause_topology
+  description: Macro-Slice 27A canonical registry entry icd10_external_cause from
+    icd_quality_groups.yaml.
+
+
+
+###############################################################################
+### FILE: registries/join_affordances.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A support join affordance registry.
+entries:
+- id: sim_sidra_population_denominator
+  status: active
+  left_system: SIM-DO
+  right_system: SIDRA
+  support_axes:
+  - municipality
+  - year
+  allowed_operators:
+  - RN
+  - crude_mortality_rate
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sim_sidra_population_denominator
+    from join_affordances.yaml.
+- id: sinasc_sidra_population_denominator
+  status: active
+  left_system: SINASC
+  right_system: SIDRA
+  support_axes:
+  - municipality
+  - year
+  allowed_operators:
+  - crude_birth_rate
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry sinasc_sidra_population_denominator
+    from join_affordances.yaml.
+- id: sim_sinasc_birth_denominator
+  status: active
+  left_system: SIM-DO
+  right_system: SINASC
+  support_axes:
+  - municipality
+  - year
+  allowed_operators:
+  - infant_mortality_rate
+  - neonatal_mortality_rate
+  - postneonatal_mortality_rate
+  warnings:
+  - birth_denominator_linkage
+  description: Macro-Slice 27A canonical registry entry sim_sinasc_birth_denominator
+    from join_affordances.yaml.
+- id: sih_cnes_capacity_context
+  status: active_warning
+  left_system: SIH-RD
+  right_system: CNES-ST
+  support_axes:
+  - municipality
+  - period
+  allowed_operators:
+  - admission_per_bed_ratio
+  - facility_capacity_context
+  warnings:
+  - capacity_context_not_case_denominator
+  description: Macro-Slice 27A canonical registry entry sih_cnes_capacity_context
+    from join_affordances.yaml.
+
+
+
+###############################################################################
+### FILE: registries/model_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A model registry aligned to PIRS execution surfaces.
+entries:
+- id: pirs_ols_residual_model
+  status: active
+  family: gaussian_ols
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry pirs_ols_residual_model from
+    model_registry.yaml.
+- id: pirs_poisson_offset_model
+  status: planned_contract
+  family: poisson_log_offset
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  - denominator_offset
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - requires_offset_contract
+  description: Macro-Slice 27A canonical registry entry pirs_poisson_offset_model
+    from model_registry.yaml.
+
+
+
+###############################################################################
+### FILE: registries/municipality_crosswalk_sources.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A geospatial source registry. External crosswalk artifacts
+  remain required for non-native support transformations.
+entries:
+- id: ibge_municipality_crosswalk_external_required
+  status: active_artifact_required
+  geography_system: IBGE
+  source_code_system: IBGE7
+  target_code_system: IBGE7
+  allowed_operators:
+  - amc_contraction
+  - geneallocation_measure_pushforward
+  required_artifacts:
+  - crosswalk_matrix
+  - source_manifest_hash
+  - mass_conservation_proof
+  forbidden_operators:
+  - direct_rate_allocation
+  warnings:
+  - external_crosswalk_artifact_required
+  description: Macro-Slice 27A canonical registry entry ibge_municipality_crosswalk_external_required
+    from municipality_crosswalk_sources.yaml.
+
+
+
+###############################################################################
+### FILE: registries/null_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 24A structured permutation null registry.
+entries:
+- id: spatial_block_cyclic_time_shift
+  status: active
+  description: Annual municipal panel null preserving temporal sequences within spatial blocks.
+  warnings: []
+- id: season_preserving_moving_block_circular_shift
+  status: active
+  description: Monthly panel null preserving calendar season and circular temporal dependence.
+  warnings:
+  - monthly_null_preserves_season
+- id: geo_adjacency_shuffle
+  status: active
+  description: Cross-sectional shuffle restricted to declared adjacency components.
+  warnings: []
+- id: restricted_intra_uf_spatial_swap
+  status: active
+  description: Facility-stock swap restricted within UF strata.
+  warnings: []
+- id: bootstrap_within_strata
+  status: active
+  description: Sparse-support bootstrap restricted within declared strata.
+  warnings: []
+
+
+
+###############################################################################
+### FILE: registries/output_schema.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for output_schema.yaml; not a calibrated analytic
+  registry.
+entries:
+- id: immutable_17_key_bundle
+  status: stable
+  description: Exact run bundle key contract.
+  warnings: []
+
+
+
+###############################################################################
+### FILE: registries/population_solver_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v3.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 22A population solver registry.
+entries:
+- id: projected_gradient_small_v1
+  description: Analytic projected-gradient optimizer for small independent population tensors.
+  mode: independent_denominator
+  backend: projected_gradient_small_sparse_analytic
+  status: active
+  sparse_jacobian: true
+  max_cells: 10000000
+  warnings: []
+- id: projected_gradient_small_sim_informed_v1
+  description: Analytic projected-gradient optimizer with an explicit SIM death-prior term and feedback warning.
+  mode: sim_informed_denominator
+  backend: projected_gradient_small_sparse_analytic
+  status: active_warning
+  sparse_jacobian: true
+  max_cells: 10000000
+  warnings:
+  - sim_informed_population_feedback_risk
+- id: independent_sidra_anchor_v1
+  description: Legacy identity path retained only for reproducibility of earlier runs.
+  mode: independent_denominator
+  backend: algebraic_sidra_anchor_identity
+  status: legacy_identity
+  sparse_jacobian: true
+  max_cells: 10000000
+  warnings:
+  - legacy_identity_solver
+- id: sparse_block_coordinate_v1
+  description: Memory-preflighted sparse block-coordinate optimizer for regional and national independent tensors.
+  mode: independent_denominator
+  backend: sparse_block_coordinate_analytic
+  status: active_sparse
+  sparse_jacobian: true
+  max_cells: 250000000
+  warnings: []
+- id: sparse_block_coordinate_sim_informed_v1
+  description: Sparse block-coordinate optimizer with explicit SIM death-prior feedback warning.
+  mode: sim_informed_denominator
+  backend: sparse_block_coordinate_analytic
+  status: active_sparse_warning
+  sparse_jacobian: true
+  max_cells: 250000000
+  warnings:
+  - sim_informed_population_feedback_risk
+- id: sim_informed_sparse_admm_scaffold_v1
+  description: Legacy warning scaffold retained only for reproducibility of earlier runs.
+  mode: sim_informed_denominator
+  backend: sparse_admm_scaffold_blocked_feedback
+  status: legacy_warning_scaffold
+  sparse_jacobian: true
+  max_cells: 10000000
+  warnings:
+  - sim_informed_population_feedback_risk
+
+
+
+###############################################################################
+### FILE: registries/provenance.yaml
+###############################################################################
+schema_version: "1.0"
+registry_id: "provenance_registry_v1"
+provenance_tags:
+  source_normalized:
+    risk: 0.05
+    description: "Field produced by source-specific normalization with manifest hash."
+  administrative_declaration:
+    risk: 0.15
+    description: "Administrative declaration process field."
+  diagnostic_topology:
+    risk: 0.10
+    description: "CID/diagnostic topology-bearing field."
+  billing_record:
+    risk: 0.20
+    description: "SIH billing/admission record."
+  facility_registry:
+    risk: 0.20
+    description: "CNES establishment registry record."
+  sidra_contextual:
+    risk: 0.25
+    description: "SIDRA contextual or denominator fact."
+  component_specific_cost:
+    risk: 0.20
+    description: "SIH cost component preserved without generic-cost collapse."
+  vector_indexed_capacity:
+    risk: 0.20
+    description: "CNES capacity component preserving QTINST/QTLEIT index semantics."
+  audit_metadata:
+    risk: 0.70
+    description: "Metadata-only field; not directly analytic."
+  fixture:
+    risk: 1.00
+    description: "Fixture-backed field."
+
+
+
+###############################################################################
+### FILE: registries/provenance_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A compatibility alias. Canonical provenance semantics live in provenance.yaml; this file remains required by registry validators.
+entries:
+- id: provenance_registry_alias
+  status: active_alias
+  canonical_registry: provenance.yaml
+  description: Compatibility manifest for the canonical provenance registry.
+  warnings: [canonical_registry_is_provenance_yaml]
+
+
+
+###############################################################################
+### FILE: registries/quality.yaml
+###############################################################################
+schema_version: "1.0"
+registry_id: "quality_registry_v1"
+quality_roles:
+  analytical_measure:
+    substrate_admissible: true
+    default_state: "fragile"
+    description: "Source-level measure that may become a substrate candidate if variance/support permits."
+  denominator_measure:
+    substrate_admissible: true
+    default_state: "fragile"
+    description: "Population/exposure candidate; still requires denominator legality checks."
+  diagnostic_code:
+    substrate_admissible: true
+    default_state: "fragile"
+    description: "Diagnostic topology field; not a generic string."
+  audit_only:
+    substrate_admissible: false
+    default_state: "quarantined_descriptive"
+    description: "Identifier/hash/state/raw metadata."
+  sentinel_state:
+    substrate_admissible: false
+    default_state: "quarantined_descriptive"
+    description: "Parse, missingness, or validity state column."
+  forbidden_generic_collapse:
+    substrate_admissible: false
+    default_state: "illegal_excluded"
+    description: "Field would collapse component semantics such as generic beds or generic cost."
+
+
+
+###############################################################################
+### FILE: registries/quality_permissions.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for quality_permissions.yaml; not a calibrated
+  analytic registry.
+entries:
+- id: verified
+  status: stable
+  description: Full analytic permissions.
+  warnings: []
+- id: fragile
+  status: stable
+  description: Analytic with warning.
+  warnings: []
+- id: forced_fragile
+  status: stable
+  description: Forced unstable field.
+  warnings: []
+- id: quarantined_descriptive
+  status: stable
+  description: Descriptive only.
+  warnings: []
+- id: quarantined_nochildren
+  status: stable
+  description: No downstream children.
+  warnings: []
+- id: illegal_excluded
+  status: stable
+  description: Excluded from analytic graph.
+  warnings: []
+
+
+
+###############################################################################
+### FILE: registries/race_axis_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A race-axis declaration registry.
+entries:
+- id: administrative_race_color
+  status: active_warning
+  declaration_process: administrative_observed_or_recorded
+  categories:
+  - branca
+  - preta
+  - amarela
+  - parda
+  - indigena
+  - ignored
+  allowed_direct_comparisons:
+  - administrative_race_color
+  bridge_required_to:
+  - posterior_self_declared_race_color
+  - census_self_declared_race_color
+  warnings:
+  - administrative_race_not_self_declared
+  description: Macro-Slice 27A canonical registry entry administrative_race_color
+    from race_axis_registry.yaml.
+- id: posterior_self_declared_race_color
+  status: active
+  declaration_process: bridge_posterior_distribution
+  categories:
+  - branca
+  - preta
+  - amarela
+  - parda
+  - indigena
+  allowed_direct_comparisons:
+  - posterior_self_declared_race_color
+  bridge_required_to:
+  - administrative_race_color
+  warnings:
+  - race_bridge_posterior_uncertainty
+  description: Macro-Slice 27A canonical registry entry posterior_self_declared_race_color
+    from race_axis_registry.yaml.
+- id: missing_race_observer
+  status: active_observer
+  declaration_process: missingness_observer
+  categories:
+  - missing
+  - ignored
+  - not_recorded
+  allowed_direct_comparisons:
+  - missing_race_observer
+  bridge_required_to: []
+  warnings:
+  - missingness_not_population_race_axis
+  description: Macro-Slice 27A canonical registry entry missing_race_observer from
+    race_axis_registry.yaml.
+
+
+
+###############################################################################
+### FILE: registries/race_bridge_priors.yaml
+###############################################################################
+schema_version: "1.0"
+registry_version: "race_bridge_priors.v1.slice4b"
+created_at: "2026-06-10"
+updated_at: "2026-06-10"
+provenance: "Slice 4B smoke registry for downstream Bridge_R prior selection. The prior is a fixture for compiler validation and must not be interpreted as calibrated epidemiological truth."
+entries:
+  - id: "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"
+    status: "experimental"
+    description: "Smoke fixed-C dynamic-weight bridge from SIM administrative race/color to IBGE self-declared race axis."
+    warnings:
+      - "fixture_prior_not_calibrated"
+      - "posterior_fields_are_sensitivity_observers"
+      - "raw_administrative_counts_must_be_preserved"
+    source_system: "SIM-DO"
+    source_axis: "SIM_ADMIN_RACACOR"
+    target_axis: "IBGE_SELF_DECLARED_RACE"
+    mode: "fixedC_dynamic_weight"
+    prior_path: "tests/fixtures/race_bridge/fixedC_valid.json"
+    enabled_for_compile: true
+    region_scope:
+      - "AL"
+    period_start: 2022
+    period_end: 2022
+    dashboard_policy: "downgrade_when_sensitive"
+
+
+
+###############################################################################
+### FILE: registries/registry_manifest.yaml
+###############################################################################
+registry_set:
+  name: PegaSUS_core
+  version: v2.0.slice27a27b
+  created_at: '2026-06-06'
+  updated_at: '2026-06-13'
+  owner: local
+  git_commit: uninitialized
+  dirty_allowed: false
+registries:
+  aggregation:
+    path: aggregation.yaml
+    schema_version: '1.0'
+    registry_version: aggregation_registry_v1
+    sha256: 147c2b6343ea1925dc93adcd57a598e9e51f396e9757e3336966b17b677861d7
+  aggregation_registry:
+    path: aggregation_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: d2b86b0b7d38f937e93ece0d5142343cf4553565ce2e53b198a95a263235bbf8
+  bridge_grammars:
+    path: bridge_grammars.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 2da772416cd32a21aa4f0ce8b97caccaa45a816f65a179ad6c7c8401a0c143d9
+  carrier:
+    path: carrier.yaml
+    schema_version: '1.0'
+    registry_version: carrier_registry_v1
+    sha256: 1b91dcdd605a142ea9a0ed9880f1bc2d79ecf42e9a42e7142338929ede7a4a49
+  carrier_registry:
+    path: carrier_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 072dbccbc936007608e220405f1728648ca37fbc3398a04d415185d54c1d2480
+  clinical_event_definitions:
+    path: clinical_event_definitions.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 56e5d2ece6da8dd0142782af42c3352891b0d1093ac5e9812e2d76ebf269f7dc
+  cnes_capacity_registry:
+    path: cnes_capacity_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: bd5eba0d8d66c63d7b48ff4a12f0a7892ef6d8b4990fa19e26ed8b6e1ace2300
+  composite_decoders:
+    path: composite_decoders.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 0b4adddcba1cacde074210186b4dabd8f41ef83d01767490838f38e357c60bbf
+  diagnostic_topology:
+    path: diagnostic_topology.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: e321d20530d23781e495ab501b93da289b2d30dd612c893c1f0e74422c8ada95
+  hsic_registry:
+    path: hsic_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: db2f25c07521240180538a731fc1f9cd15783430166230aafde8136016c26d73
+  icd_catalog:
+    path: icd_catalog.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 0a86155f69f6e4d732debca81c3ec3c928a7b8ae36b66550932dd8011fb5cd17
+  icd_quality_groups:
+    path: icd_quality_groups.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 15bd8a493d9cd0557137f5f8e95b5e6dca163e9191070e17f3a3fd4c061fe64b
+  join_affordances:
+    path: join_affordances.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 7761e3f53121a8b218f6d4eddcc5d7451b515618ff06ac11c7b3184b521a8ac8
+  model_registry:
+    path: model_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 8bcb53cb99980deafdf035ae0d235db6d78a70ea624ef313b8226d413045919e
+  municipality_crosswalk_sources:
+    path: municipality_crosswalk_sources.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: b8fb1fb7f21ada71c7eb7be487b2e0524c3480d61ff7ae7ce07360e30fda9e41
+  null_registry:
+    path: null_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: ce161830ab79c0e9a320875d8c682148cba8b44a978b877a0a9709f103c168af
+  output_schema:
+    path: output_schema.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 99ff619d94dfb7c6b5851c233fa096c766bfd60b3aa686f9b232dee58f12e4f9
+  population_solver_registry:
+    path: population_solver_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 01ced0e081ed93204b388daf801a71489a1f293794d1a6ad61856850d1eadd03
+  provenance:
+    path: provenance.yaml
+    schema_version: '1.0'
+    registry_version: provenance_registry_v1
+    sha256: 281965b510b360749cd7fd7feb2f27277d599a277dee48c267a4ccb2c5194774
+  provenance_registry:
+    path: provenance_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: fe69a84a1279681d7c964172f954e3e417366459373c7d03e198fc5e9cc4557d
+  quality:
+    path: quality.yaml
+    schema_version: '1.0'
+    registry_version: quality_registry_v1
+    sha256: c475e548ad497add61aa18092e7d3cf1c7c710e73367712b455fdc471ad35608
+  quality_permissions:
+    path: quality_permissions.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: b7ad09ed865f11114c1b3b759f318e16a47d6d034c6532e9d4abcce162101320
+  race_axis_registry:
+    path: race_axis_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: c44ca83b783de8c71d19be4780d06f8d24eeded09f91d95da9a1354b0a160d07
+  race_bridge_priors:
+    path: race_bridge_priors.yaml
+    schema_version: '1.0'
+    registry_version: race_bridge_priors.v1.slice4b
+    sha256: a7742568cf1f3c7c0299af521e7d9c941d8e11e3580ce3146d4948abe39b346a
+  residual_registry:
+    path: residual_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 9526de4a88cada914ff1899eddf3c95fc1be6746bf2a5b6c0d127d3094e9d49a
+  sidra_category_maps:
+    path: sidra_category_maps.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: d2a14e33afa33b9cfbc1650e575e2ccfbd64da1984c1a2ddc6917e184ef13694
+  sidra_regime_registry:
+    path: sidra_regime_registry.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 18b7bd44708668d49c63112b8d47ed7adbe93cb9ab0da4837e1f2fe9c614dc4b
+  sidra_stitching:
+    path: sidra_stitching.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 8bfe581dab813c7275f34505398d3a43ca9d81b6db8bdc0d67061ba5208fece4
+  sidra_views:
+    path: sidra_views.yaml
+    schema_version: '1.0'
+    registry_version: v1.0
+    sha256: 233b820e6d041fb1c23473bc6395c75cffef46ac71ad62a7880b82303704c5ba
+  sih_cost_registry:
+    path: sih_cost_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 9124a93a326a161efa7e71316f2091e4db5f42ef59725787f0ccef0de3eb3292
+  source_fields:
+    path: source_fields.yaml
+    schema_version: '1.0'
+    registry_version: '1.0'
+    sha256: b85563837d528ea039a48e04cd66c8113485e4fd473c9eaf62a32ffaa750396d
+  stdfm_registry:
+    path: stdfm_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 99aa9df09ae2f8a1f4c105eb75aee875332f49e9489f0d07d840ebc17eed82cb
+  unit:
+    path: unit.yaml
+    schema_version: '1.0'
+    registry_version: unit_registry_v1
+    sha256: 6c24ab117b653be325fdd43530dd3c4b26d40ce049f31788a10d0590753bd74f
+  unit_registry:
+    path: unit_registry.yaml
+    schema_version: '1.0'
+    registry_version: v2.0
+    sha256: 98c3d690ad96a0ba33e203dcc99f0770409ed642f3643080c5b7e47fbb144e8e
+  sidra_table_seed:
+    path: sidra_table_seed.jsonl
+    schema_version: jsonl
+    registry_version: seed
+    sha256: a7bcfc6b9e364fa8bdbf3ed3a570b3229088ea0acd2b2a8a202e58e09a5eedd6
+entries:
+- id: registry_manifest_v2
+  status: active
+  description: Registry manifest with per-registry content hashes after Slice 27A/27B
+    canonicalization.
+  warnings: []
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A registry manifest regenerated after registry canonicalization
+  and repair v1.
+
+
+
+###############################################################################
+### FILE: registries/residual_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A residual registry aligned to PIRS/HSIC residual scanner.
+entries:
+- id: pirs_ols_raw_residual
+  status: active
+  residual_type: observed_minus_fitted
+  allowed_scanners:
+  - exact_centered_hsic_v1
+  - nystrom_hsic_v1
+  - rff_hsic_v1
+  warnings: []
+  description: Macro-Slice 27A canonical registry entry pirs_ols_raw_residual from
+    residual_registry.yaml.
+- id: pirs_standardized_residual
+  status: active_warning
+  residual_type: standardized_observed_minus_fitted
+  allowed_scanners:
+  - exact_centered_hsic_v1
+  - nystrom_hsic_v1
+  - rff_hsic_v1
+  warnings:
+  - standardization_depends_on_model_variance
+  description: Macro-Slice 27A canonical registry entry pirs_standardized_residual
+    from residual_registry.yaml.
+
+
+
+###############################################################################
+### FILE: registries/sidra_category_maps.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for sidra_category_maps.yaml; not a calibrated
+  analytic registry.
+entries:
+- id: sidra_category_maps
+  status: deferred
+  description: Slice 0 placeholder registry.
+  warnings:
+  - scaffold_only
+
+
+
+###############################################################################
+### FILE: registries/sidra_regime_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for sidra_regime_registry.yaml; not a calibrated
+  analytic registry.
+entries:
+- id: sidra_regime_registry
+  status: deferred
+  description: Slice 0 placeholder registry.
+  warnings:
+  - scaffold_only
+
+
+
+###############################################################################
+### FILE: registries/sidra_stitching.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 0 scaffold registry for sidra_stitching.yaml; not a calibrated analytic
+  registry.
+entries:
+- id: sidra_stitching
+  status: deferred
+  description: Slice 0 placeholder registry.
+  warnings:
+  - scaffold_only
+
+
+
+###############################################################################
+### FILE: registries/sidra_table_seed.jsonl
+###############################################################################
+{"table_id": "9606", "purpose": "population_denominator_anchor", "status": "stable", "notes": "Slice 0 metadata seed only; no fetch performed."}
+{"table_id": "5938", "purpose": "gdp_context_candidate", "status": "deferred", "notes": "Slice 0 metadata seed only; no fetch performed."}
+
+
+
+###############################################################################
+### FILE: registries/sidra_views.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-06'
+updated_at: '2026-06-06'
+provenance: Slice 2B SIDRA extraction view registry. Manual entries are extraction-policy
+  declarations, not official metadata truth.
+entries:
+- id: population_9606_total_2022_alagoas_smoke
+  status: stable
+  description: Smoke extraction view for table 9606 resident population, total sex/race/age
+    category, 2022, Maceió N6.
+  warnings:
+  - view_is_extraction_policy_not_metadata_truth
+  - total_categories_for_denominator_anchor_only
+  table_id: '9606'
+  variables:
+  - '93'
+  periods:
+  - '2022'
+  locality_level: N6
+  localities:
+  - '2704302'
+  classifications:
+    '86':
+    - '95251'
+    '2':
+    - '6794'
+    '287':
+    - '100362'
+  view_mode: flat
+  category_policy: total_only
+  modeling_role: population_denominator_anchor
+
+
+
+###############################################################################
+### FILE: registries/sih_cost_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A SIH-RD cost-component registry. Protects AIH cost components
+  from unsafe generic BRL collapse.
+entries:
+- id: sih_total_cost_val_tot
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_TOT
+  - total_cost
+  - valor_total
+  cost_component: total
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - cost_sum
+  - cost_per_admission
+  - cost_density_population
+  forbidden_operators:
+  - component_equivalence_with_professional_or_hospital_service
+  protected_non_equivalence:
+  - VAL_SH
+  - VAL_SP
+  - VAL_SADT
+  - VAL_RN
+  - VAL_UTI
+  warnings:
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_total_cost_val_tot from
+    sih_cost_registry.yaml.
+- id: sih_hospital_service_val_sh
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_SH
+  - hospital_service
+  - servico_hospitalar
+  cost_component: hospital_service
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - cost_component_sum
+  - cost_component_share
+  forbidden_operators:
+  - total_cost_equivalence
+  - professional_service_equivalence
+  protected_non_equivalence:
+  - VAL_TOT
+  - VAL_SP
+  warnings:
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_hospital_service_val_sh
+    from sih_cost_registry.yaml.
+- id: sih_professional_service_val_sp
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_SP
+  - professional_service
+  - servico_profissional
+  cost_component: professional_service
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - cost_component_sum
+  - cost_component_share
+  forbidden_operators:
+  - total_cost_equivalence
+  - hospital_service_equivalence
+  protected_non_equivalence:
+  - VAL_TOT
+  - VAL_SH
+  warnings:
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_professional_service_val_sp
+    from sih_cost_registry.yaml.
+- id: sih_uti_cost_component
+  status: active
+  source_system: SIH-RD
+  field_patterns:
+  - VAL_UTI
+  - UTI
+  - uti_cost
+  cost_component: intensive_care
+  carrier: HospitalAdmissions
+  unit: BRL
+  aggregation: additive
+  allowed_operators:
+  - uti_cost_sum
+  - uti_cost_per_admission
+  forbidden_operators:
+  - generic_total_cost_equivalence
+  protected_non_equivalence:
+  - VAL_TOT
+  - VAL_SH
+  - VAL_SP
+  warnings:
+  - sih_cost_component_identity_protected
+  description: Macro-Slice 27A canonical registry entry sih_uti_cost_component from
+    sih_cost_registry.yaml.
+
+
+
+###############################################################################
+### FILE: registries/source_fields.yaml
+###############################################################################
+schema_version: "1.0"
+registry_id: "source_field_registry_v1"
+registry_version: "1.0"
+created_at: "2026-06-12T00:00:00Z"
+updated_at: "2026-06-12T00:00:00Z"
+provenance: "slice13b_registry_backed_source_semantics"
+entries:
+  - id: "source_field_registry_v1"
+    status: "active"
+    description: "Registry-backed source-field semantics for SHE substrate admission."
+    warnings: []
+default_unknown:
+  carrier: "AuditMetadata"
+  unit: "none"
+  aggregation: "non_aggregable"
+  field_kind: "observer_proxy"
+  role: ["audit_unknown_source_field"]
+  quality_role: "audit_only"
+  provenance: ["audit_metadata"]
+  admissible: false
+  dashboard_safe: "False"
+  axes: {}
+  warning: "unknown_source_field_requires_registry_entry"
+source_systems:
+  SIM-DO:
+    fields:
+      event_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [identifier], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {event_axis: death_event}}
+      year: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [time_axis_candidate], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {time: year}}
+      death_date: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [event_timestamp], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {time: date}}
+      age_years: {carrier: Deaths, unit: counts, aggregation: statistical_functional, field_kind: marked_functional, role: [age_mark], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {age: continuous_years}}
+      age_days: {carrier: Deaths, unit: counts, aggregation: statistical_functional, field_kind: marked_functional, role: [age_mark], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {age: continuous_days}}
+      sex: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [stratifier, sex_axis], quality_role: analytical_measure, provenance: [source_normalized, administrative_declaration], admissible: true, dashboard_safe: "warning", axes: {sex: administrative}}
+      race_color_admin: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [stratifier, administrative_race_axis], quality_role: analytical_measure, provenance: [source_normalized, administrative_declaration], admissible: true, dashboard_safe: "warning", axes: {race_axis_type: administrative_death_declaration}}
+      race_missingness_state: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [race_missingness_audit], quality_role: sentinel_state, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {race_axis_type: administrative_death_declaration}}
+      mun_residence_cod6: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, residence], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {geography: mun_residence_cod6}}
+      underlying_icd_norm: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, underlying_cause], quality_role: diagnostic_code, provenance: [source_normalized, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: underlying_cause}}
+      underlying_icd_parse_state: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [icd_parse_audit], quality_role: sentinel_state, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: underlying_cause}}
+      cause_chain_norm: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, terminal_chain], quality_role: audit_only, provenance: [source_normalized, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: terminal_chain}}
+      associated_conditions_norm: {carrier: Deaths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, associated_condition], quality_role: diagnostic_code, provenance: [source_normalized, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: associated_condition}}
+      source_manifest_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [source_manifest_hash], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      raw_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [raw_payload], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      row_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [row_hash], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+  SINASC:
+    fields:
+      event_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [identifier], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {event_axis: live_birth_event}}
+      birth_year: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [time_axis_candidate], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {time: birth_year}}
+      mun_residence_cod6: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, residence], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {geography: mun_residence_cod6}}
+      mother_age_years: {carrier: LiveBirths, unit: counts, aggregation: statistical_functional, field_kind: marked_functional, role: [maternal_age_mark], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {age: maternal_years}}
+      adolescent_mother_flag: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [maternal_child_indicator], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {indicator: adolescent_mother}}
+      advanced_maternal_age_flag: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [maternal_child_indicator], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {indicator: advanced_maternal_age}}
+      low_birth_weight_flag: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [birth_outcome_indicator], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {indicator: low_birth_weight}}
+      prematurity_flag: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [birth_outcome_indicator], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {indicator: prematurity}}
+      cesarean_flag: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [delivery_mode_indicator], quality_role: analytical_measure, provenance: [source_normalized], admissible: true, dashboard_safe: "warning", axes: {indicator: cesarean}}
+      anomaly_icd_code: {carrier: LiveBirths, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, congenital_anomaly], quality_role: diagnostic_code, provenance: [source_normalized, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: congenital_anomaly}}
+      anomaly_icd_state: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [anomaly_icd_audit], quality_role: sentinel_state, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      source_manifest_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [source_manifest_hash], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+  SIH-RD:
+    fields:
+      admission_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [identifier], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {event_axis: hospital_admission}}
+      admission_year: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [time_axis_candidate], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {time: admission_year}}
+      mun_residence_cod6: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, residence], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {geography: mun_residence_cod6}}
+      principal_icd_norm: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [diagnostic_topology, sih_principal_diagnosis], quality_role: diagnostic_code, provenance: [source_normalized, billing_record, diagnostic_topology], admissible: true, dashboard_safe: "warning", axes: {icd_topology_role: sih_principal_diagnosis}}
+      secondary_icd_norm_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [diagnostic_topology, sih_secondary_diagnosis], quality_role: audit_only, provenance: [source_normalized, billing_record, diagnostic_topology, audit_metadata], admissible: false, dashboard_safe: "False", axes: {icd_topology_role: sih_secondary_diagnosis}}
+      stay_length_days: {carrier: HospitalAdmissions, unit: days, aggregation: additive, field_kind: extensive_measure, role: [length_of_stay], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {measure: stay_length}}
+      death_flag: {carrier: HospitalAdmissions, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [inpatient_death], quality_role: analytical_measure, provenance: [source_normalized, billing_record], admissible: true, dashboard_safe: "warning", axes: {indicator: inpatient_death}}
+      hospital_service_cost_real: {carrier: HospitalAdmissions, unit: BRL, aggregation: additive, field_kind: extensive_measure, role: [sih_cost_component, VAL_SH], quality_role: analytical_measure, provenance: [source_normalized, billing_record, component_specific_cost], admissible: true, dashboard_safe: "warning", axes: {cost_component: VAL_SH}}
+      professional_service_cost_real: {carrier: HospitalAdmissions, unit: BRL, aggregation: additive, field_kind: extensive_measure, role: [sih_cost_component, VAL_SP], quality_role: analytical_measure, provenance: [source_normalized, billing_record, component_specific_cost], admissible: true, dashboard_safe: "warning", axes: {cost_component: VAL_SP}}
+      icu_cost_real: {carrier: HospitalAdmissions, unit: BRL, aggregation: additive, field_kind: extensive_measure, role: [sih_cost_component, VAL_UTI], quality_role: analytical_measure, provenance: [source_normalized, billing_record, component_specific_cost], admissible: true, dashboard_safe: "warning", axes: {cost_component: VAL_UTI}}
+      total_admission_cost_real: {carrier: HospitalAdmissions, unit: BRL, aggregation: additive, field_kind: extensive_measure, role: [sih_cost_component, VAL_TOT], quality_role: analytical_measure, provenance: [source_normalized, billing_record, component_specific_cost], admissible: true, dashboard_safe: "warning", axes: {cost_component: VAL_TOT}}
+      cost_state_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [sih_cost_state_audit], quality_role: sentinel_state, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      source_manifest_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [source_manifest_hash], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+  CNES-ST:
+    field_patterns:
+      "^QTINST[0-9A-Z_]*$": {carrier: Facilities, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [cnes_capacity_component, QTINST], quality_role: analytical_measure, provenance: [source_normalized, facility_registry, vector_indexed_capacity], admissible: true, dashboard_safe: "warning", axes: {capacity_family: QTINST}}
+      "^QTLEIT[0-9A-Z_]*$": {carrier: Facilities, unit: beds, aggregation: additive, field_kind: extensive_measure, role: [cnes_capacity_component, QTLEIT], quality_role: analytical_measure, provenance: [source_normalized, facility_registry, vector_indexed_capacity], admissible: true, dashboard_safe: "warning", axes: {capacity_family: QTLEIT}}
+      ".*_state$": {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [state_audit], quality_role: sentinel_state, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+    fields:
+      facility_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [identifier], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {event_axis: cnes_facility_period}}
+      year: {carrier: Facilities, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [time_axis_candidate], quality_role: analytical_measure, provenance: [source_normalized, facility_registry], admissible: true, dashboard_safe: "warning", axes: {time: year}}
+      mun_facility_cod6: {carrier: Facilities, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [geography_axis, facility], quality_role: analytical_measure, provenance: [source_normalized, facility_registry], admissible: true, dashboard_safe: "warning", axes: {geography: mun_facility_cod6}}
+      capacity_total_observed: {carrier: Facilities, unit: counts, aggregation: additive, field_kind: extensive_measure, role: [cnes_capacity_total_observer], quality_role: analytical_measure, provenance: [source_normalized, facility_registry, vector_indexed_capacity], admissible: true, dashboard_safe: "warning", axes: {capacity_family: observed_total}}
+      invalid_flag_count: {carrier: Facilities, unit: counts, aggregation: additive, field_kind: observer_proxy, role: [cnes_flag_outlier_observer], quality_role: analytical_measure, provenance: [source_normalized, facility_registry], admissible: true, dashboard_safe: "warning", axes: {indicator: invalid_flag_count}}
+      capacity_vector_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [capacity_vector_audit], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      flag_vector_json: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [flag_vector_audit], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      source_manifest_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [source_manifest_hash], quality_role: audit_only, provenance: [source_normalized, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+  SIDRA:
+    fields:
+      table_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_table_id], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      variable_id: {carrier: AuditMetadata, unit: identifier, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_variable_id], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      period: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_period_axis], quality_role: audit_only, provenance: [sidra_contextual], admissible: false, dashboard_safe: "False", axes: {time: sidra_period}}
+      locality_id: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_locality_axis], quality_role: audit_only, provenance: [sidra_contextual], admissible: false, dashboard_safe: "False", axes: {geography: sidra_locality}}
+      classification_tuple: {carrier: AuditMetadata, unit: json, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_classification_axis], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {classification: tuple}}
+      value_numeric: {carrier: ContextCells, unit: raw_sidra_value, aggregation: non_aggregable, field_kind: latent_context, role: [sidra_context_value], quality_role: analytical_measure, provenance: [sidra_contextual], admissible: true, dashboard_safe: "warning", axes: {measure: sidra_value}}
+      value_status: {carrier: AuditMetadata, unit: state, aggregation: non_aggregable, field_kind: observer_proxy, role: [sidra_value_status], quality_role: sentinel_state, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      request_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [request_hash], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+      metadata_hash: {carrier: AuditMetadata, unit: hash, aggregation: non_aggregable, field_kind: observer_proxy, role: [metadata_hash], quality_role: audit_only, provenance: [sidra_contextual, audit_metadata], admissible: false, dashboard_safe: "False", axes: {}}
+
+
+
+###############################################################################
+### FILE: registries/stdfm_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 23A ST-DFM numerical backend registry.
+entries:
+- id: pytorch_cpu_adam_stdfm_v1
+  status: active_small_scale
+  description: Masked PyTorch ST-DFM with temporal, transition, and spatial Laplacian penalties.
+  warnings: []
+- id: pytorch_cuda_adam_stdfm_v1
+  status: active_gpu
+  description: CUDA execution of the masked PyTorch ST-DFM for configured numerical workloads.
+  warnings:
+  - cuda_device_specific_reproducibility
+
+
+
+###############################################################################
+### FILE: registries/unit.yaml
+###############################################################################
+schema_version: '1.0'
+registry_id: unit_registry_v1
+units:
+  counts:
+    dimension: count
+    additive: true
+    description: Non-negative event or record count.
+  person_years:
+    dimension: exposure
+    additive: true
+    description: Person-time denominator exposure.
+  persons:
+    dimension: stock_population
+    additive: true
+    description: Population stock/count from census or estimate tables.
+  days:
+    dimension: duration
+    additive: true
+    description: Hospital stay or ICU days when summed over admissions.
+  BRL:
+    dimension: currency
+    additive: true
+    description: Brazilian reais; may require deflation before time comparison.
+  beds:
+    dimension: capacity
+    additive: true
+    description: Vector-indexed CNES bed/capacity count.
+  binary_flag:
+    dimension: indicator
+    additive: false
+    description: Boolean/sentinel health-establishment flag; never silently coerced.
+  raw_sidra_value:
+    dimension: sidra_raw
+    additive: false
+    description: SIDRA value before table-specific semantic projection.
+  percent:
+    dimension: ratio
+    additive: false
+    description: Percentage or proportion already intensive.
+  index:
+    dimension: index
+    additive: false
+    description: Index-style contextual value.
+  identifier:
+    dimension: identifier
+    additive: false
+    description: Opaque identifier; not an analytic measure.
+  state:
+    dimension: state
+    additive: false
+    description: Quality/parse/missingness state.
+  hash:
+    dimension: hash
+    additive: false
+    description: Content or lineage hash.
+  json:
+    dimension: json
+    additive: false
+    description: Serialized structured payload.
+  none:
+    dimension: none
+    additive: false
+    description: Non-measure placeholder.
+entries:
+  ICD10:
+    dimension: diagnostic_code
+    additive: false
+    description: ICD-10 diagnostic code mark. Not a count measure; code-specific counts are generated by EFG operators.
+
+
+
+###############################################################################
+### FILE: registries/unit_registry.yaml
+###############################################################################
+schema_version: '1.0'
+registry_version: v2.0
+created_at: '2026-06-06'
+updated_at: '2026-06-13'
+provenance: Macro-Slice 27A compatibility alias. Canonical unit semantics live in unit.yaml; this file remains required by registry validators.
+entries:
+- id: unit_registry_alias
+  status: active_alias
+  canonical_registry: unit.yaml
+  description: Compatibility manifest for the canonical unit registry.
+  warnings: [canonical_registry_is_unit_yaml]
+
+
+
+###############################################################################
+### FILE: sidra.yaml
+###############################################################################
+sidra:
+  base_url: "https://servicodados.ibge.gov.br/api/v3/agregados"
+  max_cells_per_request: 49900
+  view_mode: "flat"
+  concurrency: 16
+  timeout_seconds: 60
+  retry_status_codes: [429, 500, 502, 503, 504]
+  max_retries: 5
+  backoff_initial_seconds: 0.25
+  backoff_max_seconds: 10.0
+  persist_raw_chunks: true
+  persist_normalized_facts: true
+  persist_full_tables_by_default: false
+
+
+

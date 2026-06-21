@@ -394,7 +394,7 @@ def attach_maternal_child_compile_fields(
     run_dir: str | Path,
     sinasc_events_path: str | Path,
     sim_events_path: str | Path,
-    municipality_cod6: str,
+    municipality_cod6: str | None,
 ) -> Path:
     run_dir = Path(run_dir)
     sinasc_events_path = Path(sinasc_events_path)
@@ -406,9 +406,11 @@ def attach_maternal_child_compile_fields(
     if not sim_events_path.exists():
         raise FileNotFoundError(f"SIM events not found: {sim_events_path}")
 
-    cod7 = datasus_cod6_to_ibge_cod7(municipality_cod6, strict=True)
-    if cod7 is None:
-        raise ValueError(f"Cannot crosswalk DATASUS municipality cod6 to IBGE/SIDRA cod7: {municipality_cod6}")
+    cod7 = None
+    if municipality_cod6 is not None:
+        cod7 = datasus_cod6_to_ibge_cod7(municipality_cod6, strict=True)
+        if cod7 is None:
+            raise ValueError(f"Cannot crosswalk DATASUS municipality cod6 to IBGE/SIDRA cod7: {municipality_cod6}")
 
     v_rows = _read_rows(run_dir / "V_fields.parquet")
     population_row = _field_by_name(v_rows, "SIDRAPopulationTotalAnchor")
@@ -422,10 +424,18 @@ def attach_maternal_child_compile_fields(
     )
     if not summary.births_total:
         raise ValueError("Cannot attach maternal-child fields without nonzero live-birth support.")
-    if summary.municipalities_ibge_cod7 != [cod7]:
-        raise ValueError(
-            f"Maternal-child support mismatch: expected cod7={cod7}, observed={summary.municipalities_ibge_cod7}"
-        )
+
+    if municipality_cod6 is not None:
+        if summary.municipalities_ibge_cod7 != [cod7]:
+            raise ValueError(
+                f"Maternal-child support mismatch: expected cod7={cod7}, observed={summary.municipalities_ibge_cod7}"
+            )
+    else:
+        if len(summary.municipalities_cod6) <= 1:
+            raise ValueError(
+                "State-level maternal-child attachment requires multi-municipality DATASUS cod6 support; "
+                f"observed={summary.municipalities_cod6}"
+            )
 
     fields, q_rows, vd_rows, edges = _build_fields(summary, population_row)
     _append_rows(run_dir / "V_fields.parquet", fields, remove_column="field_id", remove_values=FIELD_IDS)

@@ -144,16 +144,45 @@ def _write_sidra_smoke_facts(*, output_path: Path) -> Path:
     return output_path
 
 
-def _smoke_municipality_cod6(intent: UserIntent) -> str:
-    if intent.execution_scale != "smoke":
-        raise ValueError("Compile smoke supports execution_scale='smoke' only.")
+def _intent_municipality_filter_cod6(intent: UserIntent) -> str | None:
+    """Resolve the optional DATASUS municipality filter for compile inputs.
+
+    Smoke runs remain single-municipality runs. State runs over a UF deliberately
+    return None so SIM/SINASC are not filtered down to one municipality.
+    This is a state-level aggregate support, not yet a per-municipality panel.
+    """
     if intent.geography.level != "municipality":
-        raise ValueError("Compile smoke requires geography.level='municipality'.")
-    if len(intent.geography.codes) != 1:
-        raise ValueError("Compile smoke requires exactly one municipality code.")
-    cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
+        raise ValueError("Current compile supports geography.level='municipality' only.")
+
+    if intent.execution_scale == "smoke":
+        if len(intent.geography.codes) != 1:
+            raise ValueError("Compile smoke requires exactly one municipality code.")
+        cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
+        if cod6 is None:
+            raise ValueError(f"Could not resolve municipality DATASUS cod6 for {intent.geography.codes[0]!r}.")
+        return cod6
+
+    if intent.execution_scale == "state":
+        if intent.geography.codes:
+            raise ValueError(
+                "State compile currently expects geography.codes=[] and geography.uf=[<UF>]. "
+                "Explicit multi-code municipal subsets require panel support and are not implemented in this slice."
+            )
+        if len(intent.geography.uf) != 1:
+            raise ValueError("State compile requires exactly one UF in geography.uf.")
+        return None
+
+    raise ValueError(
+        "Compile currently supports execution_scale='smoke' or execution_scale='state'. "
+        f"Received {intent.execution_scale!r}."
+    )
+
+
+def _smoke_municipality_cod6(intent: UserIntent) -> str:
+    """Legacy strict helper retained for tests and smoke-only callers."""
+    cod6 = _intent_municipality_filter_cod6(intent)
     if cod6 is None:
-        raise ValueError(f"Could not convert intent municipality code to DATASUS cod6: {intent.geography.codes[0]!r}")
+        raise ValueError("Compile smoke helper received a non-smoke/state-wide intent.")
     return cod6
 
 
@@ -238,7 +267,9 @@ def _run_compile_impl(
         require_materialized_external=require_materialized_external,
     )
     intent_payload, intent = _load_intent(intent_path)
-    municipality_cod6 = _smoke_municipality_cod6(intent)
+    municipality_cod6 = _intent_municipality_filter_cod6(intent)
+    if municipality_cod6 is None and str(intent.race_tensor_mode) != "decoupled":
+        raise ValueError("State-level compile currently supports race_tensor_mode='decoupled' only.")
     include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
     population_tensor_mode = _compile_population_tensor_mode(intent)
     compiler_architecture = _compiler_architecture_metadata()

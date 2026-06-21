@@ -8,6 +8,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+import polars as pl
+
 from pegasus.core.hashing import content_hash, sha256_file
 from pegasus.dashboard.read_only import bundle_overview, read_table_head
 from pegasus.datasus.cache import DatasusCache
@@ -78,7 +80,41 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
     path = root / "processed" / "sidra" / "population_2022.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     write_facts_parquet(facts, output_path=path)
-    municipality_count = len({str(row.get("D1C")) for row in response.payload[1:] if isinstance(row, dict) and row.get("D1C")})
+
+    df = pl.read_parquet(path)
+    if "locality_id" not in df.columns:
+        raise RuntimeError("SIDRA population facts lack locality_id after normalization.")
+
+    if localities == ["all"]:
+        # SIDRA N6/all returns a municipality-level Brazil-wide payload. For the
+        # current state-level compiler contract, collapse AL municipalities into
+        # one official AL anchor while retaining municipality_count for the grid
+        # audit gate. The full municipal panel is a later EFG/Q tensor expansion.
+        al = df.filter(
+            (pl.col("locality_id").cast(pl.Utf8).str.starts_with("27"))
+            & (pl.col("value_status").cast(pl.Utf8) == "numeric")
+            & pl.col("value_numeric").is_not_null()
+        )
+        municipality_count = int(al.select(pl.col("locality_id").n_unique()).item()) if al.height else 0
+        if municipality_count <= 1:
+            raise RuntimeError(f"SIDRA N6/all did not yield multi-municipality AL support: {municipality_count}")
+
+        total = float(al.select(pl.col("value_numeric").sum()).item())
+        row = dict(al.head(1).to_dicts()[0])
+        row.update(
+            {
+                "locality_level": "N3",
+                "locality_id": "27",
+                "value_numeric": total,
+                "value_raw": str(int(total)) if total.is_integer() else str(total),
+                "request_hash": content_hash({**request, "aggregation": "AL_N6_sum_to_UF"}),
+                "metadata_hash": content_hash({"table": "9606", "official": True, "aggregation": "AL_N6_sum_to_UF"}),
+            }
+        )
+        pl.DataFrame([row], infer_schema_length=None).write_parquet(path)
+    else:
+        municipality_count = int(df.select(pl.col("locality_id").n_unique()).item()) if df.height else 0
+
     return path, bool(response.from_cache or response.status_code < 400), municipality_count
 
 

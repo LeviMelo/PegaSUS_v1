@@ -17,6 +17,7 @@ from pegasus.output.cnes_sih_compile_attach import attach_cnes_sih_compile_field
 from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
 from pegasus.output.population_tensor_compile_attach import attach_population_tensor_compile_fields
 from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_manifest
+from pegasus.output.sim_efg_bundle import finalize_materialized_external_bundle
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
 from pegasus.sidra.facts import write_facts_parquet
@@ -362,6 +363,7 @@ def _run_compile_impl(
             sim_events_path=sim_events_path,
             run_dir=run_dir,
             municipality_cod6=municipality_cod6,
+            source_mode=compile_source_reality.compile_source_mode,
         )
         provenance_mode = (
             "fixture"
@@ -498,6 +500,9 @@ def _run_compile_impl(
     else:
         telemetry.set_stage("race_bridge", "skipped", 0.0)
         telemetry.flush()
+
+    if compile_source_reality.compile_source_mode == "materialized_external":
+        finalize_materialized_external_bundle(run_dir)
 
     telemetry.set_stage("geo_support", "success", 0.0)
     telemetry.set_stage("q_tensor", "success", 0.0)

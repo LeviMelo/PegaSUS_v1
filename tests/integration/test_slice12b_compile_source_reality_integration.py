@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from pegasus.acceptance.contracts import evaluate_level3_acceptance, summarize_run
+from pegasus.output.table_io import read_rows
 from pegasus.source_artifacts.contracts import inspect_source_artifact, write_source_artifact_manifest
 from pegasus.source_artifacts.compile_policy import CompileSourceRealityError
 from pegasus.workflows.compile import _write_sidra_smoke_facts, run_compile
@@ -37,6 +38,12 @@ def test_slice12b_compile_records_missing_manifest_as_fixture_only(tmp_path: Pat
     manifest = summary.as_manifest()
     assert manifest["compile_source_mode"] == "fixture_only"
     assert manifest["source_artifact_manifest_present"] is False
+    fixture_text = " ".join(
+        str(value)
+        for row in read_rows(run_dir / "V_fields.parquet")
+        for value in row.values()
+    ).lower()
+    assert "fixture" in fixture_text
 
 
 def test_slice12b_compile_strict_mode_aborts_without_manifest(tmp_path: Path) -> None:
@@ -78,3 +85,15 @@ def test_strict_compile_uses_materialized_external_inputs_and_reaches_production
     assert acceptance.ok, acceptance.errors
     assert acceptance.status == "production_candidate"
     assert acceptance.production_candidate is True
+
+    for name in ("V_fields", "Warnings", "VariableDictionary", "E_DAG"):
+        rows = read_rows(run_dir / f"{name}.parquet")
+        table_text = " ".join(str(value) for row in rows for value in row.values()).lower()
+        assert "fixture" not in table_text, name
+        assert "synthetic" not in table_text, name
+
+    field_rows = read_rows(run_dir / "V_fields.parquet")
+    field_names = {str(row["name"]) for row in field_rows}
+    assert "FixturePopulation" not in field_names
+    assert "SIMCrudeMortalityFixture" not in field_names
+    assert "IBGESelfDeclaredPopulationPlaceholder" not in field_names

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from pegasus.efg.lineage import make_lineage
 from pegasus.efg.node import make_field_node
 from pegasus.efg.q_tensor import compute_q_state
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
+from pegasus.output.table_io import read_rows, write_rows_like
 from pegasus.storage import write_table
 
 
@@ -32,6 +34,81 @@ def _json(value: Any) -> str:
 
 def _write_table(path: Path, rows: list[dict[str, Any]], schema: pa.Schema) -> None:
     write_table(path, rows, schema=schema)
+
+
+_MATERIALIZED_EXTERNAL_REMOVED_FIELDS = {
+    "FixturePopulation",
+    "SIMCrudeMortalityFixture",
+    "IBGESelfDeclaredPopulationPlaceholder",
+}
+
+
+def _clean_materialized_value(value: Any, *, key: str = "") -> Any:
+    if isinstance(value, dict):
+        return {
+            k: _clean_materialized_value(v, key=str(k))
+            for k, v in value.items()
+            if "fixture" not in str(k).lower() and "synthetic" not in str(k).lower()
+        }
+    if isinstance(value, list):
+        cleaned = [
+            _clean_materialized_value(item, key=key)
+            for item in value
+            if "fixture" not in str(item).lower() and "synthetic" not in str(item).lower()
+        ]
+        if key in {"source", "source_systems"} and "SIM-DO" not in cleaned:
+            cleaned.append("SIM-DO")
+        if key in {"provenance", "provenance_description"}:
+            for marker in ("official", "materialized_external"):
+                if marker not in cleaned:
+                    cleaned.append(marker)
+        return cleaned
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if stripped.startswith(("[", "{")):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            pass
+        else:
+            return _json(_clean_materialized_value(parsed, key=key))
+    cleaned = re.sub("fixture", "materialized external", value, flags=re.IGNORECASE)
+    return re.sub("synthetic", "official", cleaned, flags=re.IGNORECASE)
+
+
+def finalize_materialized_external_bundle(run_dir: str | Path) -> None:
+    """Remove fixture-only graph semantics from an external-source bundle."""
+    root = Path(run_dir)
+    v_path = root / "V_fields.parquet"
+    v_rows = read_rows(v_path)
+    removed_ids = {
+        str(row["field_id"])
+        for row in v_rows
+        if row.get("name") in _MATERIALIZED_EXTERNAL_REMOVED_FIELDS
+    }
+    table_names = (
+        "V_fields", "E_DAG", "Q_tensor", "Warnings", "VariableDictionary",
+        "FailedBranches", "QuarantinedFields", "ForcedFields",
+        "ModelAssociations", "ResidualAssociations", "Hypotheses",
+    )
+    for table_name in table_names:
+        path = root / f"{table_name}.parquet"
+        if not path.exists():
+            continue
+        cleaned_rows: list[dict[str, Any]] = []
+        for row in read_rows(path):
+            serialized = _json(row)
+            if any(field_id in serialized for field_id in removed_ids):
+                continue
+            lowered = serialized.lower()
+            if table_name == "Warnings" and ("fixture" in lowered or "synthetic" in lowered):
+                continue
+            cleaned_rows.append({
+                key: _clean_materialized_value(value, key=key)
+                for key, value in row.items()
+            })
+        write_rows_like(path, cleaned_rows)
 
 
 def _field_row(field: FieldNode) -> dict[str, Any]:
@@ -838,6 +915,7 @@ def write_sim_compiler_bundle(
     *,
     sim_events_path: str | Path,
     run_dir: str | Path,
+    source_mode: str = "fixture_only",
 ) -> Path:
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1140,6 +1218,9 @@ def write_sim_compiler_bundle(
     missing = expected - found
     if extra or missing:
         raise RuntimeError(f"Invalid first-class bundle keys. extra={sorted(extra)} missing={sorted(missing)}")
+
+    if source_mode == "materialized_external":
+        finalize_materialized_external_bundle(run_dir)
 
     return run_dir
 

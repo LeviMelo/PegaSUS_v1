@@ -17,6 +17,7 @@ def build_sim_compiler_run(
     sim_events_path: str | Path,
     run_dir: str | Path,
     municipality_cod6: str | None = None,
+    source_mode: str = "fixture_only",
 ) -> Path:
     run_dir = Path(run_dir)
     source_events_path = Path(sim_events_path)
@@ -27,13 +28,14 @@ def build_sim_compiler_run(
         df = pl.read_parquet(source_events_path)
         filtered = df.filter(pl.col("mun_residence_cod6") == str(municipality_cod6))
         if filtered.height == 0:
-            raise ValueError(f"No SIM fixture events remain after municipality filter {municipality_cod6!r}.")
+            raise ValueError(f"No SIM events remain after municipality filter {municipality_cod6!r}.")
         filtered.write_parquet(filtered_path)
         source_events_path = filtered_path
 
     return write_sim_compiler_bundle(
         sim_events_path=source_events_path,
         run_dir=run_dir,
+        source_mode=source_mode,
     )
 
 

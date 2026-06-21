@@ -108,6 +108,22 @@ def _fixture_semantics(overview: dict[str, Any]) -> list[str]:
     return sorted(set(contaminated))
 
 
+def classify_actual_smoke(payload: dict[str, Any], *, grid: bool) -> str:
+    required = (
+        payload.get("compile_source_mode") != "fixture_only",
+        payload.get("output_validator_ok") is True,
+        payload.get("dashboard_read_only_ok") is True,
+        payload.get("mandatory_fields_present") is True,
+        payload.get("efg_fields_nonempty") is True,
+        payload.get("efg_edges_nonempty") is True,
+        payload.get("q_tensor_nonempty") is True,
+        not payload.get("fixture_semantics_present"),
+    )
+    if grid and int(payload.get("municipality_count") or 0) <= 1:
+        return "source_partial"
+    return "actual_data_validated" if all(required) else "source_partial"
+
+
 def run_actual_smoke(*, intent_name: str, grid: bool) -> dict[str, Any]:
     root = ROOT / "data" / "actual_smokes" / ("alagoas_2022" if grid else "maceio_2022")
     run_dir = root / "run"
@@ -168,10 +184,7 @@ def run_actual_smoke(*, intent_name: str, grid: bool) -> dict[str, Any]:
         payload["efg_edges_nonempty"] = overview["efg"]["edges"]["row_count"] > 0
         payload["q_tensor_nonempty"] = read_table_head(run_dir=run_dir, table_name="Q_tensor", limit=0)["row_count"] > 0
         payload["fixture_semantics_present"] = _fixture_semantics(overview)
-        success = payload["compile_source_mode"] != "fixture_only" and payload["output_validator_ok"] and payload["dashboard_read_only_ok"] and payload["mandatory_fields_present"] and payload["efg_fields_nonempty"] and payload["efg_edges_nonempty"] and payload["q_tensor_nonempty"] and not payload["fixture_semantics_present"]
-        if grid:
-            success = success and payload["municipality_count"] > 1
-        payload["classification"] = "actual_data_validated" if success else "source_partial"
+        payload["classification"] = classify_actual_smoke(payload, grid=grid)
     except Exception as exc:
         errors.append(f"{type(exc).__name__}: {exc}")
         if payload["classification"] == "failed" and payload["compile_attempted"]:

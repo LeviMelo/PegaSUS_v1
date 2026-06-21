@@ -6,6 +6,8 @@ from typing import Any
 
 import polars as pl
 
+from pegasus.geo.state_panel import clean_datasus_municipalities
+
 
 @dataclass(frozen=True)
 class MaternalChildSummary:
@@ -55,6 +57,29 @@ def _bool_count(df: pl.DataFrame, column: str) -> int:
     return int(df.filter(pl.col(column) == True).height)  # noqa: E712 - explicit data-state comparison
 
 
+
+
+def _congenital_anomaly_count(df: pl.DataFrame) -> int:
+    if "congenital_anomaly_flag" not in df.columns:
+        return 0
+    return int(df.filter(pl.col("congenital_anomaly_flag") == True).height)  # noqa: E712
+
+
+def _assert_plausible_anomaly_rate(*, births_total: int, congenital_anomaly_births: int) -> None:
+    if births_total <= 0:
+        return
+    # Tiny fixtures can be intentionally high-prevalence to exercise decoder states.
+    # The plausibility gate is intended for real production-sized SINASC materializations.
+    if births_total < 1000:
+        return
+    rate = congenital_anomaly_births / float(births_total)
+    if rate > 0.20:
+        raise ValueError(
+            f"SINASC congenital anomaly count is implausibly high: "
+            f"{congenital_anomaly_births}/{births_total} ({rate:.3f})."
+        )
+
+
 def _state_not_valid_count(df: pl.DataFrame, column: str, valid_state: str = "valid") -> int:
     if column not in df.columns:
         return 0
@@ -73,6 +98,10 @@ def summarize_maternal_child_events(events_path: str | Path, *, municipality_cod
         if "mun_residence_cod6" in valid.columns
         else []
     )
+    municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix="27")
+    congenital_anomaly_births = _congenital_anomaly_count(valid)
+    _assert_plausible_anomaly_rate(births_total=int(valid.height), congenital_anomaly_births=congenital_anomaly_births)
+
     race_missing = 0
     for col in ["mother_race_state", "newborn_race_state"]:
         if col in valid.columns:
@@ -85,7 +114,7 @@ def summarize_maternal_child_events(events_path: str | Path, *, municipality_cod
         low_birth_weight_births=_bool_count(valid, "low_birth_weight_flag"),
         prematurity_births=_bool_count(valid, "prematurity_flag"),
         cesarean_births=_bool_count(valid, "cesarean_flag"),
-        congenital_anomaly_births=_bool_count(valid, "congenital_anomaly_flag"),
+        congenital_anomaly_births=congenital_anomaly_births,
         low_apgar5_births=_bool_count(valid, "low_apgar5_flag"),
         adolescent_mother_births=_bool_count(valid, "adolescent_mother_flag"),
         advanced_maternal_age_births=_bool_count(valid, "advanced_maternal_age_flag"),

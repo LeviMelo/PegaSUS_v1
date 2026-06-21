@@ -94,15 +94,25 @@ def _population_value(population_row: dict[str, Any]) -> float:
 
 
 def _support_alignment(summary: MaternalChildLinkedSummary) -> dict[str, Any]:
+    if summary.municipalities_ibge_cod7:
+        crosswalk = "datasus_cod6_to_ibge_cod7_explicit_crosswalk"
+        denominator_cod7 = summary.municipalities_ibge_cod7
+        reason = "municipality_year_exact_after_datasus_cod6_to_ibge_cod7_crosswalk"
+    else:
+        crosswalk = "native_datasus_cod6_state_panel"
+        denominator_cod7 = []
+        reason = "state_panel_native_datasus_cod6_support_without_single_municipality_ibge7_filter"
+
     return {
         "aligned": True,
-        "reason": "municipality_year_exact_after_datasus_cod6_to_ibge_cod7_crosswalk",
+        "reason": reason,
         "numerator_municipalities_cod6": summary.municipalities_cod6,
         "numerator_municipalities_ibge_cod7": summary.municipalities_ibge_cod7,
-        "denominator_municipalities_ibge_cod7": summary.municipalities_ibge_cod7,
+        "denominator_municipalities_ibge_cod7": denominator_cod7,
         "numerator_years": summary.years,
         "denominator_years": summary.years,
-        "crosswalk": "explicit_smoke_municipality_crosswalk",
+        "crosswalk": crosswalk,
+        "support_kind": "state_panel_cod6_year" if not summary.municipalities_ibge_cod7 else "municipality_year_cod6_cod7",
     }
 
 
@@ -140,7 +150,7 @@ def _field_row(
         "support_json": _json(support),
         "axes_json": _json(axes),
         "operator": operator,
-        "provenance": _json(source + ["slice3b_compile_linkage"]),
+        "provenance": _json(source + ["maternal_child_state_panel_linkage"]),
         "state": state,
         "dashboard_safe": dashboard_safe,
         "warnings": _json(warnings),
@@ -151,6 +161,44 @@ def _field_row(
     }
 
 
+def _support_payload(field: dict[str, Any]) -> dict[str, Any]:
+    raw = field.get("support_json")
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _support_cov_s(field: dict[str, Any]) -> float:
+    payload = _support_payload(field)
+    geography = payload.get("geography")
+    if isinstance(geography, dict):
+        for key in ("municipality_cod6", "municipality_ibge_cod7"):
+            values = geography.get(key)
+            if isinstance(values, list):
+                return float(len(values))
+    values = payload.get("municipalities")
+    if isinstance(values, list):
+        return float(len(values))
+    return 1.0
+
+
+def _support_cov_t(field: dict[str, Any]) -> float:
+    payload = _support_payload(field)
+    time = payload.get("time")
+    if isinstance(time, dict):
+        years = time.get("years")
+        if isinstance(years, list):
+            return float(len(years))
+    years = payload.get("years")
+    if isinstance(years, list):
+        return float(len(years))
+    return 1.0
+
+
 def _q_row(field: dict[str, Any], *, n_events: float | int | None, n_denom: float | int | None, warnings: list[str]) -> dict[str, Any]:
     n_eff = n_denom if n_denom is not None else n_events
     return {
@@ -158,8 +206,8 @@ def _q_row(field: dict[str, Any], *, n_events: float | int | None, n_denom: floa
         "n_events": float(n_events) if n_events is not None else None,
         "n_denom": float(n_denom) if n_denom is not None else None,
         "n_eff": float(n_eff) if n_eff is not None else None,
-        "cov_S": 1.0,
-        "cov_T": 1.0,
+        "cov_S": _support_cov_s(field),
+        "cov_T": _support_cov_t(field),
         "missingness": 0.0,
         "zero_inflation": 1.0 if n_events == 0 else 0.0,
         "denom_fragility": 0.0 if n_denom else None,
@@ -222,15 +270,7 @@ def _edge(edge_id: str, parent: str, child: str, operator: str, params: dict[str
 def _warning_rows(summary: MaternalChildLinkedSummary) -> list[dict[str, Any]]:
     return [
         {
-            "warning_id": "slice3b_maternal_child_fixture_rates",
-            "field_id": "run",
-            "severity": "warning",
-            "message": "Slice 3B computes maternal-child smoke rates from fixture SINASC/SIM records over explicit Maceio support; outputs are structurally valid but not inferential estimates.",
-            "created_at": _now(),
-            "inherited_from": None,
-        },
-        {
-            "warning_id": "slice3b_mortality_birth_denominator_linkage",
+            "warning_id": "maternal_child_state_panel_linkage",
             "field_id": "run",
             "severity": "info",
             "message": _json({
@@ -239,10 +279,11 @@ def _warning_rows(summary: MaternalChildLinkedSummary) -> list[dict[str, Any]]:
                 "neonatal_deaths": summary.neonatal_deaths,
                 "postneonatal_deaths": summary.postneonatal_deaths,
                 "support_alignment": _support_alignment(summary),
+                "source_reality": "materialized_external",
             }),
             "created_at": _now(),
             "inherited_from": None,
-        },
+        }
     ]
 
 
@@ -269,7 +310,7 @@ def _build_fields(summary: MaternalChildLinkedSummary, population_row: dict[str,
         "race_bridge": None,
     }
     axes_rate = {**axes_common, "support_alignment": alignment}
-    warnings = ["fixture_small_n", "slice3b_support_aligned_maternal_child", "race_axes_not_bridged"]
+    warnings = ["state_panel_support_aligned_maternal_child", "race_axes_not_bridged"]
 
     specs_count = [
         ("SINASCLiveBirthsAll", "SINASC Live Births All", summary.births_total, "SINASC", "LiveBirths", "live_birth_count", "identity_count"),

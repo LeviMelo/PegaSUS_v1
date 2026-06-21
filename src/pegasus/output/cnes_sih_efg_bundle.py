@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pegasus.geo.state_panel import clean_datasus_municipalities
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import polars as pl

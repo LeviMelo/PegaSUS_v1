@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+
+from pegasus.geo.state_panel import clean_datasus_municipalities
 import pyarrow as pa
 
 from pegasus.core.enums import FieldState, MaterializationState
@@ -242,15 +244,20 @@ def _base_support(
     denom_fragility: float = 1.0,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    valid_municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix="27")
     out = {
         "support": "municipality_year",
         "years": years,
-        "municipalities": municipalities,
-        "cov_S": float(len(municipalities)),
+        "municipalities": valid_municipalities,
+        "cov_S": float(len(valid_municipalities)),
         "cov_T": float(len(years)),
         "missingness": float(missingness),
         "denom_fragility": float(denom_fragility),
+        "municipality_code_policy": "datasus_cod6_valid_municipality_only",
     }
+    if invalid_municipalities:
+        out["invalid_municipality_cod6"] = invalid_municipalities
+        out["invalid_municipality_cod6_count"] = float(len(invalid_municipalities))
     if n_events is not None:
         out["n_events"] = float(n_events)
         out["n_eff"] = float(n_events)

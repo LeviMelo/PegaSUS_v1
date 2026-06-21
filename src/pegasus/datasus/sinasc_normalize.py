@@ -184,19 +184,35 @@ def decode_anomaly_flag(value: Any) -> tuple[bool | None, str]:
 
 
 def normalize_anomaly_icd(value: Any, anomaly_flag: bool | None) -> tuple[str | None, str, bool]:
+    """Normalize SINASC congenital-anomaly ICD marks without inverting IDANOMAL.
+
+    IDANOMAL is declaration state: 1 = no anomaly, 2 = anomaly present, 9/missing = unknown.
+    CODANOMAL is a diagnostic mark and only Q* ICD-like codes are congenital-anomaly codes by
+    topology. Non-Q diagnostic strings are preserved but do not become anomaly numerators unless
+    the explicit anomaly-present flag is true.
+    """
     text = _clean(value)
+    flag_present = anomaly_flag is True
     if text is None:
-        if anomaly_flag is True:
+        if flag_present:
             return None, "flag_present_code_missing", True
         if anomaly_flag is False:
             return None, "absent", False
         return None, "unknown", False
+
     token = re.split(r"[;|,\s]+", text.upper().strip())[0]
     match = ICD_LIKE.match(token)
     if not match:
-        return None, "invalid", bool(anomaly_flag)
+        if flag_present:
+            return None, "flag_present_invalid_code", True
+        return None, "invalid", False
+
     code = match.group(0)
-    return code, "valid", code.startswith("Q") or bool(anomaly_flag)
+    if code.startswith("Q"):
+        return code, "valid_q_anomaly", True
+    if flag_present:
+        return code, "valid_non_q_with_present_flag", True
+    return code, "valid_non_q_not_anomaly", False
 
 
 def normalize_sinasc_record(row: dict[str, Any], *, source_manifest_hash: str) -> dict[str, Any]:
@@ -281,15 +297,25 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
     rows = [normalize_sinasc_record(row, source_manifest_hash=source_manifest_hash) for row in df.to_dicts()]
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    valid_rows = sum(1 for row in rows if row["record_state"] == "valid")
+    anomaly_rows = sum(1 for row in rows if row["congenital_anomaly_flag"] is True)
+    # Do not apply epidemiological plausibility thresholds to tiny synthetic fixtures.
+    # Real-source SINASC AL 2022 has tens of thousands of births; the threshold below
+    # still catches inverted IDANOMAL/CODANOMAL semantics in production-sized data.
+    if valid_rows >= 1000 and anomaly_rows / float(valid_rows) > 0.20:
+        raise ValueError(
+            "SINASC congenital anomaly numerator exceeds 20% of valid births; "
+            "this usually indicates inverted IDANOMAL/CODANOMAL semantics."
+        )
     pl.DataFrame(rows, infer_schema_length=None).write_parquet(out)
     return {
         "row_count": len(rows),
         "output_path": str(out),
-        "valid_rows": sum(1 for row in rows if row["record_state"] == "valid"),
+        "valid_rows": valid_rows,
         "low_birth_weight_rows": sum(1 for row in rows if row["low_birth_weight_flag"] is True),
         "prematurity_rows": sum(1 for row in rows if row["prematurity_flag"] is True),
         "cesarean_rows": sum(1 for row in rows if row["cesarean_flag"] is True),
         "low_apgar5_rows": sum(1 for row in rows if row["low_apgar5_flag"] is True),
         "insufficient_prenatal_rows": sum(1 for row in rows if row["insufficient_prenatal_flag"] is True),
-        "anomaly_rows": sum(1 for row in rows if row["congenital_anomaly_flag"] is True),
+        "anomaly_rows": anomaly_rows,
     }

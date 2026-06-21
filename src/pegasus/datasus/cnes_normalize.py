@@ -146,7 +146,7 @@ def normalize_cnes_st_events(*, input_path: str | Path, output_path: str | Path,
     rows = [normalize_cnes_st_record(row, source_manifest_hash=source_manifest_hash) for row in _read_table(input_path).to_dicts()]
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(rows).write_parquet(out)
+    pl.DataFrame(rows, infer_schema_length=None).write_parquet(out)
     return {
         "row_count": len(rows),
         "output_path": str(out),

@@ -36,7 +36,7 @@ data/intermediate/**
 data/runs/**
 data/diagnostics/**
 data/actual_smokes/**
-
+data/actual_state_panels/**
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/metadata/.gitkeep

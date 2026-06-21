@@ -52,6 +52,46 @@ suppressPackageStartupMessages({
   library(dplyr)
 })
 
+
+sanitize_utf8_scalar <- function(x) {
+  if (is.na(x)) return(NA_character_)
+  y <- as.character(x)
+  Encoding(y) <- "unknown"
+  z <- iconv(y, from = "", to = "UTF-8", sub = "byte")
+  if (is.na(z)) {
+    z <- iconv(y, from = "latin1", to = "UTF-8", sub = "byte")
+  }
+  if (is.na(z)) {
+    z <- ""
+  }
+  z
+}
+
+sanitize_utf8_dataframe <- function(df) {
+  if (is.null(df) || !is.data.frame(df)) return(df)
+  out <- df
+  sanitized_columns <- character()
+  for (name in names(out)) {
+    col <- out[[name]]
+    if (is.character(col) || is.factor(col) || is.object(col)) {
+      before <- as.character(col)
+      after <- vapply(before, sanitize_utf8_scalar, character(1), USE.NAMES = FALSE)
+      after[is.na(before)] <- NA_character_
+      out[[name]] <- after
+      sanitized_columns <- c(sanitized_columns, name)
+    }
+  }
+  attr(out, "utf8_sanitized_columns") <- unique(sanitized_columns)
+  out
+}
+
+write_utf8_parquet <- function(df, path) {
+  safe <- sanitize_utf8_dataframe(df)
+  arrow::write_parquet(safe, path)
+  safe
+}
+
+
 information_system <- switch(
   system_id,
   "SIM-DO" = "SIM-DO",
@@ -117,6 +157,16 @@ official_dbc_url <- function(system_id, uf, year, month = NULL) {
     ))
   }
 
+  if (system_id == "CNES-ST") {
+    if (is.null(month)) stop("CNES-ST direct fallback requires month.")
+    return(sprintf(
+      "ftp://ftp.datasus.gov.br/dissemin/publicos/CNES/200508_/Dados/ST/ST%s%02d%02d.dbc",
+      uf,
+      year %% 100,
+      month
+    ))
+  }
+
   stop(sprintf("No direct official DBC fallback URL for system: %s", system_id))
 }
 
@@ -150,9 +200,9 @@ direct_fallback_fetch <- function(system_id, uf, year_start, year_end, month_sta
     return(dplyr::bind_rows(decoded))
   }
 
-  if (system_id == "SIH-RD") {
+  if (system_id %in% c("SIH-RD", "CNES-ST")) {
     if (is.null(month_start) || is.null(month_end)) {
-      stop("SIH-RD fallback requires month_start and month_end.")
+      stop(sprintf("%s fallback requires month_start and month_end.", system_id))
     }
 
     decoded <- list()
@@ -202,7 +252,7 @@ raw <- tryCatch(
 )
 
 if (is.null(raw) || !is.data.frame(raw) || nrow(raw) == 0) {
-  if (system_id %in% c("SIM-DO", "SINASC", "SIH-RD")) {
+  if (system_id %in% c("SIM-DO", "SINASC", "SIH-RD", "CNES-ST")) {
     write_heartbeat("fallback", 0, "microdatasus fetch failed or returned empty; trying direct official DBC fallback")
     acquisition_transport <- "direct_official_ftp_dbc_fallback"
 
@@ -245,7 +295,7 @@ saveRDS(raw, raw_path)
 write_heartbeat("processing", nrow(raw), "raw coded acquisition complete; writing canonical raw-coded Parquet")
 
 canonical_raw <- raw
-arrow::write_parquet(canonical_raw, processed_path)
+canonical_raw <- write_utf8_parquet(canonical_raw, processed_path)
 
 microdatasus_processed_path <- file.path(out_dir, "microdatasus_processed.parquet")
 microdatasus_processing_status <- "not_attempted"
@@ -262,7 +312,7 @@ processed_semantic <- tryCatch(
 )
 
 if (!is.null(processed_semantic) && is.data.frame(processed_semantic) && nrow(processed_semantic) > 0) {
-  arrow::write_parquet(processed_semantic, microdatasus_processed_path)
+  processed_semantic <- write_utf8_parquet(processed_semantic, microdatasus_processed_path)
   microdatasus_processing_status <- "success"
   microdatasus_processed_rows <- nrow(processed_semantic)
   microdatasus_processed_columns <- names(processed_semantic)
@@ -301,9 +351,18 @@ manifest <- list(
   read_dbc_version = as.character(utils::packageVersion("read.dbc")),
   acquisition_transport = acquisition_transport,
   fetch_error = fetch_error,
-  processing_contract_version = "datasus_r_bridge_v2_raw_canonical_plus_microdatasus_sidecar",
+  processing_contract_version = "datasus_r_bridge_v3_utf8_sanitized_raw_canonical_plus_microdatasus_sidecar",
   processing_mode = "canonical_raw_codes_with_microdatasus_processed_sidecar",
   canonical_processed_role = "raw_codes_for_python_normalizer",
+  utf8_sanitization = list(
+    applied = TRUE,
+    canonical_raw_columns = as.list(attr(canonical_raw, "utf8_sanitized_columns")),
+    microdatasus_processed_columns = if (!is.null(processed_semantic) && is.data.frame(processed_semantic)) {
+      as.list(attr(processed_semantic, "utf8_sanitized_columns"))
+    } else {
+      list()
+    }
+  ),
   microdatasus_processor = switch(
     system_id,
     "SIM-DO" = "process_sim",

@@ -171,30 +171,46 @@ def decode_race(value: Any) -> tuple[str | None, str]:
 
 
 def decode_anomaly_flag(value: Any) -> tuple[bool | None, str]:
-    code = _digits(value)
-    if code is None:
+    """Decode SINASC IDANOMAL / congenital-anomaly declaration.
+
+    Official SINASC coding:
+    1 = Sim / anomaly present
+    2 = Não / anomaly absent
+    9 = Ignorado
+
+    The decoder also accepts microdatasus-translated labels because some
+    processing paths may expose categorical text rather than raw numeric codes.
+    """
+    raw = _clean(value)
+    if raw is None:
         return None, "missing"
-    if code == "1":
-        return False, "valid_absent"
-    if code == "2":
+
+    norm = raw.strip().casefold()
+    digits = _digits(raw)
+
+    if digits == "1" or norm in {"sim", "s", "yes", "true", "verdadeiro"}:
         return True, "valid_present"
-    if code == "9":
+    if digits == "2" or norm in {"não", "nao", "n", "no", "false", "falso"}:
+        return False, "valid_absent"
+    if digits == "9" or norm in {"ignorado", "ign", "ignored"}:
         return None, "sentinel"
+
     return None, "invalid"
 
 
 def normalize_anomaly_icd(value: Any, anomaly_flag: bool | None) -> tuple[str | None, str, bool]:
-    """Normalize SINASC congenital-anomaly ICD marks without inverting IDANOMAL.
+    """Normalize CODANOMAL without letting absent declarations become numerators.
 
-    IDANOMAL is declaration state: 1 = no anomaly, 2 = anomaly present, 9/missing = unknown.
-    CODANOMAL is a diagnostic mark and only Q* ICD-like codes are congenital-anomaly codes by
-    topology. Non-Q diagnostic strings are preserved but do not become anomaly numerators unless
-    the explicit anomaly-present flag is true.
+    Numerator rule:
+    - explicit IDANOMAL=1 / Sim is anomaly-positive even when CODANOMAL is missing;
+    - valid Q* anomaly ICD is anomaly-positive;
+    - explicit IDANOMAL=2 / Não is anomaly-negative even when CODANOMAL has junk;
+    - unknown declaration plus non-Q or invalid code is not an anomaly numerator.
     """
     text = _clean(value)
-    flag_present = anomaly_flag is True
+
     if text is None:
-        if flag_present:
+        if anomaly_flag is True:
             return None, "flag_present_code_missing", True
         if anomaly_flag is False:
             return None, "absent", False
@@ -203,15 +219,19 @@ def normalize_anomaly_icd(value: Any, anomaly_flag: bool | None) -> tuple[str | 
     token = re.split(r"[;|,\s]+", text.upper().strip())[0]
     match = ICD_LIKE.match(token)
     if not match:
-        if flag_present:
+        if anomaly_flag is True:
             return None, "flag_present_invalid_code", True
+        if anomaly_flag is False:
+            return None, "absent_invalid_code_ignored", False
         return None, "invalid", False
 
     code = match.group(0)
     if code.startswith("Q"):
         return code, "valid_q_anomaly", True
-    if flag_present:
+    if anomaly_flag is True:
         return code, "valid_non_q_with_present_flag", True
+    if anomaly_flag is False:
+        return code, "valid_non_q_absent", False
     return code, "valid_non_q_not_anomaly", False
 
 

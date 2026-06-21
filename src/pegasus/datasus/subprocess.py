@@ -13,6 +13,8 @@ from pegasus.core.config import load_yaml
 from pegasus.core.hashing import sha256_file
 from pegasus.core.schemas import DATASUSRequestManifest
 from pegasus.datasus.cache import DatasusCache
+
+DATASUS_BRIDGE_CONTRACT_VERSION = "datasus_r_bridge_v3_utf8_sanitized_raw_canonical_plus_microdatasus_sidecar"
 from pegasus.datasus.manifests import utc_now
 
 
@@ -145,8 +147,8 @@ def fetch_datasus_chunk(
             cached_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             if cached_payload.get("status") != "success":
                 raise ValueError("cached R manifest is not successful")
-            if cached_payload.get("processing_contract_version") != "datasus_r_bridge_v2_raw_canonical_plus_microdatasus_sidecar":
-                raise ValueError("cached R manifest uses an obsolete DATASUS bridge contract")
+            if cached_payload.get("processing_contract_version") != DATASUS_BRIDGE_CONTRACT_VERSION:
+                raise ValueError("cached R manifest uses an obsolete or non-UTF8-sanitized DATASUS bridge contract")
             return _finish(
                 request,
                 started=started,

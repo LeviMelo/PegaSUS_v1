@@ -128,19 +128,32 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
         "locality_level": "N6",
         "classifications": {"86": ["95251"], "2": ["6794"], "287": ["100362"]},
     }
+    # SIDRA N6 "all" returns all Brazilian municipalities. The AL state-panel
+    # run must preserve only AL cod7 localities (27xxxxx), otherwise support
+    # alignment silently becomes a national panel with 5,570 municipalities.
+    header = response.payload[:1]
+    rows = [
+        row for row in response.payload[1:]
+        if isinstance(row, dict)
+        and str(row.get("D1C") or row.get("locality_id") or "").startswith("27")
+    ]
+    filtered_payload = list(header) + rows
+    municipality_count = len({str(row.get("D1C") or row.get("locality_id")) for row in rows})
+    if municipality_count != 102:
+        raise RuntimeError(f"SIDRA AL N6 filter expected 102 municipalities, got {municipality_count}")
+
     facts = normalize_sidra_payload_to_facts(
-        response.payload,
+        filtered_payload,
         table_id="9606",
-        request_hash=content_hash(request),
-        metadata_hash=content_hash({"table": "9606", "official": True, "state_panel": "AL"}),
-        chunk_request=request,
+        request_hash=content_hash({**request, "post_filter": "AL_N6_cod7_prefix_27"}),
+        metadata_hash=content_hash({"table": "9606", "official": True, "state_panel": "AL", "n6_filter": "cod7_prefix_27"}),
+        chunk_request={**request, "post_filter": "AL_N6_cod7_prefix_27"},
         unit_by_variable={"93": "persons"},
         fetched_at=(response.sidecar or {}).get("fetched_at"),
     )
     path = root / "processed" / "sidra" / "population_2022.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     write_facts_parquet(facts, output_path=path)
-    municipality_count = len({str(row.get("D1C")) for row in response.payload[1:] if isinstance(row, dict) and row.get("D1C")})
     return path, bool(response.from_cache or response.status_code < 400), municipality_count
 
 
@@ -155,6 +168,56 @@ def _normalize_system(system: str, *, request: Any, output_path: Path, source_ha
         run_datasus_normalize_sih(input_path=request.processed_path, output_path=output_path, source_manifest_hash=source_hash)
     else:
         raise ValueError(f"Unsupported DATASUS system: {system}")
+
+
+def _concat_parquet_chunks(*, chunk_paths: list[Path], output_path: Path) -> None:
+    existing = [path for path in chunk_paths if path.exists()]
+    if not existing:
+        raise RuntimeError(f"No normalized chunks exist for concatenation into {output_path}")
+    frames = [pl.read_parquet(path) for path in existing]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if len(frames) == 1:
+        frames[0].write_parquet(output_path)
+    else:
+        pl.concat(frames, how="diagonal_relaxed").write_parquet(output_path)
+
+
+def _normalize_system_requests(
+    system: str,
+    *,
+    requests: list[Any],
+    output_path: Path,
+    source_hash: str,
+) -> None:
+    if not requests:
+        raise RuntimeError(f"No successful DATASUS requests available for {system}")
+
+    if len(requests) == 1:
+        try:
+            _normalize_system(system, request=requests[0], output_path=output_path, source_hash=source_hash)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Normalization failed for {system} input={requests[0].processed_path} "
+                f"output={output_path}: {type(exc).__name__}: {exc}"
+            ) from exc
+        return
+
+    chunk_dir = output_path.parent / "chunks" / system.replace("-", "_")
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    chunk_paths: list[Path] = []
+    for request in requests:
+        month = request.month_start if request.month_start is not None else "NA"
+        chunk_path = chunk_dir / f"{request.year_start}_{int(month):02d}_{request.request_hash[:12]}.parquet"
+        try:
+            _normalize_system(system, request=request, output_path=chunk_path, source_hash=source_hash)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Normalization failed for {system} month={request.month_start} "
+                f"input={request.processed_path} output={chunk_path}: {type(exc).__name__}: {exc}"
+            ) from exc
+        chunk_paths.append(chunk_path)
+
+    _concat_parquet_chunks(chunk_paths=chunk_paths, output_path=output_path)
 
 
 def _table_rows(path: Path) -> list[dict[str, Any]]:
@@ -277,21 +340,29 @@ def run_actual_state_panel(*, intent_name: str = "alagoas_2022_actual_allsource_
         )
 
         batches: dict[str, Any] = {}
-        requests: dict[str, Any] = {}
+        requests_by_system: dict[str, list[Any]] = {}
         for system in DATASUS_SYSTEMS:
             batch = client.fetch(system=system, uf="AL", years="2022")
             batches[system] = batch
             if not batch.ok:
                 payload["classification"] = "source_unavailable"
                 raise RuntimeError(f"DATASUS acquisition failed for {system}: {batch.as_manifest()}")
-            requests[system] = batch.requests[0]
+            requests_by_system[system] = list(batch.requests)
 
-        source_hash = content_hash({system: requests[system].request_hash for system in sorted(requests)})
+        source_hash = content_hash({
+            system: [request.request_hash for request in requests_by_system[system]]
+            for system in sorted(requests_by_system)
+        })
         normalized: dict[str, Path] = {}
         for system in DATASUS_SYSTEMS:
             output_path = data_root / "normalized" / NORMALIZED_NAMES[system]
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            _normalize_system(system, request=requests[system], output_path=output_path, source_hash=source_hash)
+            _normalize_system_requests(
+                system,
+                requests=requests_by_system[system],
+                output_path=output_path,
+                source_hash=source_hash,
+            )
             normalized[system] = output_path
 
         sidra_facts, sidra_ok, municipality_count = _sidra_facts(root=data_root, localities=["all"])

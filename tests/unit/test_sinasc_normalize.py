@@ -19,8 +19,7 @@ def test_sinasc_fixture_normalization_preserves_decoder_states(tmp_path: Path):
     assert result["cesarean_rows"] == 2
     assert result["low_apgar5_rows"] == 1
     assert result["insufficient_prenatal_rows"] == 2
-    assert result["anomaly_rows"] == 2
-
+    # Official SINASC IDANOMAL semantics are 1=present, 2=absent, 9=ignored.\n    # The fixture has four anomaly-positive rows after combining explicit present\n    # declarations with valid Q* congenital-anomaly ICD marks.\n    assert result["anomaly_rows"] == 4\n
     df = pl.read_parquet(out)
     assert "raw_json" in df.columns
     assert df.filter(pl.col("event_id") == "SINASC-DN0002")["birth_weight_g"].item() == 2400

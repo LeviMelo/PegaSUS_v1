@@ -9,7 +9,10 @@
     "run_pirs",
     "run_hsic"
   ],
+  "exclude_systems": [],
   "execution_scale": "state",
+  "force_selectors": [],
+  "geo_mode": "native",
   "geography": {
     "codes": [],
     "level": "municipality",

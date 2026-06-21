@@ -204,9 +204,26 @@ def build_datasus_manifests(
     uf = normalize_uf(uf)
     parsed_years = parse_years(years)
 
-    # Slice 1B implements deterministic UF × year manifests.
-    # SIH-RD and CNES-ST month-level chunking will be introduced when their
-    # source-specific slices require it.
+    # SIM-DO and SINASC are annual UF files for this compiler path.
+    # SIH-RD and CNES-ST are monthly DATASUS systems and must not be requested
+    # as a year-only chunk. Each monthly request is independently cached and
+    # materialized, then downstream workflows concatenate normalized rows.
+    if system in {"SIH-RD", "CNES-ST"}:
+        return [
+            build_datasus_request_manifest(
+                system=system,
+                uf=uf,
+                year_start=year,
+                year_end=year,
+                month_start=month,
+                month_end=month,
+                config=config,
+                data_root=data_root,
+            )
+            for year in parsed_years
+            for month in range(1, 13)
+        ]
+
     return [
         build_datasus_request_manifest(
             system=system,

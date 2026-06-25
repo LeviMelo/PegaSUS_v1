@@ -6,7 +6,7 @@ from typing import Any
 from pegasus.she.stdfm.schema import STDFMProblem
 
 
-ALLOWED_LINKS = {"identity", "log", "proportion_logit"}
+ALLOWED_LINKS = {"identity", "log", "proportion_logit", "clr"}
 
 
 def validate_stdfm_problem(problem: STDFMProblem) -> None:
@@ -45,29 +45,48 @@ def validate_stdfm_problem(problem: STDFMProblem) -> None:
 def transform_observations(problem: STDFMProblem) -> tuple[tuple[float, ...], tuple[str, ...]]:
     validate_stdfm_problem(problem)
     _, _, fields = problem.shape
-    transformed: list[float] = []
+    transformed: list[float] = [0.0] * len(problem.observations)
     warnings: set[str] = set()
     epsilon = 1e-9
-    for index, value in enumerate(problem.observations):
-        field = index % fields
-        link = problem.link_function_by_field[field]
-        if not problem.observed_mask[index]:
-            transformed.append(0.0)
-        elif link == "identity":
-            transformed.append(float(value))
-        elif link == "log":
-            if value < 0:
-                raise ValueError("Log-link ST-DFM observations must be nonnegative.")
-            transformed.append(math.log(value + epsilon))
-        else:
-            denominator = problem.denominator_by_cell[index] if problem.denominator_by_cell else None
-            if denominator is not None and denominator > 1:
-                bounded = (value * (denominator - 1.0) + 0.5) / denominator
+    
+    for i in range(0, len(problem.observations), fields):
+        group_obs = problem.observations[i:i+fields]
+        group_mask = problem.observed_mask[i:i+fields]
+        
+        clr_vals = [0.0] * fields
+        if "clr" in problem.link_function_by_field:
+            positive_obs = [max(v, epsilon) for m, v in zip(group_mask, group_obs) if m]
+            if positive_obs:
+                geom_mean = math.exp(sum(math.log(v) for v in positive_obs) / len(positive_obs))
+                for f_idx in range(fields):
+                    if group_mask[f_idx] and problem.link_function_by_field[f_idx] == "clr":
+                        clr_vals[f_idx] = math.log(max(group_obs[f_idx], epsilon) / geom_mean)
+        
+        for f_idx in range(fields):
+            index = i + f_idx
+            value = group_obs[f_idx]
+            link = problem.link_function_by_field[f_idx]
+            
+            if not group_mask[f_idx]:
+                transformed[index] = 0.0
+            elif link == "clr":
+                transformed[index] = clr_vals[f_idx]
+            elif link == "identity":
+                transformed[index] = float(value)
+            elif link == "log":
+                if value < 0:
+                    raise ValueError("Log-link ST-DFM observations must be nonnegative.")
+                transformed[index] = math.log(value + epsilon)
             else:
-                bounded = (value + epsilon) / (1.0 + 2.0 * epsilon)
-                warnings.add("proportion_denominator_unknown")
-            bounded = min(max(bounded, epsilon), 1.0 - epsilon)
-            transformed.append(math.log(bounded / (1.0 - bounded)))
+                denominator = problem.denominator_by_cell[index] if problem.denominator_by_cell else None
+                if denominator is not None and denominator > 1:
+                    bounded = (value * (denominator - 1.0) + 0.5) / denominator
+                else:
+                    bounded = (value + epsilon) / (1.0 + 2.0 * epsilon)
+                    warnings.add("proportion_denominator_unknown")
+                bounded = min(max(bounded, epsilon), 1.0 - epsilon)
+                transformed[index] = math.log(bounded / (1.0 - bounded))
+                
     return tuple(transformed), tuple(sorted(warnings))
 
 

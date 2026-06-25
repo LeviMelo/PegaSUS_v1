@@ -17,13 +17,15 @@ Non-convergence downgrades state and emits a warning in the solver result.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+from pydantic import BaseModel
 
 from pegasus.she.population.schema import PopulationTensorProblem
 
 
-@dataclass(frozen=True)
-class PopulationLossEvaluation:
+class PopulationLossEvaluation(BaseModel):
     total: float
     terms: dict[str, float]
     population_gradient: tuple[float, ...]
@@ -64,34 +66,23 @@ def validate_population_problem(problem: PopulationTensorProblem) -> None:
         raise ValueError("SIM-informed denominator mode requires death weight lambda_D>0.")
 
 
-def _index(shape: tuple[int, int, int, int, int], s: int, t: int, a: int, x: int, r: int) -> int:
-    _, t_count, a_count, x_count, r_count = shape
-    return ((((s * t_count) + t) * a_count + a) * x_count + x) * r_count + r
-
-
-def _birth_index(shape: tuple[int, int, int, int, int], s: int, t: int, x: int, r: int) -> int:
-    _, t_count, _, x_count, r_count = shape
-    return (((s * t_count) + t) * x_count + x) * r_count + r
-
-
-def _ilr(values: list[float], *, epsilon: float = 1e-12) -> tuple[list[float], list[list[float]]]:
-    count = len(values)
-    if count < 2:
-        return [], []
-    positive = [max(value, epsilon) for value in values]
-    total = sum(positive)
-    logs = [math.log(value / total) for value in positive]
-    basis: list[list[float]] = []
-    coordinates: list[float] = []
+def _ilr_np(x: np.ndarray, epsilon: float = 1e-12) -> tuple[np.ndarray, np.ndarray]:
+    x = np.maximum(x, epsilon)
+    x = x / x.sum(axis=-1, keepdims=True)
+    log_x = np.log(x)
+    count = x.shape[-1]
+    coords = []
+    basis = []
     for j in range(count - 1):
         scale = math.sqrt((j + 1) / (j + 2))
-        row = [0.0] * count
-        for r in range(j + 1):
-            row[r] = scale / (j + 1)
-        row[j + 1] = -scale
+        row = np.zeros(count)
+        row[:j+1] = scale / (j + 1)
+        row[j+1] = -scale
+        coords.append(np.sum(log_x * row, axis=-1))
         basis.append(row)
-        coordinates.append(sum(coefficient * value for coefficient, value in zip(row, logs, strict=True)))
-    return coordinates, basis
+    if not coords:
+        return np.array([]), np.array([])
+    return np.stack(coords, axis=-1), np.stack(basis, axis=0)
 
 
 def evaluate_population_loss(
@@ -103,121 +94,141 @@ def evaluate_population_loss(
     n = problem.n_cells
     if len(population) != n or len(migration) != n:
         raise ValueError("Population and migration vectors must match problem n_cells.")
-    if any(not math.isfinite(value) for value in (*population, *migration)):
+    
+    P = np.array(population, dtype=np.float64)
+    M = np.array(migration, dtype=np.float64)
+    
+    if not np.isfinite(P).all() or not np.isfinite(M).all():
         raise ValueError("Population objective received a non-finite iterate.")
 
-    gp = [0.0] * n
-    gm = [0.0] * n
+    gp = np.zeros(n, dtype=np.float64)
+    gm = np.zeros(n, dtype=np.float64)
     terms = {name: 0.0 for name in ("anchor", "aging", "birth", "death", "migration", "race", "age_smooth")}
     w = problem.weights
     shape = problem.shape
     s_count, t_count, a_count, x_count, r_count = shape
+    
+    P_tens = P.reshape(shape)
+    M_tens = M.reshape(shape)
+    gp_tens = gp.reshape(shape)
+    gm_tens = gm.reshape(shape)
+    
+    # 1. Anchors
+    anchors_np = np.array([a if a is not None else np.nan for a in problem.anchors], dtype=np.float64)
+    anchor_mask = ~np.isnan(anchors_np)
+    if w.anchor > 0 and anchor_mask.any():
+        residual = P[anchor_mask] - anchors_np[anchor_mask]
+        terms["anchor"] = float(w.anchor * np.sum(residual**2))
+        gp[anchor_mask] += 2.0 * w.anchor * residual
 
-    for i, anchor in enumerate(problem.anchors):
-        if anchor is None:
-            continue
-        residual = population[i] - anchor
-        terms["anchor"] += w.anchor * residual * residual
-        gp[i] += 2.0 * w.anchor * residual
+    # 2. Aging
+    if w.aging > 0 and t_count > 1 and a_count > 1:
+        dr = np.array([d if d is not None else np.nan for d in (problem.death_rates or [None]*n)], dtype=np.float64).reshape(shape)
+        dr[np.isnan(dr)] = 0.0
+        survival = 1.0 - dr
+        
+        P_curr = P_tens[:, 1:, 1:, :, :]
+        P_prior = P_tens[:, :-1, :-1, :, :]
+        surv_prior = survival[:, :-1, :-1, :, :]
+        M_eta = M_tens[:, :-1, 1:, :, :]
+        
+        expected = P_prior * surv_prior + M_eta
+        
+        # Terminal age group
+        P_terminal = P_tens[:, :-1, -1:, :, :]
+        surv_terminal = survival[:, :-1, -1:, :, :]
+        expected[:, :, -1:, :, :] += P_terminal * surv_terminal
+        
+        residual = P_curr - expected
+        terms["aging"] = float(w.aging * np.sum(residual**2))
+        
+        grad_res = 2.0 * w.aging * residual
+        gp_tens[:, 1:, 1:, :, :] += grad_res
+        gp_tens[:, :-1, :-1, :, :] -= grad_res * surv_prior
+        gp_tens[:, :-1, -1:, :, :] -= grad_res[:, :, -1:, :, :] * surv_terminal
+        gm_tens[:, :-1, 1:, :, :] -= grad_res
 
-    death_rates = problem.death_rates or (None,) * n
-    for s in range(s_count):
-        for t in range(1, t_count):
-            for x in range(x_count):
-                for r in range(r_count):
-                    for a in range(1, a_count):
-                        current = _index(shape, s, t, a, x, r)
-                        prior_age = a - 1
-                        prior = _index(shape, s, t - 1, prior_age, x, r)
-                        eta = _index(shape, s, t - 1, a, x, r)
-                        survival = 1.0 - (death_rates[prior] or 0.0)
-                        expected = population[prior] * survival + migration[eta]
-                        contributors = [(prior, survival)]
-                        if a == a_count - 1 and a_count > 1:
-                            terminal = _index(shape, s, t - 1, a, x, r)
-                            terminal_survival = 1.0 - (death_rates[terminal] or 0.0)
-                            expected += population[terminal] * terminal_survival
-                            contributors.append((terminal, terminal_survival))
-                        residual = population[current] - expected
-                        terms["aging"] += w.aging * residual * residual
-                        gp[current] += 2.0 * w.aging * residual
-                        for contributor, coefficient in contributors:
-                            gp[contributor] -= 2.0 * w.aging * residual * coefficient
-                        gm[eta] -= 2.0 * w.aging * residual
+    # 3. Births
+    if w.birth > 0 and problem.births is not None and t_count > 1:
+        births = np.array([b if b is not None else np.nan for b in problem.births], dtype=np.float64)
+        births = births.reshape((s_count, t_count, x_count, r_count))
+        P_curr = P_tens[:, 1:, 0, :, :]
+        B_prior = births[:, :-1, :, :]
+        M_eta = M_tens[:, :-1, 0, :, :]
+        
+        mask = ~np.isnan(B_prior)
+        if mask.any():
+            residual = P_curr[mask] - B_prior[mask] - M_eta[mask]
+            terms["birth"] = float(w.birth * np.sum(residual**2))
+            
+            grad_res = 2.0 * w.birth * residual
+            gp_tens[:, 1:, 0, :, :][mask] += grad_res
+            gm_tens[:, :-1, 0, :, :][mask] -= grad_res
 
-                    if problem.births is not None:
-                        current = _index(shape, s, t, 0, x, r)
-                        eta = _index(shape, s, t - 1, 0, x, r)
-                        birth = problem.births[_birth_index(shape, s, t - 1, x, r)]
-                        if birth is not None:
-                            residual = population[current] - birth - migration[eta]
-                            terms["birth"] += w.birth * residual * residual
-                            gp[current] += 2.0 * w.birth * residual
-                            gm[eta] -= 2.0 * w.birth * residual
+    # 4. Deaths
+    if w.death > 0 and problem.sim_deaths is not None:
+        dr = np.array([d if d is not None else np.nan for d in (problem.death_rates or [None]*n)], dtype=np.float64)
+        sim_deaths = np.array([d if d is not None else np.nan for d in problem.sim_deaths], dtype=np.float64)
+        mask = ~np.isnan(sim_deaths) & ~np.isnan(dr)
+        if mask.any():
+            residual = dr[mask] * P[mask] - sim_deaths[mask]
+            terms["death"] = float(w.death * np.sum(residual**2))
+            gp[mask] += 2.0 * w.death * residual * dr[mask]
 
-    if problem.sim_deaths is not None and w.death > 0:
-        for i, deaths in enumerate(problem.sim_deaths):
-            rate = death_rates[i]
-            if deaths is None or rate is None:
-                continue
-            residual = rate * population[i] - deaths
-            terms["death"] += w.death * residual * residual
-            gp[i] += 2.0 * w.death * residual * rate
-
-    if problem.race_composition_prior is not None and w.race > 0:
-        prior = problem.race_composition_prior
-        for s in range(s_count):
-            for t in range(t_count):
-                for a in range(a_count):
-                    for x in range(x_count):
-                        indices = [_index(shape, s, t, a, x, r) for r in range(r_count)]
-                        if any(prior[i] is None for i in indices):
-                            continue
-                        observed = [population[i] for i in indices]
-                        if sum(observed) <= 1e-12:
-                            continue
-                        target = [float(prior[i]) for i in indices]
-                        observed_ilr, basis = _ilr(observed)
-                        target_ilr, _ = _ilr(target)
-                        residuals = [value - target_value for value, target_value in zip(observed_ilr, target_ilr, strict=True)]
-                        terms["race"] += w.race * sum(residual * residual for residual in residuals)
-                        for r, i in enumerate(indices):
-                            derivative = sum(residual * row[r] for residual, row in zip(residuals, basis, strict=True))
-                            gp[i] += 2.0 * w.race * derivative / max(population[i], 1e-12)
-
+    # 5. Race
+    if w.race > 0 and problem.race_composition_prior is not None:
+        prior = np.array([p if p is not None else np.nan for p in problem.race_composition_prior], dtype=np.float64).reshape(shape)
+        mask = ~np.isnan(prior).any(axis=-1)
+        P_masked = P_tens[mask]
+        prior_masked = prior[mask]
+        
+        valid = P_masked.sum(axis=-1) > 1e-12
+        P_valid = P_masked[valid]
+        prior_valid = prior_masked[valid]
+        
+        if len(P_valid) > 0:
+            obs_ilr, basis = _ilr_np(P_valid)
+            tgt_ilr, _ = _ilr_np(prior_valid)
+            residual = obs_ilr - tgt_ilr
+            
+            terms["race"] = float(w.race * np.sum(residual**2))
+            
+            deriv = residual @ basis
+            grad = 2.0 * w.race * deriv / np.maximum(P_valid, 1e-12)
+            
+            flat_mask = np.zeros(gp_tens.shape[:-1], dtype=bool)
+            flat_mask[mask] = valid
+            gp_tens[flat_mask] += grad
+            
+    # 6. Migration Smooth
     if w.migration > 0 and t_count >= 3:
-        for s in range(s_count):
-            for t in range(2, t_count):
-                for a in range(a_count):
-                    for x in range(x_count):
-                        for r in range(r_count):
-                            i2 = _index(shape, s, t, a, x, r)
-                            i1 = _index(shape, s, t - 1, a, x, r)
-                            i0 = _index(shape, s, t - 2, a, x, r)
-                            residual = migration[i2] - 2.0 * migration[i1] + migration[i0]
-                            terms["migration"] += w.migration * residual * residual
-                            gm[i2] += 2.0 * w.migration * residual
-                            gm[i1] -= 4.0 * w.migration * residual
-                            gm[i0] += 2.0 * w.migration * residual
+        i2 = M_tens[:, 2:, :, :, :]
+        i1 = M_tens[:, 1:-1, :, :, :]
+        i0 = M_tens[:, :-2, :, :, :]
+        residual = i2 - 2.0 * i1 + i0
+        terms["migration"] = float(w.migration * np.sum(residual**2))
+        
+        grad_res = 2.0 * w.migration * residual
+        gm_tens[:, 2:, :, :, :] += grad_res
+        gm_tens[:, 1:-1, :, :, :] -= 2.0 * grad_res
+        gm_tens[:, :-2, :, :, :] += grad_res
 
+    # 7. Age Smooth
     if w.age_smooth > 0 and a_count >= 3:
-        for s in range(s_count):
-            for t in range(t_count):
-                for a in range(2, a_count):
-                    for x in range(x_count):
-                        for r in range(r_count):
-                            i2 = _index(shape, s, t, a, x, r)
-                            i1 = _index(shape, s, t, a - 1, x, r)
-                            i0 = _index(shape, s, t, a - 2, x, r)
-                            residual = population[i2] - 2.0 * population[i1] + population[i0]
-                            terms["age_smooth"] += w.age_smooth * residual * residual
-                            gp[i2] += 2.0 * w.age_smooth * residual
-                            gp[i1] -= 4.0 * w.age_smooth * residual
-                            gp[i0] += 2.0 * w.age_smooth * residual
+        i2 = P_tens[:, :, 2:, :, :]
+        i1 = P_tens[:, :, 1:-1, :, :]
+        i0 = P_tens[:, :, :-2, :, :]
+        residual = i2 - 2.0 * i1 + i0
+        terms["age_smooth"] = float(w.age_smooth * np.sum(residual**2))
+        
+        grad_res = 2.0 * w.age_smooth * residual
+        gp_tens[:, :, 2:, :, :] += grad_res
+        gp_tens[:, :, 1:-1, :, :] -= 2.0 * grad_res
+        gp_tens[:, :, :-2, :, :] += grad_res
 
     return PopulationLossEvaluation(
-        total=sum(terms.values()),
+        total=float(sum(terms.values())),
         terms=terms,
-        population_gradient=tuple(gp),
-        migration_gradient=tuple(gm),
+        population_gradient=tuple(float(x) for x in gp),
+        migration_gradient=tuple(float(x) for x in gm),
     )

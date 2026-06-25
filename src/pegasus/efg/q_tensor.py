@@ -60,7 +60,7 @@ def compute_q_state(
     n_events = field.support.get("n_events")
     n_denom = field.support.get("n_denom")
     n_eff = field.support.get("n_eff", n_events)
-    missingness = field.support.get("missingness", 0.0)
+    missingness = field.support.get("missingness", 0.0) + field.support.get("invalid_flag_share", 0.0)
     denom_fragility = field.support.get("denom_fragility", 1.0 if n_denom is None else 0.0)
     zero_inflation = field.support.get("zero_inflation", 0.0)
 

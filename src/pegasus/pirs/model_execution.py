@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from pegasus.core.io_utils import _compact, _hash_payload, _load_json, _safe_id, _write_json
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -45,47 +47,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _compact(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-
-
-def _load_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, indent=2, default=str), encoding="utf-8")
-    return path
-
-
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    return [dict(row) for row in pq.read_table(path).to_pylist()]
-
-
-def _write_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.Table.from_pylist([dict(row) for row in rows]), path)
-    return path
-
-
-def _hash_payload(payload: Mapping[str, Any]) -> str:
-    raw = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-
-def _safe_id(value: Any) -> str:
-    raw = str(value or "field").lower()
-    out = "".join(ch if ch.isalnum() else "_" for ch in raw).strip("_")
-    return out or "field"
 
 
 def _field_specs(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -249,12 +210,23 @@ def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: st
         if np.any(y < 0):
             raise PIRSModelExecutionError("Poisson PIRS response contains negative counts")
         return _fit_poisson_irls(y=y, X=X, offset_vector=offset_vector, term_names=term_names)
+    if family in {"negative_binomial", "gamma", "hurdle", "zero_inflated", "dirichlet"}:
+        raise NotImplementedError(f"MSD 6.2 required model family '{family}' is not yet implemented.")
+    if family not in {"gaussian_identity", "ols"}:
+        # default to OLS if not strict, but maybe add warning? We will just pass through for now, as OLS is the fallback.
+        pass
+
     if offset_column is not None:
         raw_offset = np.asarray([max(float(row[offset_column]), 1e-12) for row in rows], dtype=float)
         x_cols.append(raw_offset)
         X = np.column_stack(x_cols)
         term_names.append(offset_column)
-    beta, *_ = np.linalg.lstsq(X, transformed_y, rcond=None)
+        
+    ridge = np.eye(X.shape[1], dtype=float) * 1e-8
+    try:
+        beta = np.linalg.solve(X.T @ X + ridge, X.T @ transformed_y)
+    except np.linalg.LinAlgError:
+        beta, *_ = np.linalg.lstsq(X, transformed_y, rcond=None)
     linear = X @ beta
     if family == "poisson_count_with_log_offset" and offset_column is not None:
         fitted = np.exp(offset_vector + linear)

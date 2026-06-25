@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pegasus.core.hashing import content_hash
+from pegasus.core.io_utils import _write_json
 
 
 def utc_now() -> str:
@@ -87,10 +88,7 @@ class SidraJsonCache:
         payload_path, sidecar_path = self.paths(namespace=namespace, request_hash=request_hash)
 
         raw_text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        payload_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        _write_json(payload_path, payload)
 
         sidecar = {
             "request_hash": request_hash,
@@ -104,8 +102,5 @@ class SidraJsonCache:
             "sha256": sha256_text(raw_text),
             "payload_path": str(payload_path),
         }
-        sidecar_path.write_text(
-            json.dumps(sidecar, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        _write_json(sidecar_path, sidecar)
         return payload_path, sidecar_path, sidecar

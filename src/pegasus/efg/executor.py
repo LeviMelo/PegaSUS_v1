@@ -306,7 +306,7 @@ def _join_keys(left: pl.DataFrame, right: pl.DataFrame) -> list[str]:
     return [column for column in common if column not in METADATA_COLUMNS and column != VALUE_COLUMN]
 
 
-def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], output_dir: Path) -> tuple[Path, int]:
+def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], output_dir: Path) -> tuple[Path, int, dict[str, Any]]:
     parent_ids = list(field.lineage.parent_ids or [])
     if len(parent_ids) < 2:
         raise ValueError(f"RN field {field.id} requires numerator and denominator parents")
@@ -330,10 +330,13 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
             "RN operator requires at least one intersecting support axis; "
             "cross-join is forbidden to prevent OOM and indicates failed Δ support alignment."
         )
-    joined = n.join(d, on=keys, how="inner", suffix="_denominator")
+    joined = n.join(d, on=keys, how="left", suffix="_denominator")
+
+    missing_denom_count = joined.filter(pl.col("value_denominator").is_null() | pl.col("value_denominator").is_nan()).height
+    denom_fragility = float(missing_denom_count) / float(joined.height) if joined.height > 0 else 1.0
 
     out = joined.with_columns(
-        pl.when(pl.col("value_denominator") > 0)
+        pl.when((pl.col("value_denominator") > 0) & pl.col("value_denominator").is_not_null())
         .then(pl.col("value_numerator") / pl.col("value_denominator"))
         .otherwise(None)
         .cast(pl.Float64)
@@ -348,7 +351,8 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
         pl.lit(field.name).alias("field_name"),
         pl.lit("RN").alias("operator"),
     ])
-    return _write(output_dir / f"{field.id}.parquet", out)
+    path, rows = _write(output_dir / f"{field.id}.parquet", out)
+    return path, rows, {"denom_fragility": denom_fragility}
 
 
 
@@ -637,8 +641,7 @@ def execute_efg_result(
             op = str(field.operator or "")
             try:
                 if op.upper() == "RN" or field.kind == "intensive_density":
-                    path, rows = _compute_rn_ratio(field, fields_by_id, out_dir)
-                    support_update = None
+                    path, rows, support_update = _compute_rn_ratio(field, fields_by_id, out_dir)
                 elif op.startswith("Bridge") or "bridge" in op.lower() or field.kind in {"bridge_module", "bridge_divergence"}:
                     path, rows, support_update = _compute_bridge_tensor(field, fields_by_id, out_dir)
                 else:

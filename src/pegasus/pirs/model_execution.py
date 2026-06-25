@@ -188,8 +188,16 @@ def _fit_poisson_irls(
             break
         beta = next_beta
     fitted = np.exp(np.clip(offset_vector + X @ beta, -30.0, 30.0))
+    # True Poisson Deviance Residuals computation
+    d_i = np.zeros_like(y)
+    for i in range(len(y)):
+        if y[i] > 0:
+            d_i[i] = 2.0 * (y[i] * math.log(y[i] / max(fitted[i], 1e-12)) - (y[i] - fitted[i]))
+        else:
+            d_i[i] = 2.0 * fitted[i]
+    
+    standardized = np.sign(y - fitted) * np.sqrt(np.maximum(d_i, 0.0))
     residual = y - fitted
-    standardized = residual / np.sqrt(np.maximum(fitted, 1e-9))
     return {
         "terms": list(term_names),
         "coefficients": [float(v) for v in beta.tolist()],
@@ -211,8 +219,26 @@ def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: st
     x_cols = [np.ones(len(rows), dtype=float)]
     term_names = ["intercept"]
     for col in covariate_columns:
-        x_cols.append(np.asarray([float(row[col]) for row in rows], dtype=float))
-        term_names.append(col)
+        raw_vals = [row.get(col) for row in rows]
+        valid_vals = [float(v) for v in raw_vals if v is not None and str(v).replace('.', '', 1).isdigit() and str(v).lower() not in {"nan", "inf", "-inf"}]
+        median_val = float(np.median(valid_vals)) if valid_vals else 0.0
+        
+        imputed = []
+        indicators = []
+        for v in raw_vals:
+            if v is None or not str(v).replace('.', '', 1).isdigit() or str(v).lower() in {"nan", "inf", "-inf"}:
+                imputed.append(median_val)
+                indicators.append(1.0)
+            else:
+                imputed.append(float(v))
+                indicators.append(0.0)
+                
+        x_cols.append(np.asarray(imputed, dtype=float))
+        if sum(indicators) > 0:
+            x_cols.append(np.asarray(indicators, dtype=float))
+            term_names.extend([col, f"{col}_is_missing"])
+        else:
+            term_names.append(col)
     X = np.column_stack(x_cols)
     offset_vector = np.zeros(len(rows), dtype=float)
     transformed_y = y.copy()

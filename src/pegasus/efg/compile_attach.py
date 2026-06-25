@@ -253,6 +253,7 @@ def attach_autonomous_efg_to_run(
     result: EFGResult | None = None,
     validate: bool = True,
     bundle: OutputBundleManager | None = None,
+    intent: Any = None,
 ) -> AutonomousEFGAttachResult:
     efg = efg or result
     if efg is None:
@@ -269,6 +270,7 @@ def attach_autonomous_efg_to_run(
         efg,
         output_dir=tables / "efg_tensors",
         require_materialized=True,
+        intent=intent,
     )
     _write_domain_summary_tables(tables, efg)
     execution_path = tables / "efg_execution_manifest.json"

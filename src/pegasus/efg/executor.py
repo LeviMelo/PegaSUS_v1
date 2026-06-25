@@ -244,7 +244,7 @@ def _scalar_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int] | Non
     return None
 
 
-def _count_tensor(field: FieldNode, source: Path, output_dir: Path) -> tuple[Path, int]:
+def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
     df = _support_frame(pl.read_parquet(source))
     keys = _support_keys(df)
     if keys:
@@ -256,10 +256,10 @@ def _count_tensor(field: FieldNode, source: Path, output_dir: Path) -> tuple[Pat
         pl.lit(field.name).alias("field_name"),
         pl.lit(field.operator or "count_measure").alias("operator"),
     ])
-    return _write(output_dir / f"{field.id}.parquet", out)
+    return out
 
 
-def _sum_tensor(field: FieldNode, source: Path, column: str, output_dir: Path) -> tuple[Path, int]:
+def _sum_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
     df = _support_frame(pl.read_parquet(source))
     df = df.with_columns(pl.col(column).cast(pl.Float64, strict=False).fill_null(0.0).alias("__value__"))
     keys = _support_keys(df)
@@ -272,10 +272,10 @@ def _sum_tensor(field: FieldNode, source: Path, column: str, output_dir: Path) -
         pl.lit(field.name).alias("field_name"),
         pl.lit(field.operator or "sigma_C").alias("operator"),
     ])
-    return _write(output_dir / f"{field.id}.parquet", out)
+    return out
 
 
-def _source_field_tensor(field: FieldNode, source: Path, column: str, output_dir: Path) -> tuple[Path, int]:
+def _source_field_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
     df = _support_frame(pl.read_parquet(source))
     keys = _support_keys(df)
     out = df.select([
@@ -286,7 +286,7 @@ def _source_field_tensor(field: FieldNode, source: Path, column: str, output_dir
         pl.lit(field.name).alias("field_name"),
         pl.lit(field.operator or "source_field").alias("operator"),
     ])
-    return _write(output_dir / f"{field.id}.parquet", out)
+    return out
 
 
 def _load_parent_tensor(parent: FieldNode) -> pl.DataFrame:
@@ -315,6 +315,15 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
     n = _load_parent_tensor(numerator).rename({VALUE_COLUMN: "value_numerator"})
     d = _load_parent_tensor(denominator).rename({VALUE_COLUMN: "value_denominator"})
     keys = _join_keys(n, d)
+    
+    # Ecological Fallacy Guard: Aggregate numerator up to denominator's spatial support if mismatched.
+    if "municipality_cod6" in n.columns and "municipality_cod6" not in d.columns:
+        agg_keys = [k for k in keys if k != "municipality_cod6"]
+        if agg_keys:
+            n = n.group_by(agg_keys).agg(pl.col("value_numerator").sum())
+        else:
+            n = pl.DataFrame({"value_numerator": [n["value_numerator"].sum()]})
+        keys = _join_keys(n, d)
 
     if not keys:
         raise RuntimeError(
@@ -565,7 +574,7 @@ def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode]
     return path, rows, None
 
 
-def _execute_non_rn(field: FieldNode, output_dir: Path) -> tuple[Path, int]:
+def _execute_non_rn(field: FieldNode, output_dir: Path, intent: Any = None) -> tuple[Path, int]:
     scalar = _scalar_tensor(field, output_dir)
     if scalar is not None:
         return scalar
@@ -578,13 +587,32 @@ def _execute_non_rn(field: FieldNode, output_dir: Path) -> tuple[Path, int]:
     op = str(field.operator or "").lower()
 
     if op in {"count_measure", "count", "event_count"} or field.unit in {"counts", "count"}:
-        return _count_tensor(field, source, output_dir)
-    if column is not None and field.aggregation in {"additive", "statistical_functional", "weighted_mean"}:
-        return _sum_tensor(field, source, column, output_dir)
-    if column is not None:
-        return _source_field_tensor(field, source, column, output_dir)
+        out = _count_tensor(field, source)
+    elif column is not None and field.aggregation in {"additive", "statistical_functional", "weighted_mean"}:
+        out = _sum_tensor(field, source, column)
+    elif column is not None:
+        out = _source_field_tensor(field, source, column)
+    else:
+        out = _count_tensor(field, source)
 
-    return _count_tensor(field, source, output_dir)
+    geo_mode = "native"
+    if intent is not None:
+        geo_mode = getattr(intent, "geo_mode", "native")
+        if isinstance(intent, dict):
+            geo_mode = intent.get("geo_mode", geo_mode)
+            
+    if geo_mode == "AMC" and "municipality_cod6" in out.columns:
+        from pegasus.geo.amc import contract_to_amc
+        # Look for the AMC crosswalk relative to the data lake root
+        crosswalk_path = Path("data/raw/geo/amc_crosswalk.parquet")
+        if crosswalk_path.exists():
+            try:
+                amc_result = contract_to_amc(out, crosswalk_path=str(crosswalk_path), value_column=VALUE_COLUMN, municipality_column="municipality_cod6")
+                out = amc_result.frame.rename({"amc_id": "municipality_cod6"})
+            except Exception:
+                pass # Fallback to native if crosswalk fails
+
+    return _write(output_dir / f"{field.id}.parquet", out)
 
 
 def execute_efg_result(
@@ -592,6 +620,7 @@ def execute_efg_result(
     *,
     output_dir: str | Path,
     require_materialized: bool = True,
+    intent: Any = None,
 ) -> tuple[EFGResult, EFGExecutionReport]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -613,7 +642,7 @@ def execute_efg_result(
                 elif op.startswith("Bridge") or "bridge" in op.lower() or field.kind in {"bridge_module", "bridge_divergence"}:
                     path, rows, support_update = _compute_bridge_tensor(field, fields_by_id, out_dir)
                 else:
-                    path, rows = _execute_non_rn(field, out_dir)
+                    path, rows = _execute_non_rn(field, out_dir, intent)
                     support_update = None
                 if support_update:
                     field = field.model_copy(update={

@@ -294,6 +294,7 @@ def _run_compile_impl(
             result=autonomous_result,
             validate=False,
             bundle=bundle_manager,
+            intent=intent,
         )
         autonomous_efg_metadata = {
             **autonomous_attach.as_manifest(),

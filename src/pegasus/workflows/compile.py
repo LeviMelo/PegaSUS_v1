@@ -30,6 +30,7 @@ from pegasus.workflows.build_efg import build_sim_compiler_run
 from pegasus.workflows.efg import run_attach_sidra_denominator
 from pegasus.workflows.race_bridge import run_attach_race_bridge
 from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
+from pegasus.workflows.msd_inference import run_msd_inference_pipeline
 
 
 SIDRA_COMPILE_SMOKE_FIXTURE = Path("tests/fixtures/sidra/compile_smoke_sidra_9606_population.json")
@@ -514,15 +515,24 @@ def _run_compile_impl(
     if population_tensor_metadata is None:
         telemetry.set_stage("population_solver", "skipped", 0.0)
     telemetry.set_stage("stdfm", "skipped", 0.0)
-    telemetry.set_stage("pirs_model", "skipped", 0.0)
-    telemetry.set_stage("pirs_hsic", "skipped", 0.0)
-    skipped_reasons = {**compiler_stage_plan.skip_reason_map(),
-        "stdfm": "compile smoke intent does not request latent-factor fitting",
-        "pirs_model": "compile smoke intent does not request parametric inference",
-        "pirs_hsic": "compile smoke intent does not request HSIC inference",
+    skipped_reasons = {
+        **compiler_stage_plan.skip_reason_map(),
+        "stdfm": "compile intent does not request latent-factor fitting",
     }
     if population_tensor_metadata is None:
         skipped_reasons["population_solver"] = "official SIDRA anchor selected by intent"
+
+    pirs_hsic_metadata = run_msd_inference_pipeline(
+        run_dir=run_dir,
+        compiler_stage_plan=compiler_stage_plan,
+        telemetry=telemetry,
+        budget=str(intent.budget),
+    )
+    telemetry.resource_summary["msd_inference_pipeline"] = {
+        "manifest_path": pirs_hsic_metadata.get("manifest_path"),
+        "pirs_model_status": (pirs_hsic_metadata.get("pirs_model") or {}).get("status"),
+        "pirs_hsic_status": (pirs_hsic_metadata.get("pirs_hsic") or {}).get("status"),
+    }
     telemetry.resource_summary["skipped_reasons"] = skipped_reasons
     telemetry.flush()
 
@@ -637,6 +647,8 @@ def _run_compile_impl(
         final_extras["population_tensor"] = population_tensor_metadata
     if autonomous_efg_metadata is not None:
         final_extras["autonomous_efg"] = autonomous_efg_metadata
+    if "pirs_hsic_metadata" in locals() and pirs_hsic_metadata is not None:
+        final_extras["msd_inference_pipeline"] = pirs_hsic_metadata
     write_reproducibility_manifest(
         run_dir=run_dir,
         run_id=run_id,

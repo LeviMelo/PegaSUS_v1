@@ -318,15 +318,38 @@ def _summary_table(summary: MaternalChildSummary) -> list[dict[str, Any]]:
     }]
 
 
+
+def _infer_datasus_uf_prefix_from_sinasc_events(events_path: str | Path) -> str:
+    df = pl.read_parquet(events_path)
+    column = next(
+        (candidate for candidate in ("mun_residence_cod6", "CODMUNRES", "codmunres") if candidate in df.columns),
+        None,
+    )
+    if column is None:
+        raise ValueError("Cannot infer DATASUS UF prefix from SINASC events: residence municipality column is missing.")
+    prefixes = sorted(
+        {
+            str(value)[:2]
+            for value in df[column].drop_nulls().to_list()
+            if len(str(value)) >= 6 and str(value)[:2].isdigit()
+        }
+    )
+    if len(prefixes) != 1:
+        raise ValueError(f"Cannot infer a single DATASUS UF prefix from SINASC events: {prefixes}")
+    return prefixes[0]
+
+
 def write_sinasc_fixture_efg_bundle(
     *,
     sinasc_events_path: str | Path,
     run_dir: str | Path,
     municipality_cod6: str | None = None,
-    datasus_uf_prefix: str = "27",
+    datasus_uf_prefix: str | None = None,
     uf: str | None = None,
 ) -> Path:
     events_path = Path(sinasc_events_path)
+    if datasus_uf_prefix is None:
+        datasus_uf_prefix = _infer_datasus_uf_prefix_from_sinasc_events(events_path)
     run_dir = create_empty_output_bundle(run_dir)
     summary = summarize_maternal_child_events(
         events_path,

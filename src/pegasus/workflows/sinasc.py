@@ -26,11 +26,13 @@ def run_build_sinasc_fixture(
     sinasc_events_path: str | Path,
     run_dir: str | Path,
     municipality_cod6: str | None = None,
+    datasus_uf_prefix: str | None = None,
 ) -> dict[str, Any]:
     output = write_sinasc_fixture_efg_bundle(
         sinasc_events_path=sinasc_events_path,
         run_dir=run_dir,
         municipality_cod6=municipality_cod6,
+        datasus_uf_prefix=datasus_uf_prefix,
     )
     validation = validate_output_bundle(run_dir=str(output))
     return {"run_dir": output, "validation": validation}

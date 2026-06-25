@@ -115,34 +115,16 @@ def _clean_materialized_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def finalize_materialized_external_bundle(run_dir: str | Path) -> None:
-    """Remove fixture-only graph semantics from an external-source bundle."""
-    root = Path(run_dir)
-    v_path = root / "V_fields.parquet"
-    v_rows = read_rows(v_path)
-    removed_ids = {
-        str(row["field_id"])
-        for row in v_rows
-        if row.get("name") in _MATERIALIZED_EXTERNAL_REMOVED_FIELDS
-    }
-    table_names = (
-        "V_fields", "E_DAG", "Q_tensor", "Warnings", "VariableDictionary",
-        "FailedBranches", "QuarantinedFields", "ForcedFields",
-        "ModelAssociations", "ResidualAssociations", "Hypotheses",
-    )
-    for table_name in table_names:
-        path = root / f"{table_name}.parquet"
-        if not path.exists():
-            continue
-        cleaned_rows: list[dict[str, Any]] = []
-        for row in read_rows(path):
-            serialized = _json(row)
-            if any(field_id in serialized for field_id in removed_ids):
-                continue
-            lowered = serialized.lower()
-            if table_name == "Warnings" and ("fixture" in lowered or "synthetic" in lowered):
-                continue
-            cleaned_rows.append(_clean_materialized_row(row))
-        write_rows_like(path, cleaned_rows)
+    """Assert materialized-external source reality.
+
+    This function intentionally no longer rewrites fixture/synthetic wording
+    into official wording. Materialized-external builders must emit clean
+    semantics natively; this boundary only detects contamination.
+    """
+    from pegasus.output.source_reality_guard import assert_no_materialized_external_fixture_semantics
+
+    assert_no_materialized_external_fixture_semantics(root=run_dir)
+
 
 
 def _field_row(field: FieldNode) -> dict[str, Any]:

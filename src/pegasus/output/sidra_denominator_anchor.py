@@ -378,8 +378,8 @@ def _rate_v_field(
             "race_axis_type": None,
             "denominator_source": "SIDRA_9606_total_population_anchor",
         }
-        provenance = ["official", "sidra_denominator_anchor", "sim_fixture_numerator"]
-        warnings = ["fixture_small_n", "official_sidra_denominator_anchor", "dashboard_unsafe_fixture_rate", "support_aligned_by_municipality_crosswalk"]
+        provenance = ["official", "sidra_denominator_anchor", "sim_materialized_numerator"]
+        warnings = ["small_n_observer", "official_sidra_denominator_anchor", "dashboard_unsafe_rate", "support_aligned_by_municipality_crosswalk"]
 
     return {
         "field_id": field_id,
@@ -466,7 +466,7 @@ def _q_rows(*, population_row: dict[str, Any], rate_row: dict[str, Any]) -> list
             "bridge_mode": None,
             "state": "quarantined_descriptive",
             "dashboard_safe": "False",
-            "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor", "support_aligned_by_municipality_crosswalk"]),
+            "warnings": _json(["small_n_observer", "official_sidra_denominator_anchor", "support_aligned_by_municipality_crosswalk"]),
             "computed_at": _now(),
             "q_schema_version": "1.0",
         },
@@ -510,14 +510,14 @@ def _vd_rows(*, vd_columns: list[str], population_row: dict[str, Any], rate_row:
                 "field_id": rate_row["field_id"],
                 "display_name": "SIMCrudeMortalitySIDRAOfficial",
                 "technical_name": "SIMCrudeMortalitySIDRAOfficial",
-                "definition": "SIM fixture all-deaths numerator divided by official SIDRA total resident population denominator after municipality-year support alignment.",
-                "estimand_label": "fixture_crude_mortality_with_official_sidra_denominator",
+                "definition": "SIM all-deaths numerator divided by official SIDRA total resident population denominator after municipality-year support alignment.",
+                "estimand_label": "crude_mortality_with_official_sidra_denominator",
                 "source_systems": _json(["SIM-DO", "SIDRA"]),
                 "carrier": "Deaths/Population",
                 "unit": "rate",
                 "support_description": _json(rate_support),
                 "axis_description": _json(rate_axes),
-                "provenance_description": _json(["official", "sidra_denominator_anchor", "sim_fixture_numerator"]),
+                "provenance_description": _json(["official", "sidra_denominator_anchor", "sim_materialized_numerator"]),
                 "state": "quarantined_descriptive",
                 "dashboard_safe": "False",
                 "interpretation_warning": "Uses official SIDRA denominator and explicit municipality-year support alignment, but SIM numerator remains fixture-derived.",
@@ -662,8 +662,8 @@ def attach_sidra_population_anchor_to_run(
         {
             "field_id": rate_row["field_id"],
             "state": "quarantined_descriptive",
-            "reason": "sim_fixture_numerator",
-            "warnings": _json(["fixture_small_n", "official_sidra_denominator_anchor", "support_aligned_by_municipality_crosswalk"]),
+            "reason": "sim_materialized_numerator",
+            "warnings": _json(["small_n_observer", "official_sidra_denominator_anchor", "support_aligned_by_municipality_crosswalk"]),
         },
     ]
     _append_rows(qf_path, qf_rows, remove_column="field_id", remove_values=new_field_ids)
@@ -671,7 +671,7 @@ def attach_sidra_population_anchor_to_run(
     p = json.loads(p_path.read_text(encoding="utf-8"))
     p.setdefault("provenance", {})
     p["provenance"][population_row["field_id"]] = ["official", "sidra_9606", "bounded_total_category_anchor"]
-    p["provenance"][rate_row["field_id"]] = ["official", "sidra_denominator_anchor", "sim_fixture_numerator"]
+    p["provenance"][rate_row["field_id"]] = ["official", "sidra_denominator_anchor", "sim_materialized_numerator"]
     p_path.write_text(_json(p), encoding="utf-8")
 
     result = validate_output_bundle(run_dir=str(run_dir))

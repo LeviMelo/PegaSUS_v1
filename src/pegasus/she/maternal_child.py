@@ -86,7 +86,12 @@ def _state_not_valid_count(df: pl.DataFrame, column: str, valid_state: str = "va
     return int(df.filter(pl.col(column) != valid_state).height)
 
 
-def summarize_maternal_child_events(events_path: str | Path, *, municipality_cod6: str | None = None) -> MaternalChildSummary:
+def summarize_maternal_child_events(
+    events_path: str | Path,
+    *,
+    municipality_cod6: str | None = None,
+    datasus_uf_prefix: str,
+) -> MaternalChildSummary:
     df = pl.read_parquet(events_path)
     if municipality_cod6 is not None:
         df = df.filter(pl.col("mun_residence_cod6") == str(municipality_cod6))
@@ -98,7 +103,7 @@ def summarize_maternal_child_events(events_path: str | Path, *, municipality_cod
         if "mun_residence_cod6" in valid.columns
         else []
     )
-    municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix="27")
+    municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix=datasus_uf_prefix)
     congenital_anomaly_births = _congenital_anomaly_count(valid)
     _assert_plausible_anomaly_rate(births_total=int(valid.height), congenital_anomaly_births=congenital_anomaly_births)
 

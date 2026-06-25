@@ -54,6 +54,7 @@ def _is_total_9606(row: dict[str, Any]) -> bool:
     return TOTAL_CATEGORY_SET_9606 <= cats
 
 
+
 def load_sidra_population_total_anchor(facts_path: str | Path) -> SidraPopulationAnchor:
     facts_path = Path(facts_path)
     df = pl.from_arrow(read_table(facts_path))

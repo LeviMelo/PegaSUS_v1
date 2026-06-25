@@ -108,7 +108,24 @@ def _r_probe(rscript: str | None) -> dict[str, Any]:
     return result
 
 
+def _parse_sidra_number(value: Any) -> float:
+    text = str(value).strip()
+    if not text:
+        raise ValueError("blank SIDRA numeric value")
+    normalized = text.replace(".", "").replace(",", ".") if "," in text else text
+    return float(normalized)
+
+
 def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]:
+    """Fetch SIDRA 9606 for AL and emit the current compiler's single-anchor artifact.
+
+    Boundary rule:
+    - the generic src population anchor loader still receives one total SIDRA fact;
+    - this AL-specific audit adapter owns the AL N6 post-filter and temporary N6→N3
+      aggregation needed by the present compiler path;
+    - the 102 municipal N6 rows are preserved as a sidecar for auditability, but not
+      passed as the single SIDRA:normalized_facts compile artifact.
+    """
     client = SidraClient()
     response = client.values(
         table_code="9606",
@@ -120,6 +137,7 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
     )
     if response.status_code >= 400 or not isinstance(response.payload, list):
         raise RuntimeError(f"SIDRA population request failed with HTTP {response.status_code}: {response.payload!r}")
+
     request = {
         "table_id": "9606",
         "periods": ["2022"],
@@ -128,32 +146,81 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
         "locality_level": "N6",
         "classifications": {"86": ["95251"], "2": ["6794"], "287": ["100362"]},
     }
-    # SIDRA N6 "all" returns all Brazilian municipalities. The AL state-panel
-    # run must preserve only AL cod7 localities (27xxxxx), otherwise support
-    # alignment silently becomes a national panel with 5,570 municipalities.
+
     header = response.payload[:1]
     rows = [
         row for row in response.payload[1:]
         if isinstance(row, dict)
         and str(row.get("D1C") or row.get("locality_id") or "").startswith("27")
     ]
-    filtered_payload = list(header) + rows
-    municipality_count = len({str(row.get("D1C") or row.get("locality_id")) for row in rows})
+    municipality_ids = sorted({str(row.get("D1C") or row.get("locality_id")) for row in rows})
+    municipality_count = len(municipality_ids)
     if municipality_count != 102:
         raise RuntimeError(f"SIDRA AL N6 filter expected 102 municipalities, got {municipality_count}")
 
-    facts = normalize_sidra_payload_to_facts(
-        filtered_payload,
+    municipal_request = {**request, "post_filter": "AL_N6_cod7_prefix_27"}
+    municipal_payload = list(header) + rows
+    municipal_facts = normalize_sidra_payload_to_facts(
+        municipal_payload,
         table_id="9606",
-        request_hash=content_hash({**request, "post_filter": "AL_N6_cod7_prefix_27"}),
-        metadata_hash=content_hash({"table": "9606", "official": True, "state_panel": "AL", "n6_filter": "cod7_prefix_27"}),
-        chunk_request={**request, "post_filter": "AL_N6_cod7_prefix_27"},
+        request_hash=content_hash(municipal_request),
+        metadata_hash=content_hash({"table": "9606", "official": True, "state_panel": "AL", "support": "N6_municipality_year"}),
+        chunk_request=municipal_request,
         unit_by_variable={"93": "persons"},
         fetched_at=(response.sidecar or {}).get("fetched_at"),
     )
+    municipal_path = root / "processed" / "sidra" / "population_2022_al_n6_municipal_sidecar.parquet"
+    municipal_path.parent.mkdir(parents=True, exist_ok=True)
+    write_facts_parquet(municipal_facts, output_path=municipal_path)
+
+    total = 0.0
+    for row in rows:
+        total += _parse_sidra_number(row.get("V", row.get("value")))
+
+    aggregate_row = dict(rows[0])
+    aggregate_row["NC"] = "3"
+    aggregate_row["NN"] = "Unidade da Federação"
+    aggregate_row["D1C"] = "27"
+    aggregate_row["D1N"] = "Alagoas"
+    aggregate_row["V"] = str(int(total)) if float(total).is_integer() else str(total)
+
+    aggregate_request = {
+        "table_id": "9606",
+        "periods": ["2022"],
+        "variables": ["93"],
+        "localities": ["27"],
+        "locality_level": "N3",
+        "classifications": {"86": ["95251"], "2": ["6794"], "287": ["100362"]},
+        "derived_from": {
+            "source": "SIDRA_9606_N6_AL_municipal_total_rows",
+            "aggregation": "additive_sum",
+            "municipality_count": municipality_count,
+            "municipality_ids": municipality_ids,
+            "sidecar_path": str(municipal_path),
+        },
+    }
+    aggregate_payload = list(header) + [aggregate_row]
+    anchor_facts = normalize_sidra_payload_to_facts(
+        aggregate_payload,
+        table_id="9606",
+        request_hash=content_hash(aggregate_request),
+        metadata_hash=content_hash({"table": "9606", "official": True, "state_panel": "AL", "support": "N3_uf_year", "derived_from": "AL_N6_sum"}),
+        chunk_request=aggregate_request,
+        unit_by_variable={"93": "persons"},
+        fetched_at=(response.sidecar or {}).get("fetched_at"),
+    )
+    numeric_anchor_facts = [
+        fact for fact in anchor_facts
+        if getattr(fact, "value_status", None) == "numeric"
+        and str(getattr(fact, "locality_id", "")) == "27"
+        and str(getattr(fact, "locality_level", "")) == "N3"
+    ]
+    if len(numeric_anchor_facts) != 1:
+        raise RuntimeError(f"Expected exactly one aggregated AL N3 SIDRA anchor fact, got {len(numeric_anchor_facts)}")
+
     path = root / "processed" / "sidra" / "population_2022.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_facts_parquet(facts, output_path=path)
+    write_facts_parquet(anchor_facts, output_path=path)
     return path, bool(response.from_cache or response.status_code < 400), municipality_count
 
 
@@ -391,7 +458,16 @@ def run_actual_state_panel(*, intent_name: str = "alagoas_2022_actual_allsource_
             require_materialized_external=True,
         )
         payload["run_dir"] = str(run_dir)
-        payload["compile_result"] = result
+        payload["compile_result"] = {
+            "status": result.get("status"),
+            "run_id": result.get("run_id"),
+            "run_dir": str(result.get("run_dir")),
+            "compiler_stage_plan": result.get("compiler_stage_plan"),
+            "race_bridge_plan": result.get("race_bridge_plan"),
+            "cnes_sih": result.get("cnes_sih"),
+            "population_tensor": result.get("population_tensor"),
+            "autonomous_efg": result.get("autonomous_efg"),
+        }
 
         validation = validate_output_bundle(run_dir=str(run_dir))
         payload["output_validator_ok"] = bool(validation.ok)

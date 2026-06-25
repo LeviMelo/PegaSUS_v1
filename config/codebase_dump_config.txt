@@ -2,6 +2,7 @@ Project structure for '/c/Users/Galaxy/LEVI/PegaSUS/config':
 ===============================================================================
   compute.yaml
   datasus.yaml
+  intents/alagoas_2022_actual_allsource_state_panel.json
   intents/alagoas_2022_actual_grid_smoke.json
   intents/alagoas_maceio_2022_actual_smoke.json
   intents/alagoas_maternal_child.json
@@ -106,6 +107,74 @@ datasus:
     CNES-ST: "uf_month_or_year_by_source"
 
   optional_ftp_discovery: false
+
+
+
+###############################################################################
+### FILE: intents/alagoas_2022_actual_allsource_state_panel.json
+###############################################################################
+{
+  "budget": "standard",
+  "context_policy": [
+    "actual_source_state_panel",
+    "official_sidra_anchor",
+    "sinasc_maternal_child_compile",
+    "live_birth_denominator_linkage",
+    "include_cnes_sih",
+    "run_pirs",
+    "run_hsic"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "state",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block",
+    "hospitalization",
+    "capacity"
+  ],
+  "mandatory_fields": [
+    "SIMDeathsAll",
+    "SIMCrudeMortalitySIDRAOfficial",
+    "SIDRAPopulationTotalAnchor",
+    "SINASCLiveBirthsAll",
+    "SINASCCrudeBirthRateSIDRAOfficial",
+    "SINASCLowBirthWeightPrevalence",
+    "SINASCPrematurityPrevalence",
+    "SINASCCongenitalAnomalyPrevalence",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths",
+    "CNESFacilitiesAll",
+    "SIHHospitalAdmissionsAll",
+    "SIHInpatientDeaths",
+    "SIHInpatientFatality"
+  ],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0,
+    "CNES-ST": 1.0,
+    "SIH-RD": 1.0
+  },
+  "time": {
+    "start_year": 2022,
+    "end_year": 2022,
+    "start_month": null,
+    "end_month": null
+  }
+}
 
 
 

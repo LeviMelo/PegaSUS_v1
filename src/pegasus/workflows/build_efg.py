@@ -12,11 +12,26 @@ from pegasus.output.sim_efg_bundle import write_sim_compiler_bundle
 from pegasus.she.substrate import SubstrateBundle
 
 
+def _infer_datasus_uf_prefix(events_path: Path) -> str:
+    df = pl.read_parquet(events_path, columns=["mun_residence_cod6"])
+    prefixes = sorted(
+        {
+            str(value)[:2]
+            for value in df["mun_residence_cod6"].drop_nulls().to_list()
+            if len(str(value)) >= 2
+        }
+    )
+    if len(prefixes) != 1:
+        raise ValueError(f"Cannot infer a single DATASUS UF prefix from SIM events: {prefixes}")
+    return prefixes[0]
+
+
 def build_sim_compiler_run(
     *,
     sim_events_path: str | Path,
     run_dir: str | Path,
     municipality_cod6: str | None = None,
+    datasus_uf_prefix: str | None = None,
     source_mode: str = "fixture_only",
 ) -> Path:
     run_dir = Path(run_dir)
@@ -32,9 +47,13 @@ def build_sim_compiler_run(
         filtered.write_parquet(filtered_path)
         source_events_path = filtered_path
 
+    if datasus_uf_prefix is None:
+        datasus_uf_prefix = str(municipality_cod6)[:2] if municipality_cod6 is not None else _infer_datasus_uf_prefix(source_events_path)
+
     return write_sim_compiler_bundle(
         sim_events_path=source_events_path,
         run_dir=run_dir,
+        datasus_uf_prefix=datasus_uf_prefix,
         source_mode=source_mode,
     )
 
@@ -44,6 +63,7 @@ def build_sim_fixture_efg_run(
     sim_events_path: str | Path,
     run_dir: str | Path,
     municipality_cod6: str | None = None,
+    datasus_uf_prefix: str | None = None,
 ) -> Path:
     """Compatibility fixture workflow; canonical compile calls build_sim_compiler_run."""
 
@@ -51,6 +71,7 @@ def build_sim_fixture_efg_run(
         sim_events_path=sim_events_path,
         run_dir=run_dir,
         municipality_cod6=municipality_cod6,
+        datasus_uf_prefix=datasus_uf_prefix,
     )
 
 

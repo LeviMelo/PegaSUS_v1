@@ -9,6 +9,7 @@ import yaml
 from pegasus.core.hashing import sha256_file
 from pegasus.core.schemas import UserIntent
 from pegasus.efg.race_bridge import RaceBridgePrior, load_race_bridge_prior
+from pegasus.geo.uf import uf_from_datasus_cod6
 
 
 class RaceBridgeRegistryError(ValueError):
@@ -137,10 +138,7 @@ def _load_registry_payload(path: Path) -> dict[str, Any]:
 
 
 def _uf_from_datasus_cod6(municipality_cod6: str | None) -> str | None:
-    if not municipality_cod6:
-        return None
-    prefix = str(municipality_cod6)[:2]
-    return {"27": "AL"}.get(prefix)
+    return uf_from_datasus_cod6(municipality_cod6)
 
 
 def _entry_from_payload(raw: dict[str, Any], *, registry_path: Path, repo_root: Path) -> RaceBridgeRegistryEntry:

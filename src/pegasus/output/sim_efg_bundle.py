@@ -79,6 +79,41 @@ def _clean_materialized_value(value: Any, *, key: str = "") -> Any:
     return re.sub("synthetic", "official", cleaned, flags=re.IGNORECASE)
 
 
+def _drop_state_pseudocode_support(value: Any) -> Any:
+    def is_state_pseudocode(item: Any) -> bool:
+        text = str(item)
+        return bool(re.fullmatch(r"\d{2}0000(?:\.0)?", text))
+
+    if isinstance(value, dict):
+        cleaned = {key: _drop_state_pseudocode_support(item) for key, item in value.items()}
+        cleaned.pop("invalid_municipality_cod6", None)
+        cleaned.pop("invalid_municipality_cod6_count", None)
+        cleaned.pop("invalid_municipality_code_policy", None)
+        if cleaned.get("column") == "mun_residence_cod6" and is_state_pseudocode(cleaned.get("numeric_min")):
+            cleaned["numeric_min"] = None
+        return cleaned
+    if isinstance(value, list):
+        return [_drop_state_pseudocode_support(item) for item in value if not is_state_pseudocode(item)]
+    return value
+
+
+def _clean_materialized_row(row: dict[str, Any]) -> dict[str, Any]:
+    cleaned = {
+        key: _clean_materialized_value(value, key=key)
+        for key, value in row.items()
+    }
+    for key in ("support_json", "support_description"):
+        value = cleaned.get(key)
+        if not isinstance(value, str) or not re.search(r"\b\d{2}0000\b", value):
+            continue
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            continue
+        cleaned[key] = _json(_drop_state_pseudocode_support(parsed))
+    return cleaned
+
+
 def finalize_materialized_external_bundle(run_dir: str | Path) -> None:
     """Remove fixture-only graph semantics from an external-source bundle."""
     root = Path(run_dir)
@@ -106,10 +141,7 @@ def finalize_materialized_external_bundle(run_dir: str | Path) -> None:
             lowered = serialized.lower()
             if table_name == "Warnings" and ("fixture" in lowered or "synthetic" in lowered):
                 continue
-            cleaned_rows.append({
-                key: _clean_materialized_value(value, key=key)
-                for key, value in row.items()
-            })
+            cleaned_rows.append(_clean_materialized_row(row))
         write_rows_like(path, cleaned_rows)
 
 
@@ -238,13 +270,14 @@ def _base_support(
     *,
     years: list[int],
     municipalities: list[str],
+    datasus_uf_prefix: str,
     n_events: int | float | None = None,
     n_denom: int | float | None = None,
     missingness: float = 0.0,
     denom_fragility: float = 1.0,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    valid_municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix="27")
+    valid_municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix=datasus_uf_prefix)
     out = {
         "support": "municipality_year",
         "years": years,
@@ -273,6 +306,7 @@ def _make_population_field(
     *,
     years: list[int],
     municipalities: list[str],
+    datasus_uf_prefix: str,
     registry_versions: dict[str, str],
 ) -> FieldNode:
     lineage = make_lineage(
@@ -290,6 +324,7 @@ def _make_population_field(
         support=_base_support(
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             n_denom=10000.0,
             missingness=0.0,
             denom_fragility=0.0,
@@ -410,6 +445,7 @@ def _make_underlying_group_nodes(
     population: FieldNode,
     years: list[int],
     municipalities: list[str],
+    datasus_uf_prefix: str,
     registry_versions: dict[str, str],
     source_hashes: list[str],
     sim_events_path: Path,
@@ -444,6 +480,7 @@ def _make_underlying_group_nodes(
         support=_base_support(
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             n_events=n,
             missingness=0.0,
             denom_fragility=1.0,
@@ -502,6 +539,8 @@ def _make_terminal_chain_observer(
     all_deaths: FieldNode,
     years: list[int],
     municipalities: list[str],
+    datasus_uf_prefix: str,
+    source_mode: str,
     registry_versions: dict[str, str],
     source_hashes: list[str],
     sim_events_path: Path,
@@ -537,6 +576,7 @@ def _make_terminal_chain_observer(
         support=_base_support(
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             n_events=mention_count,
             n_denom=float(df.height),
             missingness=0.0,
@@ -557,11 +597,11 @@ def _make_terminal_chain_observer(
         operator="pi_chain_to_mention/RN",
         provenance=["official"],
         state=FieldState.quarantined_descriptive,
-        warnings=[
-            "fixture_small_n",
-            "terminal_chain_projection_observer_only",
-            "not_cause_specific_mortality",
-        ],
+        warnings=(
+            ["terminal_chain_projection_observer_only", "not_cause_specific_mortality"]
+            if source_mode == "materialized_external"
+            else ["fixture_small_n", "terminal_chain_projection_observer_only", "not_cause_specific_mortality"]
+        ),
         lineage=lineage,
         materialization_state=MaterializationState.metadata_only,
         path=str(sim_events_path),
@@ -575,6 +615,8 @@ def _make_associated_condition_observer(
     all_deaths: FieldNode,
     years: list[int],
     municipalities: list[str],
+    datasus_uf_prefix: str,
+    source_mode: str,
     registry_versions: dict[str, str],
     source_hashes: list[str],
     sim_events_path: Path,
@@ -604,6 +646,7 @@ def _make_associated_condition_observer(
         support=_base_support(
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             n_events=mention_count,
             n_denom=float(df.height),
             missingness=0.0,
@@ -623,11 +666,11 @@ def _make_associated_condition_observer(
         operator="associated_condition_mention/RN",
         provenance=["official"],
         state=FieldState.quarantined_descriptive,
-        warnings=[
-            "fixture_small_n",
-            "associated_condition_observer_only",
-            "not_cause_specific_mortality",
-        ],
+        warnings=(
+            ["associated_condition_observer_only", "not_cause_specific_mortality"]
+            if source_mode == "materialized_external"
+            else ["fixture_small_n", "associated_condition_observer_only", "not_cause_specific_mortality"]
+        ),
         lineage=lineage,
         materialization_state=MaterializationState.metadata_only,
         path=str(sim_events_path),
@@ -635,7 +678,12 @@ def _make_associated_condition_observer(
     )
 
 
-def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNode], list[FailedBranch], list[WarningRecord]]:
+def build_sim_compiler_fields(
+    sim_events_path: str | Path,
+    *,
+    source_mode: str = "fixture_only",
+    datasus_uf_prefix: str,
+) -> tuple[list[FieldNode], list[FailedBranch], list[WarningRecord]]:
     sim_events_path = Path(sim_events_path)
     df = pl.read_parquet(sim_events_path)
 
@@ -673,6 +721,7 @@ def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNo
         support=_base_support(
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             n_events=n_events,
             missingness=0.0,
             denom_fragility=1.0,
@@ -690,32 +739,11 @@ def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNo
         operator="sigma_C",
         provenance=["official"],
         state=FieldState.quarantined_descriptive,
-        warnings=["fixture_small_n"],
+        warnings=["fixture_small_n"] if source_mode == "fixture_only" else [],
         lineage=all_deaths_lineage,
         materialization_state=MaterializationState.metadata_only,
         path=str(sim_events_path),
         dashboard_safe=False,
-    )
-
-    population = _make_population_field(
-        years=years,
-        municipalities=municipalities,
-        registry_versions=registry_versions,
-    )
-
-    crude_mortality = _make_rate_field(
-        name="SIMCrudeMortalityFixture",
-        numerator=all_deaths,
-        denominator=population,
-        support_extra={},
-        axes_extra={
-            "diagnostic_role": "all_deaths",
-            "topology": "none",
-            "race_axis_type": None,
-        },
-        registry_versions=registry_versions,
-        source_hashes=source_hashes,
-        warnings=["fixture_small_n", "crude_mortality_fixture"],
     )
 
     race_lineage = make_lineage(
@@ -733,6 +761,7 @@ def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNo
         support=_base_support(
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             n_events=n_events,
             missingness=missing_race_share,
             denom_fragility=1.0,
@@ -755,11 +784,91 @@ def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNo
         operator="sigma_C",
         provenance=["official"],
         state=FieldState.quarantined_descriptive,
-        warnings=["fixture_small_n", "administrative_race_axis_not_self_declared"],
+        warnings=(
+            ["administrative_race_axis_not_self_declared"]
+            if source_mode == "materialized_external"
+            else ["fixture_small_n", "administrative_race_axis_not_self_declared"]
+        ),
         lineage=race_lineage,
         materialization_state=MaterializationState.metadata_only,
         path=str(sim_events_path),
         dashboard_safe=False,
+    )
+
+    terminal_chain_observer = _make_terminal_chain_observer(
+        df=df,
+        all_deaths=all_deaths,
+        years=years,
+        municipalities=municipalities,
+        datasus_uf_prefix=datasus_uf_prefix,
+        source_mode=source_mode,
+        registry_versions=registry_versions,
+        source_hashes=source_hashes,
+        sim_events_path=sim_events_path,
+    )
+    associated_observer = _make_associated_condition_observer(
+        df=df,
+        all_deaths=all_deaths,
+        years=years,
+        municipalities=municipalities,
+        datasus_uf_prefix=datasus_uf_prefix,
+        source_mode=source_mode,
+        registry_versions=registry_versions,
+        source_hashes=source_hashes,
+        sim_events_path=sim_events_path,
+    )
+
+    if source_mode == "materialized_external":
+        fields = [
+            all_deaths,
+            admin_race_deaths,
+            terminal_chain_observer,
+            associated_observer,
+        ]
+        warnings = [
+            WarningRecord(
+                warning_id="diagnostic_topology_preserved",
+                field_id=None,
+                source="pegasus.output.sim_efg_bundle",
+                severity="info",
+                code="diagnostic_topology_preserved",
+                message="Underlying cause, terminal chain, and associated-condition fields were emitted as distinct topology-specific objects.",
+                inherited_from=[],
+                created_at=_now(),
+            ),
+            WarningRecord(
+                warning_id="race_axis_declaration_incommensurable",
+                field_id=admin_race_deaths.id,
+                source="pegasus.efg.declaration",
+                severity="abort",
+                code="race_axis_declaration_incommensurable",
+                message="Direct race-specific SIM/IBGE division is not emitted in materialized external mode without Bridge_R.",
+                inherited_from=[],
+                created_at=_now(),
+            ),
+        ]
+        return fields, [], warnings
+
+    population = _make_population_field(
+        years=years,
+        municipalities=municipalities,
+        datasus_uf_prefix=datasus_uf_prefix,
+        registry_versions=registry_versions,
+    )
+
+    crude_mortality = _make_rate_field(
+        name="SIMCrudeMortalityFixture",
+        numerator=all_deaths,
+        denominator=population,
+        support_extra={},
+        axes_extra={
+            "diagnostic_role": "all_deaths",
+            "topology": "none",
+            "race_axis_type": None,
+        },
+        registry_versions=registry_versions,
+        source_hashes=source_hashes,
+        warnings=["fixture_small_n", "crude_mortality_fixture"],
     )
 
     pop_lineage = make_lineage(
@@ -777,6 +886,7 @@ def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNo
         support=_base_support(
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             n_denom=10000.0,
             missingness=0.0,
             denom_fragility=0.0,
@@ -808,6 +918,7 @@ def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNo
             population=population,
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             registry_versions=registry_versions,
             source_hashes=source_hashes,
             sim_events_path=sim_events_path,
@@ -820,30 +931,12 @@ def build_sim_compiler_fields(sim_events_path: str | Path) -> tuple[list[FieldNo
             population=population,
             years=years,
             municipalities=municipalities,
+            datasus_uf_prefix=datasus_uf_prefix,
             registry_versions=registry_versions,
             source_hashes=source_hashes,
             sim_events_path=sim_events_path,
             group_kind="block",
         )
-    )
-
-    terminal_chain_observer = _make_terminal_chain_observer(
-        df=df,
-        all_deaths=all_deaths,
-        years=years,
-        municipalities=municipalities,
-        registry_versions=registry_versions,
-        source_hashes=source_hashes,
-        sim_events_path=sim_events_path,
-    )
-    associated_observer = _make_associated_condition_observer(
-        df=df,
-        all_deaths=all_deaths,
-        years=years,
-        municipalities=municipalities,
-        registry_versions=registry_versions,
-        source_hashes=source_hashes,
-        sim_events_path=sim_events_path,
     )
 
     operator = OperatorSpec(name="RN", role="mortality_rate", output_kind="intensive_density")
@@ -922,6 +1015,7 @@ def write_sim_compiler_bundle(
     *,
     sim_events_path: str | Path,
     run_dir: str | Path,
+    datasus_uf_prefix: str,
     source_mode: str = "fixture_only",
 ) -> Path:
     run_dir = Path(run_dir)
@@ -929,7 +1023,11 @@ def write_sim_compiler_bundle(
     (run_dir / "Tables").mkdir(exist_ok=True)
     (run_dir / "Maps").mkdir(exist_ok=True)
 
-    fields, failed_branches, warnings = build_sim_compiler_fields(sim_events_path)
+    fields, failed_branches, warnings = build_sim_compiler_fields(
+        sim_events_path,
+        source_mode=source_mode,
+        datasus_uf_prefix=datasus_uf_prefix,
+    )
     q_states = [
         compute_q_state(field=f, provenance=f.provenance, warnings=warnings)
         for f in fields
@@ -1232,13 +1330,42 @@ def write_sim_compiler_bundle(
     return run_dir
 
 
+def _infer_datasus_uf_prefix_from_events(sim_events_path: str | Path) -> str:
+    df = pl.read_parquet(sim_events_path, columns=["mun_residence_cod6"])
+    prefixes = sorted(
+        {
+            str(value)[:2]
+            for value in df["mun_residence_cod6"].drop_nulls().to_list()
+            if len(str(value)) >= 2
+        }
+    )
+    if len(prefixes) != 1:
+        raise ValueError(f"Cannot infer a single DATASUS UF prefix from SIM events: {prefixes}")
+    return prefixes[0]
+
+
 def build_sim_fixture_fields(sim_events_path: str | Path) -> tuple[list[FieldNode], list[FailedBranch], list[WarningRecord]]:
     """Compatibility fixture API; production compile uses build_sim_compiler_fields."""
 
-    return build_sim_compiler_fields(sim_events_path)
+    return build_sim_compiler_fields(
+        sim_events_path,
+        source_mode="fixture_only",
+        datasus_uf_prefix=_infer_datasus_uf_prefix_from_events(sim_events_path),
+    )
 
 
-def write_sim_fixture_efg_bundle(*, sim_events_path: str | Path, run_dir: str | Path) -> Path:
+def write_sim_fixture_efg_bundle(
+    *,
+    sim_events_path: str | Path,
+    run_dir: str | Path,
+    datasus_uf_prefix: str | None = None,
+) -> Path:
     """Compatibility fixture API; production compile uses write_sim_compiler_bundle."""
 
-    return write_sim_compiler_bundle(sim_events_path=sim_events_path, run_dir=run_dir)
+    if datasus_uf_prefix is None:
+        datasus_uf_prefix = _infer_datasus_uf_prefix_from_events(sim_events_path)
+    return write_sim_compiler_bundle(
+        sim_events_path=sim_events_path,
+        run_dir=run_dir,
+        datasus_uf_prefix=datasus_uf_prefix,
+    )

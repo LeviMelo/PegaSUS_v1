@@ -12,6 +12,7 @@ from pegasus.core.hashing import content_hash, sha256_file
 from pegasus.core.schemas import UserIntent
 from pegasus.efg.compile_attach import attach_autonomous_efg_to_run
 from pegasus.efg.dag import build_efg
+from pegasus.geo.state_panel import GeoScope
 from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
 from pegasus.output.cnes_sih_compile_attach import attach_cnes_sih_compile_fields
 from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
@@ -31,56 +32,7 @@ from pegasus.workflows.race_bridge import run_attach_race_bridge
 from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 
 
-SIDRA_POPULATION_MACEIO_FLAT_PAYLOAD: list[dict[str, str]] = [
-    {
-        "NC": "Nível Territorial (Código)",
-        "NN": "Nível Territorial",
-        "MC": "Unidade de Medida (Código)",
-        "MN": "Unidade de Medida",
-        "V": "Valor",
-        "D1C": "Município (Código)",
-        "D1N": "Município",
-        "D2C": "Ano (Código)",
-        "D2N": "Ano",
-        "D3C": "Variável (Código)",
-        "D3N": "Variável",
-        "D4C": "Sexo (Código)",
-        "D4N": "Sexo",
-        "D5C": "Cor ou raça (Código)",
-        "D5N": "Cor ou raça",
-        "D6C": "Idade (Código)",
-        "D6N": "Idade",
-    },
-    {
-        "NC": "6",
-        "NN": "Município",
-        "MC": "45",
-        "MN": "Pessoas",
-        "V": "957916",
-        "D1C": "2704302",
-        "D1N": "Maceió (AL)",
-        "D2C": "2022",
-        "D2N": "2022",
-        "D3C": "93",
-        "D3N": "População residente",
-        "D4C": "6794",
-        "D4N": "Total",
-        "D5C": "95251",
-        "D5N": "Total",
-        "D6C": "100362",
-        "D6N": "Total",
-    },
-]
-
-
-SIDRA_POPULATION_MACEIO_CHUNK_REQUEST: dict[str, Any] = {
-    "table_id": "9606",
-    "variables": ["93"],
-    "periods": ["2022"],
-    "locality_level": "N6",
-    "localities": ["2704302"],
-    "classifications": {"86": ["95251"], "2": ["6794"], "287": ["100362"]},
-}
+SIDRA_COMPILE_SMOKE_FIXTURE = Path("tests/fixtures/sidra/compile_smoke_sidra_9606_population.json")
 
 
 def utc_stamp() -> str:
@@ -131,12 +83,15 @@ def _write_compile_manifest(*, run_id: str, intent_path: Path, data_root: Path, 
 
 def _write_sidra_smoke_facts(*, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    fixture = json.loads(SIDRA_COMPILE_SMOKE_FIXTURE.read_text(encoding="utf-8"))
+    payload = fixture["payload"]
+    chunk_request = fixture["chunk_request"]
     facts = normalize_sidra_payload_to_facts(
-        SIDRA_POPULATION_MACEIO_FLAT_PAYLOAD,
+        payload,
         table_id="9606",
-        request_hash=content_hash(SIDRA_POPULATION_MACEIO_CHUNK_REQUEST),
-        metadata_hash=content_hash({"metadata": "compile_smoke_sidra_9606_maceio_total_v1"}),
-        chunk_request=SIDRA_POPULATION_MACEIO_CHUNK_REQUEST,
+        request_hash=content_hash(chunk_request),
+        metadata_hash=content_hash(fixture.get("metadata", {})),
+        chunk_request=chunk_request,
         unit_by_variable=None,
         fetched_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -175,6 +130,22 @@ def _intent_municipality_filter_cod6(intent: UserIntent) -> str | None:
     raise ValueError(
         "Compile currently supports execution_scale='smoke' or execution_scale='state'. "
         f"Received {intent.execution_scale!r}."
+    )
+
+
+def _geo_scope_from_intent(intent: UserIntent, *, municipality_cod6: str | None) -> GeoScope:
+    if intent.execution_scale == "state":
+        if len(intent.geography.uf) != 1:
+            raise ValueError("State compile requires exactly one UF in geography.uf.")
+        return GeoScope.from_uf(intent.geography.uf[0], level=intent.geography.level)
+    if municipality_cod6 is None:
+        raise ValueError("Smoke compile requires a resolved DATASUS municipality code.")
+    return GeoScope(
+        level=intent.geography.level,
+        uf=None,
+        datasus_uf_prefix=str(municipality_cod6)[:2],
+        ibge_uf_cod2=str(municipality_cod6)[:2],
+        municipality_cod6_allowlist=frozenset({str(municipality_cod6)}),
     )
 
 
@@ -268,6 +239,7 @@ def _run_compile_impl(
     )
     intent_payload, intent = _load_intent(intent_path)
     municipality_cod6 = _intent_municipality_filter_cod6(intent)
+    geo_scope = _geo_scope_from_intent(intent, municipality_cod6=municipality_cod6)
     if municipality_cod6 is None and str(intent.race_tensor_mode) != "decoupled":
         raise ValueError("State-level compile currently supports race_tensor_mode='decoupled' only.")
     include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
@@ -324,7 +296,7 @@ def _run_compile_impl(
     sinasc_events_path = data_root / "processed" / "datasus" / "SINASC" / "fixture" / "sinasc_events.parquet"
     cnes_events_path = data_root / "processed" / "datasus" / "CNES-ST" / "fixture" / "cnes_events.parquet"
     sih_events_path = data_root / "processed" / "datasus" / "SIH-RD" / "fixture" / "sih_events.parquet"
-    sidra_facts_path = data_root / "processed" / "sidra" / "facts" / "9606" / "compile_smoke_maceio.parquet"
+    sidra_facts_path = data_root / "processed" / "sidra" / "facts" / "9606" / "compile_smoke_population.parquet"
     external_inputs: dict[str, Path] = {}
     if compile_source_reality.compile_source_mode == "materialized_external":
         if source_manifest is None:
@@ -394,6 +366,7 @@ def _run_compile_impl(
             sim_events_path=sim_events_path,
             run_dir=run_dir,
             municipality_cod6=municipality_cod6,
+            datasus_uf_prefix=geo_scope.datasus_uf_prefix,
             source_mode=compile_source_reality.compile_source_mode,
         )
         provenance_mode = (
@@ -480,6 +453,7 @@ def _run_compile_impl(
             sinasc_events_path=sinasc_events_path,
             sim_events_path=sim_events_path,
             municipality_cod6=municipality_cod6,
+            datasus_uf_prefix=geo_scope.datasus_uf_prefix,
         )
         source_hashes["maternal_child_linkage_summary"] = sha256_file(
             Path(run_dir) / "Tables" / "maternal_child_linkage_summary.parquet"
@@ -569,6 +543,13 @@ def _run_compile_impl(
                 "geography_level": intent.geography.level,
                 "ibge_cod7": intent.geography.codes,
                 "datasus_cod6": [municipality_cod6],
+                "geo_scope": {
+                    "level": geo_scope.level,
+                    "uf": geo_scope.uf,
+                    "datasus_uf_prefix": geo_scope.datasus_uf_prefix,
+                    "ibge_uf_cod2": geo_scope.ibge_uf_cod2,
+                    "expected_municipality_count": geo_scope.expected_municipality_count,
+                },
                 "geo_mode": intent.geo_mode,
             },
             "population_mode": intent.population_mode,

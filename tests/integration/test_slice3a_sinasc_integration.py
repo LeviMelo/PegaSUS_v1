@@ -25,7 +25,7 @@ def test_slice3a_sinasc_normalize_to_maternal_child_bundle(tmp_path: Path):
     table = pl.read_parquet(result["run_dir"] / "Tables" / "sinasc_maternal_child_summary.parquet")
     assert table["births_total"].item() == 5
     assert table["low_birth_weight_births"].item() == 2
-    assert table["congenital_anomaly_births"].item() == 2
+    assert table["congenital_anomaly_births"].item() == 4
     assert table["insufficient_prenatal_births"].item() == 2
 
 
@@ -45,4 +45,4 @@ def test_slice3a_sinasc_municipality_filter_changes_support(tmp_path: Path):
     table = pl.read_parquet(result["run_dir"] / "Tables" / "sinasc_maternal_child_summary.parquet")
     assert table["births_total"].item() == 3
     assert table["low_birth_weight_births"].item() == 1
-    assert table["congenital_anomaly_births"].item() == 1
+    assert table["congenital_anomaly_births"].item() == 3

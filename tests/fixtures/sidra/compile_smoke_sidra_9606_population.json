@@ -1,0 +1,69 @@
+{
+  "chunk_request": {
+    "classifications": {
+      "2": [
+        "6794"
+      ],
+      "86": [
+        "95251"
+      ],
+      "287": [
+        "100362"
+      ]
+    },
+    "localities": [
+      "2704302"
+    ],
+    "locality_level": "N6",
+    "periods": [
+      "2022"
+    ],
+    "table_id": "9606",
+    "variables": [
+      "93"
+    ]
+  },
+  "metadata": {
+    "fixture_id": "compile_smoke_sidra_9606_population_v1"
+  },
+  "payload": [
+    {
+      "D1C": "Município (Código)",
+      "D1N": "Município",
+      "D2C": "Ano (Código)",
+      "D2N": "Ano",
+      "D3C": "Variável (Código)",
+      "D3N": "Variável",
+      "D4C": "Sexo (Código)",
+      "D4N": "Sexo",
+      "D5C": "Cor ou raça (Código)",
+      "D5N": "Cor ou raça",
+      "D6C": "Idade (Código)",
+      "D6N": "Idade",
+      "MC": "Unidade de Medida (Código)",
+      "MN": "Unidade de Medida",
+      "NC": "Nível Territorial (Código)",
+      "NN": "Nível Territorial",
+      "V": "Valor"
+    },
+    {
+      "D1C": "2704302",
+      "D1N": "Maceió (AL)",
+      "D2C": "2022",
+      "D2N": "2022",
+      "D3C": "93",
+      "D3N": "População residente",
+      "D4C": "6794",
+      "D4N": "Total",
+      "D5C": "95251",
+      "D5N": "Total",
+      "D6C": "100362",
+      "D6N": "Total",
+      "MC": "45",
+      "MN": "Pessoas",
+      "NC": "6",
+      "NN": "Município",
+      "V": "957916"
+    }
+  ]
+}

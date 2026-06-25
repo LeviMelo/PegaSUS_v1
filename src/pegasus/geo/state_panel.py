@@ -5,8 +5,7 @@ from typing import Any, Iterable
 
 import polars as pl
 
-
-AL_UF_PREFIX = "27"
+from pegasus.geo.uf import resolve_uf_code
 
 
 @dataclass(frozen=True)
@@ -37,6 +36,46 @@ class MunicipalitySupport:
         return payload
 
 
+@dataclass(frozen=True)
+class GeoScope:
+    level: str
+    uf: str | None
+    datasus_uf_prefix: str | None
+    ibge_uf_cod2: str | None
+    expected_municipality_count: int | None = None
+    municipality_cod6_allowlist: frozenset[str] | None = None
+    municipality_cod7_allowlist: frozenset[str] | None = None
+
+    @classmethod
+    def from_uf(
+        cls,
+        uf: str,
+        *,
+        level: str = "municipality",
+        expected_municipality_count: int | None = None,
+        municipality_cod6_allowlist: Iterable[str] | None = None,
+        municipality_cod7_allowlist: Iterable[str] | None = None,
+    ) -> "GeoScope":
+        resolved = resolve_uf_code(uf)
+        return cls(
+            level=level,
+            uf=resolved.sigla,
+            datasus_uf_prefix=resolved.datasus_prefix,
+            ibge_uf_cod2=resolved.ibge_cod2,
+            expected_municipality_count=expected_municipality_count,
+            municipality_cod6_allowlist=(
+                frozenset(str(value) for value in municipality_cod6_allowlist)
+                if municipality_cod6_allowlist is not None
+                else None
+            ),
+            municipality_cod7_allowlist=(
+                frozenset(str(value) for value in municipality_cod7_allowlist)
+                if municipality_cod7_allowlist is not None
+                else None
+            ),
+        )
+
+
 def normalize_cod6(value: Any) -> str | None:
     if value is None:
         return None
@@ -49,7 +88,14 @@ def normalize_cod6(value: Any) -> str | None:
     return digits or None
 
 
-def is_valid_datasus_municipality_cod6(value: Any, *, uf_prefix: str = AL_UF_PREFIX) -> bool:
+def _require_uf_prefix(uf_prefix: str | None) -> str:
+    if uf_prefix is None or str(uf_prefix).strip() == "":
+        raise ValueError("DATASUS municipality validation requires an explicit uf_prefix.")
+    return str(uf_prefix)
+
+
+def is_valid_datasus_municipality_cod6(value: Any, *, uf_prefix: str | None) -> bool:
+    uf_prefix = _require_uf_prefix(uf_prefix)
     code = normalize_cod6(value)
     if code is None:
         return False
@@ -64,7 +110,8 @@ def is_valid_datasus_municipality_cod6(value: Any, *, uf_prefix: str = AL_UF_PRE
     return True
 
 
-def clean_datasus_municipalities(values: Iterable[Any], *, uf_prefix: str = AL_UF_PREFIX) -> tuple[list[str], list[str]]:
+def clean_datasus_municipalities(values: Iterable[Any], *, uf_prefix: str | None) -> tuple[list[str], list[str]]:
+    uf_prefix = _require_uf_prefix(uf_prefix)
     valid: set[str] = set()
     invalid: set[str] = set()
     for value in values:
@@ -78,12 +125,13 @@ def clean_datasus_municipalities(values: Iterable[Any], *, uf_prefix: str = AL_U
     return sorted(valid), sorted(invalid)
 
 
-def municipality_support_from_values(values: Iterable[Any], *, uf_prefix: str = AL_UF_PREFIX) -> MunicipalitySupport:
+def municipality_support_from_values(values: Iterable[Any], *, uf_prefix: str | None) -> MunicipalitySupport:
     valid, invalid = clean_datasus_municipalities(values, uf_prefix=uf_prefix)
-    return MunicipalitySupport(valid, invalid, uf_prefix)
+    return MunicipalitySupport(valid, invalid, _require_uf_prefix(uf_prefix))
 
 
-def filter_valid_cod6_frame(df: pl.DataFrame, column: str, *, uf_prefix: str = AL_UF_PREFIX) -> pl.DataFrame:
+def filter_valid_cod6_frame(df: pl.DataFrame, column: str, *, uf_prefix: str | None) -> pl.DataFrame:
+    uf_prefix = _require_uf_prefix(uf_prefix)
     if column not in df.columns:
         return df
     return df.filter(

@@ -1,0 +1,9 @@
+schema_version: "1.0"
+registry_version: "fixture_smoke_v1"
+entries:
+  - datasus_cod6: "270030"
+    ibge_cod7: "2700300"
+    provenance: "fixture_smoke_support"
+  - datasus_cod6: "270430"
+    ibge_cod7: "2704302"
+    provenance: "fixture_smoke_support"

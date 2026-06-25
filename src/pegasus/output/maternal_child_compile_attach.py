@@ -436,6 +436,7 @@ def attach_maternal_child_compile_fields(
     sinasc_events_path: str | Path,
     sim_events_path: str | Path,
     municipality_cod6: str | None,
+    datasus_uf_prefix: str,
 ) -> Path:
     run_dir = Path(run_dir)
     sinasc_events_path = Path(sinasc_events_path)
@@ -461,6 +462,7 @@ def attach_maternal_child_compile_fields(
         sim_events_path=sim_events_path,
         municipality_cod6=municipality_cod6,
         municipality_ibge_cod7=cod7,
+        datasus_uf_prefix=datasus_uf_prefix,
         denominator_population=population_value,
     )
     if not summary.births_total:

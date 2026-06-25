@@ -236,7 +236,9 @@ def solve_sidra_stdfm_fixture(payload: dict[str, Any]):
             for period in segment["periods"]
         }
     )
-    localities = [str(value) for value in payload.get("localities", ["2704302"])]
+    if "localities" not in payload:
+        raise ValueError("SIDRA ST-DFM fixture payload must declare localities explicitly.")
+    localities = [str(value) for value in payload["localities"]]
     spec = payload["stdfm"]
     field_ids = tuple(str(value) for value in spec["field_ids"])
     raw_observations = spec["observations"]
@@ -300,7 +302,9 @@ def build_sidra_stdfm_fixture_bundle(*, input_path: str | Path, run_dir: str | P
         high_dimensional=True,
     )
     periods = list(stitch.stitched_periods)
-    localities = [str(x) for x in payload.get("localities", ["2704302"])]
+    if "localities" not in payload:
+        raise ValueError("SIDRA ST-DFM fixture payload must declare localities explicitly.")
+    localities = [str(x) for x in payload["localities"]]
     base_support = _support(periods, localities)
     stitch_metadata = stitch.as_manifest()
 

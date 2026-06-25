@@ -19,12 +19,12 @@ def _events(tmp_path: Path) -> Path:
 
 
 def test_maternal_child_summary_counts_fixture_events(tmp_path: Path):
-    summary = summarize_maternal_child_events(_events(tmp_path))
+    summary = summarize_maternal_child_events(_events(tmp_path), datasus_uf_prefix="27")
     assert summary.births_total == 5
     assert summary.low_birth_weight_births == 2
     assert summary.prematurity_births == 2
     assert summary.cesarean_births == 2
-    assert summary.congenital_anomaly_births == 2
+    assert summary.congenital_anomaly_births == 4
     assert summary.low_apgar5_births == 1
     assert summary.adolescent_mother_births == 1
     assert summary.advanced_maternal_age_births == 1

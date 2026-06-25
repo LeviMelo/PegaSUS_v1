@@ -318,10 +318,21 @@ def _summary_table(summary: MaternalChildSummary) -> list[dict[str, Any]]:
     }]
 
 
-def write_sinasc_fixture_efg_bundle(*, sinasc_events_path: str | Path, run_dir: str | Path, municipality_cod6: str | None = None) -> Path:
+def write_sinasc_fixture_efg_bundle(
+    *,
+    sinasc_events_path: str | Path,
+    run_dir: str | Path,
+    municipality_cod6: str | None = None,
+    datasus_uf_prefix: str = "27",
+    uf: str | None = None,
+) -> Path:
     events_path = Path(sinasc_events_path)
     run_dir = create_empty_output_bundle(run_dir)
-    summary = summarize_maternal_child_events(events_path, municipality_cod6=municipality_cod6)
+    summary = summarize_maternal_child_events(
+        events_path,
+        municipality_cod6=municipality_cod6,
+        datasus_uf_prefix=datasus_uf_prefix,
+    )
     fields, q_rows, vd_rows, edges = build_sinasc_fixture_rows(summary, events_path=events_path)
 
     pl.DataFrame(_summary_table(summary)).write_parquet(run_dir / "Tables" / "sinasc_maternal_child_summary.parquet")
@@ -337,7 +348,7 @@ def write_sinasc_fixture_efg_bundle(*, sinasc_events_path: str | Path, run_dir: 
         _empty_like(run_dir / name)
 
     user_intent = {
-        "geography": {"level": "municipality", "codes": summary.municipalities_cod6, "uf": ["AL"]},
+        "geography": {"level": "municipality", "codes": summary.municipalities_cod6, "uf": [uf] if uf else []},
         "time": {"start_year": min(summary.years) if summary.years else 2022, "end_year": max(summary.years) if summary.years else 2022},
         "health_seeds": ["maternal_child"],
         "mandatory_fields": [row["field_id"] for row in fields],

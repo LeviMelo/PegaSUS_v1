@@ -30,7 +30,7 @@ def table_ids_from_seed(path: str | Path) -> list[str]:
     return sorted(ids, key=lambda x: int(x) if x.isdigit() else x)
 
 
-def fixture_sidra_metadata() -> SIDRAMetadata:
+def fixture_sidra_metadata(*, localities: list[str] | None = None) -> SIDRAMetadata:
     table = SIDRATableMetadata(
         table_id="9606",
         name="Population by municipality, period and classification fixture",
@@ -38,7 +38,7 @@ def fixture_sidra_metadata() -> SIDRAMetadata:
         periods=["2022", "2023"],
         locality_levels=["N6"],
         localities_by_level={
-            "N6": ["270030", "270430", "270770"],
+            "N6": [str(value) for value in (localities or ["100001", "100002", "100003"])],
         },
         classifications={
             "2": ["0", "1", "2"],

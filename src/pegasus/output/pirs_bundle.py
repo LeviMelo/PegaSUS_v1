@@ -103,6 +103,8 @@ def pirs_plan_from_fixture(*, input_path: str | Path, budget: str = "standard") 
 def write_pirs_fixture_bundle(*, input_path: str | Path, run_dir: str | Path, budget: str = "standard") -> Path:
     input_path = Path(input_path); run_dir = Path(run_dir)
     payload = json.loads(input_path.read_text(encoding="utf-8"))
+    if "municipalities" not in payload or "years" not in payload:
+        raise ValueError("PIRS fixture payload must declare municipalities and years explicitly.")
     create_empty_output_bundle(run_dir)
     for name in ["ModelAssociations.parquet", "ResidualAssociations.parquet", "Hypotheses.parquet", "QuarantinedFields.parquet", "ForcedFields.parquet"]:
         _write_rows_like(run_dir / name, [])
@@ -120,7 +122,7 @@ def write_pirs_fixture_bundle(*, input_path: str | Path, run_dir: str | Path, bu
     model_output = fit_parametric_model(model_input, output_dir=pirs_table_dir)
     residual = residual_field_from_model(model_output); assert_model_derived_provenance(residual)
     diagnostics = build_pirs_diagnostics(selection=selection, fold_scheme=fold, exposure_offset_source=offset_source)
-    support = {"municipality_cod6": payload.get("municipalities", ["270430"]), "years": payload.get("years", [2022]), "n_rows": design.rows}
+    support = {"municipality_cod6": payload["municipalities"], "years": payload["years"], "n_rows": design.rows}
     axes = {"geo": "DATASUS_COD6", "time": "year", "support_kind": "annual_municipal_panel"}
     outcome_field = _field(field_id=selection.selected_outcome.field_id, name="PIRS fixture all deaths outcome", kind="extensive_measure", carrier=selection.selected_outcome.carrier, unit=selection.selected_outcome.unit, aggregation="sum", role=["model_outcome"], source=["fixture_efg"], support=support, axes=axes, operator="fixture_field_import", provenance=list(selection.selected_outcome.provenance or ("fixture",)), state="verified", dashboard_safe="True", warnings=list(selection.selected_outcome.warnings))
     offset_field = _field(field_id=selection.selected_offset.field_id, name="PIRS fixture population exposure offset", kind="extensive_measure", carrier=selection.selected_offset.carrier, unit=selection.selected_offset.unit, aggregation="sum", role=["model_offset"], source=["SIDRA"], support=support, axes=axes, operator="fixture_field_import", provenance=list(selection.selected_offset.provenance or ("official",)), state="verified", dashboard_safe="True", warnings=list(selection.selected_offset.warnings)) if selection.selected_offset else None

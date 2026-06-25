@@ -276,9 +276,9 @@
       "CODOCUPMAE"
     ]
   },
-  "started_at": "2026-06-21T19:07:30.623240+00:00",
-  "ended_at": "2026-06-21T19:08:12.653081+00:00",
-  "duration_seconds": 42.029841,
+  "started_at": "2026-06-25T01:51:30.539637+00:00",
+  "ended_at": "2026-06-25T01:51:30.544071+00:00",
+  "duration_seconds": 0.004434,
   "rscript_path": "C:\\Program Files\\R\\R-4.4.1\\bin\\Rscript.EXE",
   "r_version": "R version 4.4.1 (2024-06-14 ucrt)",
   "microdatasus_version": "2.5.0",
@@ -287,7 +287,7 @@
   "stderr_path": "C:\\Users\\Galaxy\\LEVI\\PegaSUS\\data\\actual_state_panels\\alagoas_2022_allsource\\sources\\raw\\datasus\\SINASC\\uf=AL\\period=2022_NA__2022_NA\\f3903b6a3178e00cc3978bcdfd6d78537d56c0512f7ec7c0eb580cc3b6779ad8\\stderr.log",
   "heartbeat_path": "C:\\Users\\Galaxy\\LEVI\\PegaSUS\\data\\actual_state_panels\\alagoas_2022_allsource\\sources\\raw\\datasus\\SINASC\\uf=AL\\period=2022_NA__2022_NA\\f3903b6a3178e00cc3978bcdfd6d78537d56c0512f7ec7c0eb580cc3b6779ad8\\heartbeat.json",
   "exit_code": 0,
-  "status": "success",
+  "status": "cached",
   "error_message": null,
   "request_hash": "f3903b6a3178e00cc3978bcdfd6d78537d56c0512f7ec7c0eb580cc3b6779ad8"
 }

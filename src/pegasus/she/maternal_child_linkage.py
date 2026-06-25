@@ -124,6 +124,7 @@ def summarize_maternal_child_linkage(
     sim_events_path: str | Path,
     municipality_cod6: str | None,
     municipality_ibge_cod7: str | None,
+    datasus_uf_prefix: str,
     denominator_population: float | None = None,
 ) -> MaternalChildLinkedSummary:
     sinasc = pl.from_arrow(read_table(sinasc_events_path))
@@ -146,7 +147,7 @@ def summarize_maternal_child_linkage(
     if municipality_cod6 is not None and str(municipality_cod6) not in municipalities and sinasc_valid.height > 0:
         municipalities.append(str(municipality_cod6))
     municipalities = sorted(set(municipalities))
-    municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix="27")
+    municipalities, invalid_municipalities = clean_datasus_municipalities(municipalities, uf_prefix=datasus_uf_prefix)
 
     cod7s = [str(municipality_ibge_cod7)] if municipality_ibge_cod7 else []
 

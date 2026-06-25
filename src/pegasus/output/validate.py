@@ -17,6 +17,13 @@ REQUIRED_VARIABLE_DICTIONARY_COLUMNS = {"field_id", "display_name", "technical_n
 FIELD_REFERENCE_COLUMNS = {"field_id", "parent_field_id", "child_field_id", "outcome_field_id", "covariate_field_id", "residual_field_id"}
 RACE_BRIDGE_POSTERIOR_KEYS = {"numerator_axis_source", "denominator_axis_target", "bridge_operator", "emission_matrix_registry_version", "bridge_mode", "missing_race_share", "race_bridge_cv", "sensitivity_width", "race_axis_warning", "bayesian_ecological_bridge_warning", "prior_hash", "lower_count", "upper_count"}
 RUN_CONFIG_RACE_BRIDGE_KEYS = {"bridge_id", "mode", "prior_hash", "source_axis", "target_axis", "missing_race_share", "sensitivity_width", "race_bridge_cv", "raw_admin_counts_preserved", "missing_category_preserved", "attach_stage"}
+MATERIALIZED_EXTERNAL_FORBIDDEN_TERMS = (
+    "fixture",
+    "synthetic",
+    "placeholder",
+    "explicit_smoke",
+    "smoke_municipality",
+)
 
 
 def _read(path: Path):
@@ -424,6 +431,47 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
     _validate_cnes_sih_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_population_tensor_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_race_bridge_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
+    _validate_materialized_external_semantics(
+        tables={
+            "V_fields": v,
+            "E_DAG": edges,
+            "Q_tensor": q,
+            "Warnings": warnings_table,
+            "VariableDictionary": vd,
+            "FailedBranches": failed_branches,
+        },
+        run_config=run_config,
+        manifest=manifest,
+        errors=errors,
+    )
+
+
+def _validate_materialized_external_semantics(
+    *,
+    tables: dict[str, Any],
+    run_config: dict[str, Any],
+    manifest: dict[str, Any],
+    errors: list[str],
+) -> None:
+    source_mode = (
+        run_config.get("compile_source_mode")
+        or manifest.get("compile_source_mode")
+        or (run_config.get("source_artifact_reality") or {}).get("compile_source_mode")
+        or (manifest.get("source_artifact_reality") or {}).get("compile_source_mode")
+    )
+    if source_mode != "materialized_external":
+        return
+    for table_name, table in tables.items():
+        rows = table.to_pylist()
+        for idx, row in enumerate(rows):
+            text = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str).lower()
+            hits = [term for term in MATERIALIZED_EXTERNAL_FORBIDDEN_TERMS if term in text]
+            if hits:
+                errors.append(
+                    f"materialized_external output contains forbidden source-reality semantics "
+                    f"in {table_name}[{idx}]: {sorted(set(hits))}"
+                )
+                return
 
 
 def validate_output_bundle(*, run_dir: str, schema_registry: OutputSchemaRegistry | None = None) -> OutputValidationResult:

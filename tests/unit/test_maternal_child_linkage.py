@@ -26,6 +26,7 @@ def test_maternal_child_linkage_summarizes_birth_and_death_support(tmp_path: Pat
         sim_events_path=sim,
         municipality_cod6="270430",
         municipality_ibge_cod7="2704302",
+        datasus_uf_prefix="27",
         denominator_population=957916,
     )
     assert summary.births_total == 3

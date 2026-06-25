@@ -152,6 +152,60 @@ def _design_columns(manifest: Mapping[str, Any], rows: Sequence[Mapping[str, Any
     return response, covariates, offset
 
 
+def _fit_poisson_irls(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    offset_vector: np.ndarray,
+    term_names: Sequence[str],
+    max_iter: int = 100,
+    tol: float = 1e-8,
+) -> dict[str, Any]:
+    beta = np.zeros(X.shape[1], dtype=float)
+    if len(y):
+        mean_rate = np.mean(y / np.exp(np.clip(offset_vector, -30.0, 30.0)))
+        beta[0] = math.log(max(float(mean_rate), 1e-12))
+    converged = False
+    iterations = 0
+    ridge = np.eye(X.shape[1], dtype=float) * 1e-8
+    for iteration in range(1, max_iter + 1):
+        eta = np.clip(offset_vector + X @ beta, -30.0, 30.0)
+        mu = np.exp(eta)
+        weights = np.maximum(mu, 1e-9)
+        z = X @ beta + (y - mu) / weights
+        xw = X * np.sqrt(weights)[:, None]
+        zw = z * np.sqrt(weights)
+        lhs = xw.T @ xw + ridge
+        rhs = xw.T @ zw
+        try:
+            next_beta = np.linalg.solve(lhs, rhs)
+        except np.linalg.LinAlgError:
+            next_beta = np.linalg.pinv(lhs) @ rhs
+        iterations = iteration
+        if float(np.max(np.abs(next_beta - beta))) < tol:
+            beta = next_beta
+            converged = True
+            break
+        beta = next_beta
+    fitted = np.exp(np.clip(offset_vector + X @ beta, -30.0, 30.0))
+    residual = y - fitted
+    standardized = residual / np.sqrt(np.maximum(fitted, 1e-9))
+    return {
+        "terms": list(term_names),
+        "coefficients": [float(v) for v in beta.tolist()],
+        "observed": [float(v) for v in y.tolist()],
+        "fitted": [float(v) for v in fitted.tolist()],
+        "residual": [float(v) for v in residual.tolist()],
+        "standardized_residual": [float(v) for v in standardized.tolist()],
+        "rmse": float(math.sqrt(float(np.mean(np.square(residual))))) if len(residual) else None,
+        "mean_residual": float(np.mean(residual)) if len(residual) else None,
+        "sigma": float(np.std(standardized, ddof=1)) if len(standardized) > 1 else 0.0,
+        "solver": "poisson_irls",
+        "irls_iterations": iterations,
+        "irls_converged": converged,
+    }
+
+
 def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: str, covariate_columns: Sequence[str], offset_column: str | None, family: str) -> dict[str, Any]:
     y = np.asarray([float(row[response_column]) for row in rows], dtype=float)
     x_cols = [np.ones(len(rows), dtype=float)]
@@ -162,15 +216,18 @@ def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: st
     X = np.column_stack(x_cols)
     offset_vector = np.zeros(len(rows), dtype=float)
     transformed_y = y.copy()
+    if family == "poisson_count_with_log_offset":
+        if offset_column is not None:
+            raw_offset = np.asarray([max(float(row[offset_column]), 1e-12) for row in rows], dtype=float)
+            offset_vector = np.log(raw_offset)
+        if np.any(y < 0):
+            raise PIRSModelExecutionError("Poisson PIRS response contains negative counts")
+        return _fit_poisson_irls(y=y, X=X, offset_vector=offset_vector, term_names=term_names)
     if offset_column is not None:
         raw_offset = np.asarray([max(float(row[offset_column]), 1e-12) for row in rows], dtype=float)
-        if family == "poisson_count_with_log_offset":
-            offset_vector = np.log(raw_offset)
-            transformed_y = np.log(np.maximum(y, 1e-12)) - offset_vector
-        else:
-            x_cols.append(raw_offset)
-            X = np.column_stack(x_cols)
-            term_names.append(offset_column)
+        x_cols.append(raw_offset)
+        X = np.column_stack(x_cols)
+        term_names.append(offset_column)
     beta, *_ = np.linalg.lstsq(X, transformed_y, rcond=None)
     linear = X @ beta
     if family == "poisson_count_with_log_offset" and offset_column is not None:
@@ -190,6 +247,7 @@ def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: st
         "rmse": float(math.sqrt(float(np.mean(np.square(residual))))) if len(residual) else None,
         "mean_residual": float(np.mean(residual)) if len(residual) else None,
         "sigma": sigma,
+        "solver": "ordinary_least_squares",
     }
 
 
@@ -261,7 +319,16 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
         "coefficients_path": str(coefficients_path),
         "fitted_values_path": str(fitted_values_path),
         "residual_values_path": str(residual_values_path),
-        "diagnostics": {"rmse": fit["rmse"], "mean_residual": fit["mean_residual"], "sigma": fit["sigma"], "residual_mode": manifest.get("residual_mode"), "fold_scheme": manifest.get("fold_scheme")},
+        "diagnostics": {
+            "rmse": fit["rmse"],
+            "mean_residual": fit["mean_residual"],
+            "sigma": fit["sigma"],
+            "residual_mode": manifest.get("residual_mode"),
+            "fold_scheme": manifest.get("fold_scheme"),
+            "solver": fit.get("solver"),
+            "irls_iterations": fit.get("irls_iterations"),
+            "irls_converged": fit.get("irls_converged"),
+        },
         "blocking_reasons": [],
         "mutated_output_bundle": False,
     }

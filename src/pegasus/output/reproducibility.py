@@ -28,6 +28,7 @@ COMPILE_TELEMETRY_STAGES = (
     "pirs_model",
     "pirs_hsic",
     "output_serialization",
+    "output_bundle_flush",
     "output_validation",
 )
 

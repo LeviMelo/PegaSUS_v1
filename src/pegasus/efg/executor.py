@@ -16,6 +16,12 @@ import polars as pl
 from pegasus.core.enums import MaterializationState
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.dag import EFGResult
+from pegasus.efg.race_bridge import (
+    ADMIN_RACE_LABELS,
+    RaceBridgeCounts,
+    fixedc_dynamic_weight_bridge,
+    load_race_bridge_prior,
+)
 
 
 VALUE_COLUMN = "value"
@@ -216,12 +222,24 @@ def _scalar_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int] | Non
                 value = float(support[key])
             except Exception:
                 continue
-            df = pl.DataFrame({
+            payload: dict[str, list[Any]] = {
                 "field_id": [field.id],
                 "field_name": [field.name],
                 "operator": [field.operator or "scalar_support"],
                 VALUE_COLUMN: [value],
-            })
+            }
+            year_value = support.get("year") or support.get("period_year")
+            if year_value is None and support.get("period") is not None:
+                try:
+                    year_value = int(str(support["period"])[:4])
+                except Exception:
+                    year_value = None
+            if year_value is not None:
+                payload["year"] = [int(year_value)]
+            municipality = support.get("municipality_cod6")
+            if municipality is not None:
+                payload["municipality_cod6"] = [str(municipality)]
+            df = pl.DataFrame(payload)
             return _write(output_dir / f"{field.id}.parquet", df)
     return None
 
@@ -345,7 +363,154 @@ def _is_bridge_divergence(field: FieldNode) -> bool:
     )
 
 
-def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode], output_dir: Path) -> tuple[Path, int]:
+def _is_fixedc_race_bridge(field: FieldNode) -> bool:
+    support = _as_dict(field.support)
+    params = _as_dict(field.lineage.operator_params)
+    return (
+        field.operator == "Bridge_R_fixedC_dynamic_weight"
+        or support.get("bridge_operator") == "Bridge_R_fixedC_dynamic_weight"
+        or params.get("bridge_operator") == "Bridge_R_fixedC_dynamic_weight"
+    )
+
+
+def _admin_code(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "nan"}:
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits or None
+
+
+def _race_column(field: FieldNode, parent: FieldNode, df: pl.DataFrame) -> str:
+    support = _as_dict(parent.support)
+    candidates = [
+        support.get("column"),
+        support.get("source_column"),
+        "race_color_admin",
+        "RACACOR",
+        "RACA_COR",
+    ]
+    for candidate in candidates:
+        if candidate is not None and str(candidate) in df.columns:
+            return str(candidate)
+    raise ValueError(f"Bridge_R field {field.id} could not locate an administrative race column")
+
+
+def _fixedc_support_groups(df: pl.DataFrame) -> list[tuple[dict[str, Any], pl.DataFrame]]:
+    keys = _support_keys(df)
+    if not keys:
+        return [({}, df)]
+    rows = df.select(keys).unique().sort(keys).iter_rows(named=True)
+    groups: list[tuple[dict[str, Any], pl.DataFrame]] = []
+    for values in rows:
+        sub = df
+        for key, value in values.items():
+            if value is None:
+                sub = sub.filter(pl.col(key).is_null())
+            else:
+                sub = sub.filter(pl.col(key) == value)
+        groups.append((dict(values), sub))
+    return groups
+
+
+def _compute_fixedc_race_bridge_tensor(
+    field: FieldNode,
+    parent: FieldNode,
+    output_dir: Path,
+) -> tuple[Path, int, dict[str, Any]]:
+    params = {**_as_dict(field.support), **_as_dict(field.lineage.operator_params)}
+    prior_path = params.get("prior_path") or params.get("bridge_prior_path")
+    if not prior_path:
+        raise ValueError(f"Bridge_R field {field.id} missing prior_path")
+    prior = load_race_bridge_prior(prior_path)
+
+    source = _source_path(parent)
+    if source is None:
+        raise ValueError(f"Bridge_R parent {parent.id} has no source artifact path")
+    df = _support_frame(pl.read_parquet(source))
+    race_column = _race_column(field, parent, df)
+    state_col = "race_missingness_state" if "race_missingness_state" in df.columns else None
+
+    rows: list[dict[str, Any]] = []
+    summary_missing = 0
+    summary_total = 0
+    summary_cv: list[float] = []
+    summary_width: list[float] = []
+    for support_values, group in _fixedc_support_groups(df):
+        raw_counts = {code: 0 for code in ADMIN_RACE_LABELS}
+        missing = 0
+        race_values = group[race_column].to_list()
+        states = group[state_col].to_list() if state_col is not None else [None] * len(race_values)
+        for code_value, state in zip(race_values, states, strict=False):
+            code = _admin_code(code_value)
+            if code in raw_counts and (state in (None, "valid_admin_race")):
+                raw_counts[code] += 1
+            else:
+                missing += 1
+        counts = RaceBridgeCounts(
+            raw_admin_counts=raw_counts,
+            missing_count=missing,
+            total_count=int(group.height),
+            support={**support_values, "n_events": int(group.height)},
+        )
+        posterior = fixedc_dynamic_weight_bridge(counts, prior)
+        metadata = posterior.metadata()
+        summary_missing += missing
+        summary_total += int(group.height)
+        summary_cv.append(float(posterior.race_bridge_cv))
+        summary_width.append(float(posterior.sensitivity_width))
+        for target in prior.target_categories:
+            rows.append({
+                **support_values,
+                "target_race_category": target,
+                VALUE_COLUMN: float(posterior.posterior_counts[target]),
+                "lower_count": float(posterior.lower_counts[target]),
+                "upper_count": float(posterior.upper_counts[target]),
+                "raw_admin_counts_json": json.dumps(raw_counts, sort_keys=True),
+                "missing_count": int(missing),
+                "missing_race_share": float(posterior.missing_share),
+                "race_bridge_cv": float(posterior.race_bridge_cv),
+                "sensitivity_width": float(posterior.sensitivity_width),
+                "prior_hash": prior.prior_hash,
+                "bridge_mode": prior.mode,
+                "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+                "field_id": field.id,
+                "field_name": field.name,
+                "operator": "Bridge_R_fixedC_dynamic_weight",
+                "bridge_metadata_json": json.dumps(metadata, sort_keys=True, default=str),
+            })
+
+    out = pl.DataFrame(rows) if rows else pl.DataFrame({
+        "field_id": [field.id],
+        "field_name": [field.name],
+        "operator": ["Bridge_R_fixedC_dynamic_weight"],
+        VALUE_COLUMN: [0.0],
+        "lower_count": [0.0],
+        "upper_count": [0.0],
+        "missing_race_share": [0.0],
+        "race_bridge_cv": [0.0],
+        "sensitivity_width": [prior.sensitivity_width],
+        "prior_hash": [prior.prior_hash],
+        "bridge_mode": [prior.mode],
+        "bridge_operator": ["Bridge_R_fixedC_dynamic_weight"],
+    })
+    path, row_count = _write(output_dir / f"{field.id}.parquet", out)
+    metadata = {
+        "missing_race_share": (summary_missing / float(summary_total)) if summary_total else 0.0,
+        "race_bridge_cv": max(summary_cv) if summary_cv else 0.0,
+        "sensitivity_width": max(summary_width) if summary_width else prior.sensitivity_width,
+        "prior_hash": prior.prior_hash,
+        "bridge_mode": prior.mode,
+        "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+        "raw_admin_counts_preserved": True,
+        "missing_category_preserved": True,
+    }
+    return path, row_count, metadata
+
+
+def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode], output_dir: Path) -> tuple[Path, int, dict[str, Any] | None]:
     parent_ids = list(field.lineage.parent_ids or [])
     if not parent_ids:
         out = pl.DataFrame({
@@ -354,7 +519,11 @@ def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode]
             "operator": [field.operator or "bridge"],
             VALUE_COLUMN: [None],
         }).cast({VALUE_COLUMN: pl.Float64})
-        return _write(output_dir / f"{field.id}.parquet", out)
+        path, rows = _write(output_dir / f"{field.id}.parquet", out)
+        return path, rows, None
+
+    if _is_fixedc_race_bridge(field):
+        return _compute_fixedc_race_bridge_tensor(field, parents_by_id[parent_ids[0]], output_dir)
 
     if _is_bridge_divergence(field) and len(parent_ids) == 2:
         p0 = _load_parent_tensor(parents_by_id[parent_ids[0]])
@@ -379,9 +548,12 @@ def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode]
             pl.lit(field.name).alias("field_name"),
             pl.lit(field.operator or "divergence_log_ratio").alias("operator"),
         ])
-        return _write(output_dir / f"{field.id}.parquet", out)
+        path, rows = _write(output_dir / f"{field.id}.parquet", out)
+        return path, rows, None
 
     # Fallback for Bridge_R / unary bridges
+    if str(field.operator or "").startswith("Bridge_R"):
+        raise ValueError(f"Bridge_R operator {field.operator!r} has no physical executor")
     parent = parents_by_id[parent_ids[0]]
     df = _load_parent_tensor(parent)
     out = df.with_columns([
@@ -389,7 +561,8 @@ def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode]
         pl.lit(field.name).alias("field_name"),
         pl.lit(field.operator or "Bridge_R").alias("operator"),
     ])
-    return _write(output_dir / f"{field.id}.parquet", out)
+    path, rows = _write(output_dir / f"{field.id}.parquet", out)
+    return path, rows, None
 
 
 def _execute_non_rn(field: FieldNode, output_dir: Path) -> tuple[Path, int]:
@@ -436,10 +609,17 @@ def execute_efg_result(
             try:
                 if op.upper() == "RN" or field.kind == "intensive_density":
                     path, rows = _compute_rn_ratio(field, fields_by_id, out_dir)
+                    support_update = None
                 elif op.startswith("Bridge") or "bridge" in op.lower() or field.kind in {"bridge_module", "bridge_divergence"}:
-                    path, rows = _compute_bridge_tensor(field, fields_by_id, out_dir)
+                    path, rows, support_update = _compute_bridge_tensor(field, fields_by_id, out_dir)
                 else:
                     path, rows = _execute_non_rn(field, out_dir)
+                    support_update = None
+                if support_update:
+                    field = field.model_copy(update={
+                        "support": {**dict(field.support), **support_update},
+                        "axes": {**dict(field.axes), **support_update},
+                    })
                 new_field = _materialized(field, path)
                 fields_by_id[field_id] = new_field
                 executed.append(ExecutedField(new_field, "success", str(path), rows))
@@ -478,6 +658,9 @@ def execute_efg_result(
         registry_hashes=efg.registry_hashes,
         legality_summary=efg.legality_summary,
         operator_mode=efg.operator_mode,
+        core_seed_summary=efg.core_seed_summary,
+        bridge_plan_summary=efg.bridge_plan_summary,
+        domain_summaries=efg.domain_summaries,
     )
     report = EFGExecutionReport(
         status="success" if not blocked else "blocked",

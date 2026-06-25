@@ -17,6 +17,7 @@ from pegasus.core.hashing import content_hash
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.lineage import make_lineage, lineage_hash
 from pegasus.efg.node import make_field_node
+from pegasus.she.population.sidra_anchor import load_sidra_population_total_anchor
 from pegasus.she.substrate import SubstrateBundle, SubstrateFieldCandidate, SubstrateFieldExclusion
 
 
@@ -255,6 +256,96 @@ def _exclusion_manifest(exclusion: SubstrateFieldExclusion) -> dict[str, Any]:
     return payload
 
 
+def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterializedField | None:
+    sidra_artifact = next(
+        (
+            artifact
+            for artifact in bundle.source_artifacts
+            if artifact.source_system == "SIDRA" and artifact.artifact_role == "normalized_facts"
+        ),
+        None,
+    )
+    if sidra_artifact is None:
+        return None
+
+    anchor = load_sidra_population_total_anchor(sidra_artifact.path)
+    try:
+        period_year = int(str(anchor.period)[:4])
+    except Exception:
+        period_year = None
+    municipality_cod6 = (
+        str(anchor.locality_id)
+        if anchor.locality_level.upper() in {"N6", "MUNICIPIO", "MUNICIPALITY"} and len(str(anchor.locality_id)) == 6
+        else None
+    )
+    support = {
+        "support_kind": "sidra_population_total_anchor",
+        "source_system": "SIDRA",
+        "artifact_path": str(sidra_artifact.path),
+        "sidra_facts_path": str(sidra_artifact.path),
+        "table_id": "9606",
+        "variable_id": "93",
+        "classification_tuple": list(anchor.classification_tuple),
+        "category_tuple": list(anchor.category_tuple),
+        "period": anchor.period,
+        "year": period_year,
+        "locality_level": anchor.locality_level,
+        "locality_id": anchor.locality_id,
+        "municipality_cod6": municipality_cod6,
+        "value": anchor.value,
+        "n_denom": anchor.value,
+        "unit_raw": anchor.unit,
+        "request_hash": anchor.request_hash,
+        "metadata_hash": anchor.metadata_hash,
+        "population_tensor_diagnostics": "official_sidra_9606_total_anchor",
+        "PopulationTensorMode": "official_sidra_anchor",
+        "SolverBackend": "official_sidra_anchor",
+        "SolverID": "sidra_9606_total_anchor",
+        "SparseJacobian": False,
+        "DenominatorFeedbackWarning": None,
+    }
+    axes = {
+        "geography_axis": anchor.locality_level,
+        "time_axis": "period",
+        "population_strata_axis": "total",
+        "population_tensor_mode": "official_sidra_anchor",
+    }
+    lineage = make_lineage(
+        parent_ids=[],
+        operator_type="sidra_population_total_anchor",
+        operator_params=support,
+        registry_versions={"SIDRA": sidra_artifact.registry_hash, "sidra_population_anchor": "sidra_9606_total_v1"},
+        source_manifest_hashes=_unique([sidra_artifact.source_manifest_hash, sidra_artifact.artifact_hash]),
+        code_version="slice28y_sidra_anchor",
+    )
+    field = make_field_node(
+        name=f"population_tensor_sidra_9606_total_{anchor.locality_id}_{anchor.period}",
+        kind="extensive_measure",
+        carrier="Population",
+        unit="persons",
+        support=support,
+        axes=axes,
+        aggregation="additive",
+        role=["population_tensor", "population_denominator_seed", "official_sidra_anchor", "source_field"],
+        source=["SIDRA", str(sidra_artifact.path), "SIDRA_9606_TOTAL"],
+        operator="sidra_population_total_anchor",
+        provenance=["SHE_SubstrateBundle", "population_tensor", "official", "SIDRA_9606"],
+        state="verified",
+        warnings=[],
+        lineage=lineage,
+        materialization_state="metadata_only",
+        path=None,
+        dashboard_safe=False,
+    ).model_copy(update={"id": f"population_tensor_{lineage_hash(lineage)[:24]}"})
+    return SubstrateMaterializedField(
+        candidate_id=anchor.field_id,
+        field=field,
+        lineage_hash=lineage_hash(lineage),
+        materialization_reason="sidra_population_total_anchor",
+        warnings=(),
+    )
+
+
 def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializationResult:
     """Convert SHE-admissible substrate candidates into metadata-only FieldNodes.
 
@@ -262,7 +353,11 @@ def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializ
     and no output bundle files are written here.
     """
 
-    fields = tuple(materialize_candidate_field(candidate) for candidate in bundle.candidates)
+    fields_list = [materialize_candidate_field(candidate) for candidate in bundle.candidates]
+    sidra_anchor = _sidra_population_anchor_field(bundle)
+    if sidra_anchor is not None:
+        fields_list.append(sidra_anchor)
+    fields = tuple(fields_list)
     excluded = tuple(_exclusion_manifest(exclusion) for exclusion in bundle.exclusions)
     payload = {
         "substrate_id": bundle.substrate_id,

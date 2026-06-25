@@ -279,11 +279,14 @@ def _run_compile_impl(
         )
 
     autonomous_efg_metadata: dict[str, Any] | None = None
-    with telemetry.stage("efg_build"):
+    with telemetry.stage("she_build"):
         autonomous_substrate = build_substrate_bundle(artifacts=autonomous_artifacts)
+
+    with telemetry.stage("efg_build"):
         autonomous_result = build_efg(
             substrate=autonomous_substrate,
             intent=intent,
+            intent_constraints={"race_bridge_plan": race_bridge_plan.as_manifest()},
             operator_mode="standard",
         )
         autonomous_attach = attach_autonomous_efg_to_run(
@@ -303,15 +306,15 @@ def _run_compile_impl(
         }
         source_hashes["autonomous_efg_manifest"] = autonomous_attach.manifest_hash
 
-    cnes_sih_metadata: dict[str, Any] | None = None
-    population_tensor_metadata: dict[str, Any] | None = None
-    race_bridge_metadata: dict[str, Any] | None = None
+    domain_summaries = dict(autonomous_result.domain_summaries or {})
+    cnes_sih_metadata: dict[str, Any] | None = domain_summaries.get("cnes_sih")
+    population_tensor_metadata: dict[str, Any] | None = domain_summaries.get("population_tensor")
+    race_bridge_metadata: dict[str, Any] | None = domain_summaries.get("race_bridge")
 
     # MSD cutover: manual domain attachers are forbidden. CNES/SIH, maternal-child,
     # SIDRA denominators, population, and race bridge fields must be produced by
     # SHE substrate + autonomous EFG bridge/operator expansion + physical executor.
-    telemetry.set_stage("she_build", "success", 0.0)
-    telemetry.set_stage("race_bridge", "blocked" if race_bridge_plan.requires_attach else "skipped", 0.0)
+    telemetry.set_stage("race_bridge", "success" if race_bridge_metadata is not None else "skipped", 0.0)
     telemetry.flush()
 
     telemetry.set_stage("geo_support", "success", 0.0)
@@ -460,9 +463,10 @@ def _run_compile_impl(
     )
 
     # Phase E boundary: first-class tables are valid only after atomic bundle flush.
-    attach_compile_source_reality(run_dir=run_dir, source_reality=compile_source_reality)
-    bundle_manager.collect_missing_from_run(run_dir)
-    run_dir = bundle_manager.flush_to_disk(run_dir)
+    with telemetry.stage("output_bundle_flush"):
+        attach_compile_source_reality(run_dir=run_dir, source_reality=compile_source_reality)
+        bundle_manager.collect_missing_from_run(run_dir)
+        run_dir = bundle_manager.flush_to_disk(run_dir)
     validation = validate_output_bundle(run_dir=str(run_dir))
     return {
         "status": "success" if validation.ok else "failed",

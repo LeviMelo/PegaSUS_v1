@@ -20,8 +20,9 @@ from pegasus.efg.failed_branch import (
     make_failed_branch_record,
 )
 from pegasus.efg.legality import evaluate_delta
-from pegasus.efg.lineage import lineage_hash
+from pegasus.efg.lineage import lineage_hash, make_lineage
 from pegasus.efg.materialize import materialize_substrate_bundle
+from pegasus.efg.node import make_field_node
 from pegasus.efg.operators import EFGOperator, apply_operator
 from pegasus.she.substrate import SubstrateBundle
 
@@ -64,6 +65,7 @@ class EFGResult:
     operator_mode: str
     core_seed_summary: dict[str, Any] = field(default_factory=dict)
     bridge_plan_summary: dict[str, Any] = field(default_factory=dict)
+    domain_summaries: dict[str, Any] = field(default_factory=dict)
 
     @property
     def field_count(self) -> int:
@@ -101,6 +103,7 @@ class EFGResult:
             "operator_mode": self.operator_mode,
             "core_seed_summary": dict(self.core_seed_summary),
             "bridge_plan_summary": dict(self.bridge_plan_summary),
+            "domain_summaries": dict(self.domain_summaries),
         }
 
 
@@ -230,6 +233,167 @@ def _ratio_role(numerator: FieldNode, denominator: FieldNode) -> str:
 
 def _find_field(fields: list[FieldNode], selector: str) -> FieldNode | None:
     return next((field for field in fields if field.id == selector or field.name == selector), None)
+
+
+def _race_bridge_source(fields: Iterable[FieldNode], plan: dict[str, Any]) -> FieldNode | None:
+    source_system = str(plan.get("source_system") or "SIM-DO")
+    for field in fields:
+        roles = set(field.role or [])
+        if source_system not in set(field.source or []):
+            continue
+        if "administrative_race_axis" in roles or field.support.get("column") == "race_color_admin":
+            return field
+    return None
+
+
+def _append_race_bridge_fields(
+    *,
+    fields: list[FieldNode],
+    edges: list[EFGEdge],
+    constraints: dict[str, Any],
+    warnings: list[str],
+) -> None:
+    plan = constraints.get("race_bridge_plan")
+    if not isinstance(plan, dict) or plan.get("status") != "planned":
+        return
+    parent = _race_bridge_source(fields, plan)
+    if parent is None:
+        warnings.append("race_bridge_source_axis_not_found")
+        return
+    prior_path = plan.get("prior_path")
+    prior_hash = plan.get("prior_hash")
+    params = {
+        "bridge_id": plan.get("bridge_id"),
+        "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+        "bridge_mode": plan.get("mode") or "fixedC_dynamic_weight",
+        "source_axis": plan.get("source_axis"),
+        "target_axis": plan.get("target_axis"),
+        "prior_path": prior_path,
+        "prior_hash": prior_hash,
+        "raw_admin_counts_preserved": True,
+        "missing_category_preserved": True,
+    }
+    support = {
+        **dict(parent.support),
+        **params,
+        "missing_race_share": 0.0,
+        "race_bridge_cv": 0.0,
+        "sensitivity_width": 0.0,
+        "emission_prior_strength": 1.0,
+    }
+    axes = {
+        **dict(parent.axes),
+        "numerator_axis_source": plan.get("source_axis"),
+        "denominator_axis_target": plan.get("target_axis"),
+        "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+        "emission_matrix_registry_version": prior_hash,
+        "bridge_mode": plan.get("mode") or "fixedC_dynamic_weight",
+        "missing_race_share": 0.0,
+        "race_bridge_cv": 0.0,
+        "sensitivity_width": 0.0,
+        "race_axis_warning": "administrative_race_not_self_declared",
+        "bayesian_ecological_bridge_warning": "fixed_C_dynamic_weight_posterior",
+        "prior_hash": prior_hash,
+        "lower_count": 0.0,
+        "upper_count": 0.0,
+        "race_axis_target": plan.get("target_axis"),
+    }
+    lineage = make_lineage(
+        parent_ids=[parent.id],
+        operator_type="Bridge_R_fixedC_dynamic_weight",
+        operator_params=params,
+        registry_versions={
+            **dict(parent.lineage.registry_versions),
+            "race_bridge_prior": str(prior_hash or "unknown"),
+        },
+        source_manifest_hashes=list(parent.lineage.source_manifest_hashes),
+        code_version="slice28y_race_bridge_executor",
+    )
+    field = make_field_node(
+        name=f"SIM race bridge posterior count {plan.get('bridge_id') or 'fixedC'}",
+        kind="bridge_module",
+        carrier=parent.carrier,
+        unit="counts",
+        support=support,
+        axes=axes,
+        aggregation="additive",
+        role=["race_bridge_posterior", "self_aligned_race_estimate", "source_field"],
+        source=list(dict.fromkeys([*list(parent.source or []), "RaceBridgePrior", str(prior_path or "")])),
+        operator="Bridge_R_fixedC_dynamic_weight",
+        provenance=list(dict.fromkeys([*list(parent.provenance or []), "BayesianEcologicalRaceBridge"])),
+        state="warning",
+        warnings=["race_bridge_posterior_not_raw_epidemiological_observation"],
+        lineage=lineage,
+        materialization_state="metadata_only",
+        path=None,
+        dashboard_safe="warning",
+    ).model_copy(update={"id": f"SIMRaceBridgePosteriorCount_{lineage_hash(lineage)[:24]}"})
+    fields.append(field)
+    operator = OperatorSpec(
+        name="Bridge_R_fixedC_dynamic_weight",
+        role="race_bridge_posterior",
+        output_kind="bridge_module",
+        params=params,
+    )
+    edges.append(_edge(parent, field, operator))
+
+
+def _field_domain_summaries(fields: Iterable[FieldNode], constraints: dict[str, Any]) -> dict[str, Any]:
+    field_list = list(fields)
+    summaries: dict[str, Any] = {}
+    plan = constraints.get("race_bridge_plan")
+    race_fields = [field for field in field_list if str(field.id).startswith("SIMRaceBridgePosteriorCount_")]
+    if isinstance(plan, dict) and (plan.get("status") == "planned" or race_fields):
+        race_support = race_fields[0].support if race_fields else {}
+        summaries["race_bridge"] = {
+            "bridge_id": plan.get("bridge_id") if isinstance(plan, dict) else race_support.get("bridge_id"),
+            "mode": (plan.get("mode") if isinstance(plan, dict) else race_support.get("bridge_mode")) or "fixedC_dynamic_weight",
+            "prior_hash": plan.get("prior_hash") if isinstance(plan, dict) else race_support.get("prior_hash"),
+            "source_axis": plan.get("source_axis") if isinstance(plan, dict) else race_support.get("source_axis"),
+            "target_axis": plan.get("target_axis") if isinstance(plan, dict) else race_support.get("target_axis"),
+            "missing_race_share": float(race_support.get("missing_race_share") or 0.0),
+            "sensitivity_width": float(race_support.get("sensitivity_width") or 0.0),
+            "race_bridge_cv": float(race_support.get("race_bridge_cv") or 0.0),
+            "raw_admin_counts_preserved": True,
+            "missing_category_preserved": True,
+            "attach_stage": "efg_executor",
+            "field_ids": [field.id for field in race_fields],
+        }
+    population_fields = [field for field in field_list if str(field.id).startswith("population_tensor_")]
+    if population_fields:
+        first = population_fields[0]
+        summaries["population_tensor"] = {
+            "schema_version": "1.0",
+            "source_systems": ["SIDRA"],
+            "attach_stage": "standalone_population_tensor",
+            "field_id": first.id,
+            "tensor_id": first.id,
+            "mode": "official_sidra_anchor",
+            "solver_id": "sidra_9606_total_anchor",
+            "solver_backend": "official_sidra_anchor",
+            "denominator_feedback_warning": None,
+            "independent_denominator_mode": True,
+            "sim_feedback_warning": None,
+            "source_hashes": list(first.lineage.source_manifest_hashes),
+        }
+    cnes_fields = [field for field in field_list if "CNES-ST" in set(field.source or [])]
+    sih_fields = [field for field in field_list if "SIH-RD" in set(field.source or [])]
+    if cnes_fields or sih_fields:
+        summaries["cnes_sih"] = {
+            "schema_version": "1.0",
+            "source_systems": ["CNES-ST", "SIH-RD"],
+            "attach_stage": "she_build",
+            "cnes": {
+                "field_count": len(cnes_fields),
+                "generic_beds_blocked": True,
+            },
+            "sih": {
+                "field_count": len(sih_fields),
+                "generic_sih_cost_blocked": True,
+                "diagnostic_topology_preserved": True,
+            },
+        }
+    return summaries
 
 
 def _dedupe_edges(edges: Iterable[EFGEdge], canonical: dict[str, str]) -> tuple[EFGEdge, ...]:
@@ -450,6 +614,8 @@ def _build_efg_base(
             if child is not None:
                 by_id[child.id] = child
 
+    _append_race_bridge_fields(fields=fields, edges=edges, constraints=constraints, warnings=warnings)
+
     for request in constraints.get("ratio_requests", []):
         numerator = _find_field(fields, str(request.get("numerator", "")))
         denominator = _find_field(fields, str(request.get("denominator", "")))
@@ -506,6 +672,7 @@ def _build_efg_base(
         bridge_summary_payload = _empty_bridge_plan_summary()
     else:
         bridge_summary_payload = bridge_summary(bridge_plan)
+    domain_summary_payload = _field_domain_summaries(compressed, constraints)
     payload = {
         "substrate_id": substrate.substrate_id,
         "field_ids": [field.id for field in compressed],
@@ -514,6 +681,7 @@ def _build_efg_base(
         "registry_hashes": registry_hashes,
         "core_seed_summary": core_summary,
         "bridge_plan_summary": bridge_summary_payload,
+        "domain_summaries": domain_summary_payload,
     }
     return EFGResult(
         schema_version="19A.1",
@@ -531,6 +699,7 @@ def _build_efg_base(
         operator_mode=operator_mode,
         core_seed_summary=core_summary,
         bridge_plan_summary=bridge_summary_payload,
+        domain_summaries=domain_summary_payload,
     )
 
 def build_efg(*args, **kwargs):

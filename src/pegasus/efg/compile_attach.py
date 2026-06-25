@@ -13,6 +13,7 @@ from pegasus.efg.dag import EFGResult
 from pegasus.efg.executor import execute_efg_result
 from pegasus.efg.lineage import lineage_hash
 from pegasus.output.bundle_manager import OutputBundleManager
+from pegasus.storage import write_table
 
 
 def _now() -> str:
@@ -154,6 +155,67 @@ def _quarantined_row(field) -> dict[str, Any]:
     }
 
 
+def _race_bridge_summary_rows(efg: EFGResult) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for field in efg.fields:
+        if not str(field.id).startswith("SIMRaceBridgePosteriorCount_"):
+            continue
+        support = field.support or {}
+        rows.append({
+            "field_id": field.id,
+            "bridge_id": support.get("bridge_id"),
+            "bridge_operator": support.get("bridge_operator") or field.operator,
+            "bridge_mode": support.get("bridge_mode"),
+            "prior_hash": support.get("prior_hash"),
+            "source_axis": support.get("source_axis"),
+            "target_axis": support.get("target_axis"),
+            "missing_race_share": support.get("missing_race_share"),
+            "race_bridge_cv": support.get("race_bridge_cv"),
+            "sensitivity_width": support.get("sensitivity_width"),
+            "raw_admin_counts_preserved": bool(support.get("raw_admin_counts_preserved", True)),
+            "missing_category_preserved": bool(support.get("missing_category_preserved", True)),
+            "created_at": _now(),
+        })
+    return rows
+
+
+def _population_diagnostics_rows(efg: EFGResult) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for field in efg.fields:
+        if not str(field.id).startswith("population_tensor_"):
+            continue
+        support = field.support or {}
+        rows.append({
+            "field_id": field.id,
+            "tensor_id": field.id,
+            "mode": "official_sidra_anchor",
+            "solver_id": "sidra_9606_total_anchor",
+            "solver_backend": "official_sidra_anchor",
+            "n_denom": support.get("n_denom"),
+            "period": support.get("period"),
+            "locality_id": support.get("locality_id"),
+            "request_hash": support.get("request_hash"),
+            "metadata_hash": support.get("metadata_hash"),
+            "created_at": _now(),
+        })
+    return rows
+
+
+def _write_domain_summary_tables(tables: Path, efg: EFGResult) -> None:
+    race_rows = _race_bridge_summary_rows(efg)
+    if race_rows:
+        write_table(tables / "race_bridge_summary.parquet", race_rows, schema_policy="preserve")
+    population_rows = _population_diagnostics_rows(efg)
+    if population_rows:
+        write_table(tables / "population_tensor_diagnostics.parquet", population_rows, schema_policy="preserve")
+    domain = efg.domain_summaries or {}
+    if isinstance(domain.get("cnes_sih"), dict):
+        cnes = domain["cnes_sih"].get("cnes") or {}
+        sih = domain["cnes_sih"].get("sih") or {}
+        write_table(tables / "slice5a_cnes_capacity_summary.parquet", [dict(cnes)], schema_policy="preserve")
+        write_table(tables / "slice5a_sih_cost_summary.parquet", [dict(sih)], schema_policy="preserve")
+
+
 @dataclass(frozen=True)
 class AutonomousEFGAttachResult:
     run_dir: str
@@ -208,6 +270,7 @@ def attach_autonomous_efg_to_run(
         output_dir=tables / "efg_tensors",
         require_materialized=True,
     )
+    _write_domain_summary_tables(tables, efg)
     execution_path = tables / "efg_execution_manifest.json"
     execution_path.write_text(
         json.dumps(execution_report.as_manifest(), indent=2, sort_keys=True, ensure_ascii=False, default=str) + "\n",

@@ -147,11 +147,31 @@ def _numeric_vector(value: Any) -> list[float] | None:
     return out
 
 
-def _q_value_vector(row: Mapping[str, Any]) -> list[float] | None:
+def _q_value_vector(row: Mapping[str, Any]) -> list[float | None] | None:
+    """Parse a Q_tensor value vector, tolerating null cells.
+
+    Panel fields legitimately have null cells (a cause absent in a given
+    municipality-year). Nulls are preserved (not coerced to 0) so missingness is
+    handled honestly downstream; only a genuinely non-numeric non-null entry
+    disqualifies the vector.
+    """
     for key in VALUE_VECTOR_KEYS:
-        vector = _numeric_vector(row.get(key))
-        if vector is not None:
-            return vector
+        raw = _json_vector(row.get(key))
+        if raw is None:
+            continue
+        out: list[float | None] = []
+        ok = True
+        for item in raw:
+            if item is None or item == "":
+                out.append(None)
+                continue
+            try:
+                out.append(float(item))
+            except (TypeError, ValueError):
+                ok = False
+                break
+        if ok:
+            return out
     return None
 
 
@@ -284,13 +304,33 @@ def build_pirs_design_matrix_manifest(
         return payload
 
     row_count = next(iter(lengths)) if lengths else 0
+    outcome_field_ids = [spec.field_id for spec in specs if spec.role == "outcome"]
     matrix_rows: list[dict[str, Any]] = []
     for i in range(row_count):
+        # Complete-case on the outcome: a panel cell with no observed outcome
+        # carries no regression information. Covariate nulls are retained and
+        # handled by missingness indicators at fit time (MSD §2.3).
+        if any(vectors[field_id][i] is None for field_id in outcome_field_ids):
+            continue
         row: dict[str, Any] = {"row_id": i, "intercept": 1.0}
         for spec in specs:
             row[spec.column] = vectors[spec.field_id][i]
         matrix_rows.append(row)
     columns = list(matrix_rows[0].keys()) if matrix_rows else ["row_id", "intercept"]
+    if not matrix_rows:
+        payload = _blocking_manifest(
+            run_dir=root,
+            output_manifest=manifest_path,
+            output_matrix=matrix_path,
+            design_plan_path=design_plan_path,
+            readiness_path=readiness_path,
+            reasons=["design_matrix_empty_after_outcome_complete_case"],
+            plan=plan,
+            readiness=readiness,
+            field_specs=specs,
+        )
+        _write_json(manifest_path, payload)
+        return payload
     if write_matrix:
         _write_rows(matrix_path, matrix_rows)
     payload = {

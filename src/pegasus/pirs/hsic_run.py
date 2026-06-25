@@ -19,7 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pegasus.output.bundle_manager import OutputBundleManager
 
-from pegasus.pirs.hsic import linear_hsic_statistic, permutation_p_value
+from pegasus.pirs.hsic import numpy_kernel_hsic_permutation_test, permutation_p_value
 
 
 DEFAULT_MODEL_MANIFEST = Path("Tables") / "pirs_model_execution_manifest.json"
@@ -131,42 +131,121 @@ def _column_vector(rows: Sequence[Mapping[str, Any]], column: str) -> list[float
         return None
 
 
-def _fdr_bh(p_values: Sequence[float | None]) -> list[float | None]:
+def _fdr_adjust(p_values: Sequence[float | None], *, method: str = "BH") -> list[float | None]:
+    """Step-up FDR adjustment. ``BH`` (Benjamini-Hochberg) for independent tests;
+    ``BY`` (Benjamini-Yekutieli) for dependent panel residuals (MSD §6.8 mandates
+    BY for cross-fitted annual/monthly municipal panels)."""
     indexed = [(i, float(p)) for i, p in enumerate(p_values) if p is not None]
     m = len(indexed)
     out: list[float | None] = [None for _ in p_values]
     if m == 0:
         return out
+    c_m = sum(1.0 / k for k in range(1, m + 1)) if method.upper() == "BY" else 1.0
     ranked = sorted(indexed, key=lambda item: item[1])
     running = 1.0
     for rank_from_end, (idx, p) in enumerate(reversed(ranked), start=1):
         rank = m - rank_from_end + 1
-        running = min(running, p * m / max(rank, 1))
+        running = min(running, p * m * c_m / max(rank, 1))
         out[idx] = min(1.0, max(0.0, running))
     return out
 
 
-def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_id: str, covariate_column: str, residuals: Sequence[float], covariate: Sequence[float], budget: str, permutations: int, min_support: int, seed: int) -> dict[str, Any]:
+def _fdr_bh(p_values: Sequence[float | None]) -> list[float | None]:
+    return _fdr_adjust(p_values, method="BH")
+
+
+def _load_support_blocks(root: Path, matrix_rows: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[int]] | None:
+    """Per-matrix-row (municipality, year) blocks from support_index.parquet.
+
+    Returns labels aligned to the design-matrix row order, or None when the
+    support index is absent or cannot be aligned (then HSIC falls back to an
+    honestly-labelled i.i.d. null instead of faking a structured one).
+    """
+    path = root / "Tables" / "support_index.parquet"
+    if not path.exists():
+        return None
+    by_id: dict[int, tuple[Any, Any]] = {}
+    for row in _read_rows(path):
+        rid = row.get("row_id")
+        if rid is None:
+            continue
+        by_id[int(rid)] = (row.get("municipality_cod6"), row.get("year"))
+    block_labels: list[str] = []
+    time_labels: list[int] = []
+    for row in matrix_rows:
+        rid = row.get("row_id")
+        entry = by_id.get(int(rid)) if rid is not None else None
+        if entry is None:
+            return None
+        muni, year = entry
+        block_labels.append(str(muni) if muni is not None else "__none__")
+        try:
+            time_labels.append(int(year) if year is not None else 0)
+        except (TypeError, ValueError):
+            time_labels.append(0)
+    return block_labels, time_labels
+
+
+def _cyclic_shift_permutations(block_labels: Sequence[str], time_labels: Sequence[int], permutations: int, seed: int) -> list[list[int]]:
+    """Within-block (municipality) cyclic time-shift permutations (MSD §6.8).
+
+    Each municipality's time-ordered residuals are circularly shifted by a random
+    lag, preserving that municipality's temporal autocorrelation and spatial-block
+    identity while breaking the residual-covariate alignment under H0. Works on
+    ragged panels (real data is not a dense space×time rectangle)."""
+    from collections import defaultdict
+
+    n = len(block_labels)
+    grouped: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for pos, (block, t) in enumerate(zip(block_labels, time_labels, strict=True)):
+        grouped[block].append((t, pos))
+    ordered = {block: [pos for _, pos in sorted(values)] for block, values in grouped.items()}
+    rng = random.Random(seed)
+    perms: list[list[int]] = []
+    for _ in range(max(int(permutations), 1)):
+        out = list(range(n))
+        for positions in ordered.values():
+            k = len(positions)
+            if k <= 1:
+                continue
+            delta = rng.randrange(1, k)
+            for i, target in enumerate(positions):
+                out[target] = positions[(i + delta) % k]
+        perms.append(out)
+    return perms
+
+
+def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_id: str, covariate_column: str, residuals: Sequence[float], covariate: Sequence[float], budget: str, permutations: int, min_support: int, seed: int, permutation_indices: list[list[int]] | None = None, null_strategy_label: str = "unrestricted_iid_permutation") -> dict[str, Any]:
     n_eff = int(min(len(residuals), len(covariate)))
     warnings: list[str] = []
     statistic: float | None = None
     p_value: float | None = None
-    mode = "exact_linear"
+    mode = "exact_rbf_kernel"
+    null_used = "disabled"
     state = "verified"
     if n_eff < min_support:
         mode = "disabled"
         state = "blocked"
         warnings.append("hsic_disabled_insufficient_support")
     else:
-        statistic = float(linear_hsic_statistic([float(v) for v in covariate[:n_eff]], [float(v) for v in residuals[:n_eff]]))
-        rng = random.Random(seed)
-        null_statistics: list[float] = []
+        # Real non-linear centered-kernel HSIC (RBF), not the prior linear
+        # Pearson^2 stand-in that was mislabelled "exact_linear" HSIC.
         residual_values = [float(v) for v in residuals[:n_eff]]
         covariate_values = [float(v) for v in covariate[:n_eff]]
-        for _ in range(max(int(permutations), 1)):
-            shuffled = residual_values[:]
-            rng.shuffle(shuffled)
-            null_statistics.append(linear_hsic_statistic(covariate_values, shuffled))
+        # Only apply provided structured permutations if they align to this scan's
+        # row count; otherwise fall back to i.i.d. inside the kernel test.
+        scan_perms = permutation_indices if (permutation_indices and all(len(p) == n_eff for p in permutation_indices)) else None
+        statistic, null_statistics, _hsic_diag = numpy_kernel_hsic_permutation_test(
+            covariate=covariate_values,
+            residuals=residual_values,
+            permutations=permutations,
+            seed=seed,
+            kernel="rbf",
+            permutation_indices=scan_perms,
+            budget=budget,
+        )
+        statistic = float(statistic)
+        mode = f"{_hsic_diag.get('hsic_mode', 'exact')}_rbf_kernel"
         p_value = float(
             permutation_p_value(
                 statistic=statistic,
@@ -175,6 +254,12 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
                 null_statistics=null_statistics,
             )
         )
+        if scan_perms is not None:
+            null_used = null_strategy_label
+            warnings.append(f"hsic_null_{null_strategy_label}")
+        else:
+            null_used = "unrestricted_iid_permutation"
+            warnings.append("hsic_null_unrestricted_iid_permutation")
         if n_eff < 100:
             state = "fragile"
             warnings.append("hsic_descriptive_small_support")
@@ -195,7 +280,8 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
         "warnings": warnings,
         "permutations": int(permutations),
         "seed": int(seed),
-        "kernel": "linear_centered",
+        "kernel": "rbf_centered",
+        "null_strategy": null_used,
         "created_at": _now(),
     }
 
@@ -307,6 +393,19 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
     if not covariates:
         return _blocking_manifest(run_dir=root, manifest_path=manifest_path, reasons=["no_covariates_available_for_hsic"])
 
+    # Structured spatial/temporal block null (MSD §6.8): within-municipality
+    # cyclic time shift, built once from support_index and reused across
+    # covariate scans. Requires >=5 spatial blocks; else honest i.i.d. fallback.
+    structured_perms: list[list[int]] | None = None
+    null_label = "unrestricted_iid_permutation"
+    support_blocks = _load_support_blocks(root, matrix_rows)
+    if support_blocks is not None:
+        block_labels, time_labels = support_blocks
+        n_spatial = len({b for b in block_labels if b != "__none__"})
+        if n_spatial >= 5 and len(block_labels) == len(residual_vector):
+            structured_perms = _cyclic_shift_permutations(block_labels, time_labels, permutations, seed)
+            null_label = "spatial_block_cyclic_time_shift"
+
     scan_rows: list[dict[str, Any]] = []
     for spec in covariates:
         vector = _column_vector(matrix_rows, spec["column"])
@@ -331,9 +430,12 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
                 "created_at": _now(),
             })
             continue
-        scan_rows.append(_scan_row(residual_field_id=str(residual_field_id), model_id=model_manifest.get("model_id"), covariate_field_id=spec["field_id"], covariate_column=spec["column"], residuals=residual_vector, covariate=vector, budget=budget, permutations=permutations, min_support=min_support, seed=seed))
+        scan_rows.append(_scan_row(residual_field_id=str(residual_field_id), model_id=model_manifest.get("model_id"), covariate_field_id=spec["field_id"], covariate_column=spec["column"], residuals=residual_vector, covariate=vector, budget=budget, permutations=permutations, min_support=min_support, seed=seed, permutation_indices=structured_perms, null_strategy_label=null_label))
 
-    q_values = _fdr_bh([row.get("p_value") for row in scan_rows])
+    # MSD §6.8: cross-fitted panel regimes use Benjamini-Yekutieli (dependence-
+    # robust); independent cross-sectional scans use Benjamini-Hochberg.
+    fdr_method = "BY" if null_label == "spatial_block_cyclic_time_shift" else "BH"
+    q_values = _fdr_adjust([row.get("p_value") for row in scan_rows], method=fdr_method)
     outcome_specs = [spec for spec in _field_specs(design_manifest) if spec.get("role") == "outcome"]
     outcome_field_id = (
         model_manifest.get("outcome_field_id")
@@ -348,9 +450,12 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
         row.setdefault("residual_mode", residual_mode)
         row.setdefault("fold_scheme", fold_scheme)
         row.setdefault("bootstrap_count", None)
-        row.setdefault("residual_uncertainty", "in_sample_descriptive")
-        row.setdefault("null_strategy", "permutation_linear_centered")
-        row.setdefault("fdr_method", "BH")
+        row.setdefault(
+            "residual_uncertainty",
+            "cross_fitted" if str(residual_mode).startswith("cross_fitted") else "in_sample_descriptive",
+        )
+        row.setdefault("null_strategy", "unrestricted_iid_permutation")
+        row.setdefault("fdr_method", fdr_method)
 
     _write_rows(root / DEFAULT_HSIC_SCORES, scan_rows)
     payload = {

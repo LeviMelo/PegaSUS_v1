@@ -1,10 +1,37 @@
+"""MSD inference phase (PIRS model fit + residual + HSIC scan) — typed driver.
+
+This replaces the previous ``importlib``-based string dispatch (which guessed
+function names from tuples and wrapped everything in ``try/except`` that relabeled
+real execution failures as benign "blocked" stages) with direct, typed calls and
+the honesty rails from MSD §10: an execution error is a *failure* that aborts the
+compile, never a silently swallowed skip.
+
+The planning chain (candidate → selection → design plan → readiness) is inlined
+here rather than going through the old "intentionally non-executing" planning
+wrapper. State flows through a :class:`RunContext` and in-memory dicts; stages
+still emit their first-class artifacts for the immutable output bundle.
+"""
+
 from __future__ import annotations
 
-import importlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
+
+from pegasus.core.run_context import RunContext
+
+# Direct, typed stage imports — no string dispatch.
+from pegasus.workflows.pirs_candidates import run_attach_pirs_candidate_gate
+from pegasus.workflows.pirs_selection import run_attach_pirs_selection_plan
+from pegasus.workflows.pirs_design import run_attach_pirs_design_plan_to_run
+from pegasus.workflows.pirs_readiness import run_attach_pirs_design_readiness_to_run
+from pegasus.workflows.pirs_matrix import run_attach_pirs_design_matrix_to_run
+from pegasus.workflows.pirs_execute import run_execute_pirs_model
+from pegasus.workflows.hsic_execute import run_execute_hsic_residual_scan
+from pegasus.workflows.hsic_rank import run_attach_hsic_ranking_to_run
+from pegasus.workflows.hsic_report import run_attach_hsic_report_to_run
+
 
 def _stage_manifest(stage_plan: Any) -> dict[str, dict[str, Any]]:
     if stage_plan is None:
@@ -15,11 +42,9 @@ def _stage_manifest(stage_plan: Any) -> dict[str, dict[str, Any]]:
         payload = dict(stage_plan)
     else:
         return {}
-
     by_stage = payload.get("by_stage")
     if isinstance(by_stage, Mapping):
         return {str(k): dict(v) for k, v in by_stage.items() if isinstance(v, Mapping)}
-
     stages = payload.get("stages")
     if isinstance(stages, list):
         return {
@@ -35,13 +60,10 @@ def _requested(stage_plan: Any, stage_id: str) -> bool:
     return bool(spec and spec.get("requested"))
 
 
-def _load_callable(module_name: str, *names: str) -> Callable[..., Any]:
-    module = importlib.import_module(module_name)
-    for name in names:
-        fn = getattr(module, name, None)
-        if callable(fn):
-            return fn
-    raise AttributeError(f"{module_name} does not expose any of {names!r}")
+def _record_stage(telemetry: Any, *, stage_id: str, status: str, elapsed: float, reason: str | None = None) -> None:
+    telemetry.set_stage(stage_id, status, elapsed)
+    if reason:
+        telemetry.resource_summary.setdefault("stage_errors", {})[stage_id] = reason
 
 
 def _write_stage_manifest(root: Path, name: str, payload: dict[str, Any]) -> Path:
@@ -52,51 +74,100 @@ def _write_stage_manifest(root: Path, name: str, payload: dict[str, Any]) -> Pat
         encoding="utf-8",
     )
     return out
-def _record_stage(
-    telemetry: Any,
+
+
+def _status_of(payload: Any, *keys: str) -> str:
+    """Pull a status string from a payload or a nested gate/summary."""
+    if isinstance(payload, Mapping):
+        for key in ("status", *keys):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value
+        for nested in ("summary", "gate", "design_matrix", "model_execution"):
+            value = payload.get(nested)
+            if isinstance(value, Mapping) and isinstance(value.get("status"), str):
+                return str(value["status"])
+    return "unknown"
+
+
+def _blocking_reason(payload: Any) -> str | None:
+    if isinstance(payload, Mapping):
+        for key in ("reason", "blocked_reason"):
+            if isinstance(payload.get(key), str):
+                return payload[key]
+        reasons = payload.get("blocking_reasons")
+        if isinstance(reasons, list) and reasons:
+            return "; ".join(str(r) for r in reasons)
+        nested = payload.get("design_matrix")
+        if isinstance(nested, Mapping):
+            return _blocking_reason(nested)
+    return None
+
+
+def _run_pirs_model_phase(ctx: RunContext, payload: dict[str, Any]) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
+    """Planning + design matrix + model fit. Returns (success, matrix, model_exec)."""
+    pirs_root = ctx.pirs_root
+    budget = ctx.budget
+
+    # Planning chain (inlined, direct calls). Each writes its first-class gate
+    # artifact; "blocked" here is a legitimate MSD-declared state, not a bug.
+    run_attach_pirs_candidate_gate(run_dir=pirs_root)
+    run_attach_pirs_selection_plan(run_dir=pirs_root, budget=budget)
+    run_attach_pirs_design_plan_to_run(run_dir=pirs_root, budget=budget)
+    run_attach_pirs_design_readiness_to_run(run_dir=pirs_root)
+
+    matrix = run_attach_pirs_design_matrix_to_run(run_dir=pirs_root)
+    matrix_payload = matrix.get("design_matrix") if isinstance(matrix, Mapping) else None
+    payload["artifacts"]["pirs_design_matrix"] = (matrix or {}).get("manifest_path")
+    if _status_of(matrix_payload or matrix) != "ready":
+        reason = _blocking_reason(matrix) or "design_matrix_not_ready"
+        payload["pirs_model"].update({"status": "blocked", "reason": reason})
+        return False, matrix_payload, None
+
+    model = run_execute_pirs_model(
+        run_dir=pirs_root,
+        design_matrix_manifest=matrix_payload,
+        mutate_output_bundle=True,
+        validate=False,
+        attach=True,
+        bundle=ctx.bundle,
+    )
+    model_exec = model.get("model_execution") if isinstance(model, Mapping) else None
+    payload["artifacts"]["pirs_model_execution"] = (model or {}).get("manifest_path")
+    if _status_of(model_exec or model) != "fitted":
+        reason = _blocking_reason(model) or "model_not_fitted"
+        payload["pirs_model"].update({"status": "blocked", "reason": reason})
+        return False, matrix_payload, model_exec
+    payload["pirs_model"].update({"status": "success", "execution": model_exec})
+    return True, matrix_payload, model_exec
+
+
+def _run_hsic_phase(
+    ctx: RunContext,
+    payload: dict[str, Any],
     *,
-    stage_id: str,
-    status: str,
-    elapsed: float,
-    reason: str | None = None,
+    matrix_payload: dict[str, Any] | None,
+    model_exec: dict[str, Any] | None,
 ) -> None:
-    telemetry.set_stage(stage_id, status, elapsed)
-    if reason:
-        telemetry.resource_summary.setdefault("stage_errors", {})[stage_id] = reason
-
-
-def _pipeline_gate_status(planning: dict[str, Any]) -> tuple[str, str | None]:
-    gate = planning.get("pirs_planning_pipeline_gate")
-    if isinstance(gate, dict):
-        status = str(gate.get("status") or "")
-        reason = gate.get("reason") or gate.get("blocked_reason")
-        if status in {"ready", "success"}:
-            return "ready", None
-        if status:
-            return status, str(reason or status)
-    pipeline = planning.get("pipeline")
-    if isinstance(pipeline, dict):
-        return "ready", None
-    return "blocked", "pirs_planning_pipeline_did_not_return_ready_gate"
-
-
-def _artifact(payload: Any, *keys: str) -> Any:
-    if not isinstance(payload, Mapping):
-        return payload
-    for key in keys:
-        if key in payload:
-            return payload[key]
-    return payload
-
-
-
-
-def _prepare_pirs_workspace(bundle: Any | None, root: Path) -> Path:
-    if bundle is None:
-        return root
-    workspace = root.parent / f"{root.name}__pirs_stage_workspace"
-    return bundle.write_stage_workspace(workspace)
-
+    pirs_root = ctx.pirs_root
+    scan = run_execute_hsic_residual_scan(
+        run_dir=pirs_root,
+        model_execution_manifest=model_exec,
+        design_matrix_manifest=matrix_payload,
+        budget=ctx.budget,
+        mutate_output_bundle=True,
+        validate=False,
+        attach=True,
+        bundle=ctx.bundle,
+    )
+    payload["artifacts"]["hsic_residual_scan"] = (scan or {}).get("manifest_path") if isinstance(scan, Mapping) else None
+    for attach_fn, key in ((run_attach_hsic_ranking_to_run, "hsic_ranking"), (run_attach_hsic_report_to_run, "hsic_report")):
+        try:
+            result = attach_fn(run_dir=pirs_root)
+            payload["artifacts"][key] = result.get("manifest_path") if isinstance(result, Mapping) else None
+        except Exception as exc:  # ranking/report are non-essential annotations
+            payload.setdefault("warnings", []).append(f"{key}_not_attached:{type(exc).__name__}:{exc}")
+    payload["pirs_hsic"].update({"status": "success", "scan": scan})
 
 
 def run_msd_inference_pipeline(
@@ -109,6 +180,14 @@ def run_msd_inference_pipeline(
 ) -> dict[str, Any]:
     root = Path(run_dir)
     root.mkdir(parents=True, exist_ok=True)
+    ctx = RunContext(
+        run_dir=root,
+        budget=budget,
+        bundle=bundle,
+        telemetry=telemetry,
+        compiler_stage_plan=compiler_stage_plan,
+    )
+    ctx.stage_pirs_workspace()
 
     payload: dict[str, Any] = {
         "schema_version": "1.0",
@@ -119,149 +198,56 @@ def run_msd_inference_pipeline(
         "artifacts": {},
     }
 
-    pirs_root = _prepare_pirs_workspace(bundle, root)
     model_success = False
-    design_matrix_manifest: Any = None
-    model_execution_manifest: Any = None
+    matrix_payload: dict[str, Any] | None = None
+    model_exec: dict[str, Any] | None = None
 
     if not payload["pirs_model"]["requested"]:
-        _record_stage(
-            telemetry,
-            stage_id="pirs_model",
-            status="skipped",
-            elapsed=0.0,
-            reason="intent does not request PIRS model execution",
-        )
+        _record_stage(telemetry, stage_id="pirs_model", status="skipped", elapsed=0.0, reason="intent does not request PIRS model execution")
         payload["pirs_model"].update({"status": "skipped", "reason": "not_requested"})
     else:
         started = time.perf_counter()
         try:
-            run_planning = _load_callable(
-                "pegasus.workflows.pirs_pipeline",
-                "run_pirs_planning_pipeline",
-                "run_attach_pirs_planning_pipeline_to_run",
+            model_success, matrix_payload, model_exec = _run_pirs_model_phase(ctx, payload)
+            elapsed = time.perf_counter() - started
+            _record_stage(
+                telemetry,
+                stage_id="pirs_model",
+                status="success" if model_success else "blocked",
+                elapsed=elapsed,
+                reason=None if model_success else payload["pirs_model"].get("reason"),
             )
-            planning = run_planning(run_dir=pirs_root, budget=budget)
-            payload["artifacts"]["pirs_planning_pipeline"] = _artifact(planning, "manifest_path")
-            status, reason = _pipeline_gate_status(planning)
-
-            if status != "ready":
-                elapsed = time.perf_counter() - started
-                _record_stage(telemetry, stage_id="pirs_model", status="blocked", elapsed=elapsed, reason=reason)
-                payload["pirs_model"].update({"status": "blocked", "reason": reason, "planning": planning})
-            else:
-                pipeline = planning.get("pipeline", {}) if isinstance(planning, Mapping) else {}
-                artifacts = pipeline.get("artifacts", {}) if isinstance(pipeline, Mapping) else {}
-                design_plan = artifacts.get("pirs_design_plan")
-                readiness = artifacts.get("pirs_design_readiness")
-
-                run_matrix = _load_callable(
-                    "pegasus.workflows.pirs_matrix",
-                    "run_attach_pirs_design_matrix_to_run",
-                    "run_pirs_design_matrix",
-                )
-                matrix = run_matrix(
-                    run_dir=pirs_root,
-                    design_plan=design_plan,
-                    readiness_manifest=readiness,
-                )
-                design_matrix_manifest = matrix
-                payload["artifacts"]["pirs_design_matrix"] = _artifact(
-                    matrix,
-                    "manifest_path",
-                    "design_matrix_manifest",
-                )
-
-                run_model = _load_callable(
-                    "pegasus.workflows.pirs_execute",
-                    "run_execute_pirs_model",
-                    "run_pirs_model",
-                )
-                model = run_model(
-                    run_dir=pirs_root,
-                    design_matrix_manifest=matrix,
-                    mutate_output_bundle=True,
-                    validate=False,
-                    attach=True,
-                    bundle=bundle,
-                )
-                model_execution_manifest = model
-                payload["artifacts"]["pirs_model_execution"] = _artifact(
-                    model,
-                    "manifest_path",
-                    "model_execution_manifest",
-                )
-                
-
-                elapsed = time.perf_counter() - started
-                _record_stage(telemetry, stage_id="pirs_model", status="success", elapsed=elapsed)
-                payload["pirs_model"].update({"status": "success", "planning": planning, "execution": model})
-                model_success = True
         except Exception as exc:
+            # Honesty rail (MSD §10): execution errors are failures, not blocks.
             elapsed = time.perf_counter() - started
             reason = f"{type(exc).__name__}: {exc}"
-            _record_stage(telemetry, stage_id="pirs_model", status="blocked", elapsed=elapsed, reason=reason)
-            payload["pirs_model"].update({"status": "blocked", "reason": reason})
+            _record_stage(telemetry, stage_id="pirs_model", status="failed", elapsed=elapsed, reason=reason)
+            payload["pirs_model"].update({"status": "failed", "reason": reason})
+            telemetry.flush()
+            raise
 
     if not payload["pirs_hsic"]["requested"]:
-        _record_stage(
-            telemetry,
-            stage_id="pirs_hsic",
-            status="skipped",
-            elapsed=0.0,
-            reason="intent does not request HSIC residual scan",
-        )
+        _record_stage(telemetry, stage_id="pirs_hsic", status="skipped", elapsed=0.0, reason="intent does not request HSIC residual scan")
         payload["pirs_hsic"].update({"status": "skipped", "reason": "not_requested"})
     elif not model_success:
-        reason = "pirs_model_not_successful"
-        _record_stage(telemetry, stage_id="pirs_hsic", status="blocked", elapsed=0.0, reason=reason)
-        payload["pirs_hsic"].update({"status": "blocked", "reason": reason})
+        _record_stage(telemetry, stage_id="pirs_hsic", status="blocked", elapsed=0.0, reason="pirs_model_not_successful")
+        payload["pirs_hsic"].update({"status": "blocked", "reason": "pirs_model_not_successful"})
     else:
         started = time.perf_counter()
         try:
-            run_scan = _load_callable(
-                "pegasus.workflows.hsic_execute",
-                "run_execute_hsic_residual_scan",
-                "run_hsic_residual_scan",
-            )
-            scan = run_scan(
-                run_dir=pirs_root,
-                model_execution_manifest=model_execution_manifest,
-                design_matrix_manifest=design_matrix_manifest,
-                budget=budget,
-                mutate_output_bundle=True,
-                validate=False,
-                attach=True,
-                bundle=bundle,
-            )
-            payload["artifacts"]["hsic_residual_scan"] = _artifact(scan, "manifest_path", "output_manifest")
-
-            for module_name, names, key in (
-                ("pegasus.workflows.hsic_rank", ("run_attach_hsic_ranking_to_run", "run_hsic_ranking"), "hsic_ranking"),
-                ("pegasus.workflows.hsic_report", ("run_attach_hsic_report_to_run", "run_hsic_report"), "hsic_report"),
-            ):
-                try:
-                    fn = _load_callable(module_name, *names)
-                    result = fn(run_dir=pirs_root)
-                    payload["artifacts"][key] = _artifact(result, "manifest_path", f"{key}_manifest")
-                except Exception as exc:
-                    payload.setdefault("warnings", []).append(f"{key}_not_attached:{type(exc).__name__}:{exc}")
-
-            
-            elapsed = time.perf_counter() - started
-            _record_stage(telemetry, stage_id="pirs_hsic", status="success", elapsed=elapsed)
-            payload["pirs_hsic"].update({"status": "success", "scan": scan})
+            _run_hsic_phase(ctx, payload, matrix_payload=matrix_payload, model_exec=model_exec)
+            _record_stage(telemetry, stage_id="pirs_hsic", status="success", elapsed=time.perf_counter() - started)
         except Exception as exc:
             elapsed = time.perf_counter() - started
             reason = f"{type(exc).__name__}: {exc}"
-            _record_stage(telemetry, stage_id="pirs_hsic", status="blocked", elapsed=elapsed, reason=reason)
-            payload["pirs_hsic"].update({"status": "blocked", "reason": reason})
+            _record_stage(telemetry, stage_id="pirs_hsic", status="failed", elapsed=elapsed, reason=reason)
+            payload["pirs_hsic"].update({"status": "failed", "reason": reason})
+            telemetry.flush()
+            raise
 
     manifest_path = _write_stage_manifest(root, "msd_inference_pipeline.json", payload)
     payload["manifest_path"] = str(manifest_path.relative_to(root)).replace("\\", "/")
-
     payload["output_validation"] = {"status": "deferred_until_output_bundle_flush"}
-
     return payload
 
 

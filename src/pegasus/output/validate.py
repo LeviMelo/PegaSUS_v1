@@ -353,7 +353,33 @@ def _validate_population_tensor_contract(*, root: Path, v, q, run_config: dict[s
                 errors.append(f"SIM-informed population tensor field missing feedback-risk warning: {fid}")
 
 
-def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
+def _validate_inference_invariants(*, hypotheses, model_assoc, budget: str, errors: list[str], warnings: list[str]) -> None:
+    """Computation invariants — not just shape. A bundle is invalid if it claims
+    inference happened without the computation behind the claim (the failure mode
+    that let fake-green survive: 17 keys present, math hollow)."""
+    for row in hypotheses.to_pylist():
+        mode = str(row.get("hsic_mode") or "")
+        state = str(row.get("state") or "")
+        active = mode and "disabled" not in mode and "blocked" not in mode and state != "blocked"
+        if active and (row.get("statistic") is None or row.get("p_value") is None):
+            errors.append(
+                f"Hypotheses row claims hsic_mode={mode} but has null statistic/p_value: {row.get('hypothesis_id')}"
+            )
+        rmode = str(row.get("residual_mode") or "")
+        if budget in {"standard", "deep"} and rmode == "in_sample":
+            errors.append(
+                f"standard/deep HSIC consumed in-sample residuals — MSD §10 hard-abort: {row.get('hypothesis_id')}"
+            )
+        elif budget in {"standard", "deep"} and "in_sample_backfill" in rmode:
+            warnings.append(
+                f"standard/deep HSIC residual mode includes in-sample backfill rows: {row.get('hypothesis_id')}"
+            )
+    for row in model_assoc.to_pylist():
+        if str(row.get("status")) == "fitted" and not row.get("residual_field_id"):
+            errors.append(f"ModelAssociations fitted model missing residual_field_id: {row.get('model_id')}")
+
+
+def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], budget: str, errors: list[str], warnings: list[str]) -> None:
     try:
         v = _read(root / "V_fields.parquet")
         q = _read(root / "Q_tensor.parquet")
@@ -424,6 +450,7 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
     _validate_cnes_sih_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_population_tensor_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_race_bridge_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
+    _validate_inference_invariants(hypotheses=hypotheses, model_assoc=model_assoc, budget=budget, errors=errors, warnings=warnings)
     _validate_materialized_external_semantics(
         root=root,
         tables={
@@ -478,6 +505,7 @@ def validate_output_bundle(*, run_dir: str, schema_registry: OutputSchemaRegistr
     _validate_first_class_keys(root, schema_registry, errors)
     if errors:
         return OutputValidationResult(ok=False, errors=errors, warnings=warnings)
-    _user_intent, run_config, manifest = _validate_manifest_and_config(root=root, errors=errors, warnings=warnings)
-    _validate_parquet_contracts(root=root, run_config=run_config, manifest=manifest, errors=errors)
+    user_intent, run_config, manifest = _validate_manifest_and_config(root=root, errors=errors, warnings=warnings)
+    budget = str((user_intent or {}).get("budget") or run_config.get("budget") or "fast")
+    _validate_parquet_contracts(root=root, run_config=run_config, manifest=manifest, budget=budget, errors=errors, warnings=warnings)
     return OutputValidationResult(ok=not errors, errors=errors, warnings=warnings)

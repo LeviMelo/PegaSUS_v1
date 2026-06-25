@@ -21,7 +21,9 @@ from pegasus.core.io_utils import _compact, _hash_payload, _load_json, _safe_id,
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pegasus.compute.glm import GLMError, crossfit_residuals, fit_glm
 from pegasus.output.bundle_manager import OutputBundleManager
+from pegasus.pirs.design_matrix import _read_rows, _write_rows
 
 
 DEFAULT_MATRIX_MANIFEST = Path("Tables") / "pirs_design_matrix_manifest.json"
@@ -113,139 +115,167 @@ def _design_columns(manifest: Mapping[str, Any], rows: Sequence[Mapping[str, Any
     return response, covariates, offset
 
 
-def _fit_poisson_irls(
-    *,
-    y: np.ndarray,
-    X: np.ndarray,
-    offset_vector: np.ndarray,
-    term_names: Sequence[str],
-    max_iter: int = 100,
-    tol: float = 1e-8,
-) -> dict[str, Any]:
-    beta = np.zeros(X.shape[1], dtype=float)
-    if len(y):
-        mean_rate = np.mean(y / np.exp(np.clip(offset_vector, -30.0, 30.0)))
-        beta[0] = math.log(max(float(mean_rate), 1e-12))
-    converged = False
-    iterations = 0
-    ridge = np.eye(X.shape[1], dtype=float) * 1e-8
-    for iteration in range(1, max_iter + 1):
-        eta = np.clip(offset_vector + X @ beta, -30.0, 30.0)
-        mu = np.exp(eta)
-        weights = np.maximum(mu, 1e-9)
-        z = X @ beta + (y - mu) / weights
-        xw = X * np.sqrt(weights)[:, None]
-        zw = z * np.sqrt(weights)
-        lhs = xw.T @ xw + ridge
-        rhs = xw.T @ zw
-        try:
-            next_beta = np.linalg.solve(lhs, rhs)
-        except np.linalg.LinAlgError:
-            next_beta = np.linalg.pinv(lhs) @ rhs
-        iterations = iteration
-        if float(np.max(np.abs(next_beta - beta))) < tol:
-            beta = next_beta
-            converged = True
-            break
-        beta = next_beta
-    fitted = np.exp(np.clip(offset_vector + X @ beta, -30.0, 30.0))
-    # True Poisson Deviance Residuals computation
-    d_i = np.zeros_like(y)
-    for i in range(len(y)):
-        if y[i] > 0:
-            d_i[i] = 2.0 * (y[i] * math.log(y[i] / max(fitted[i], 1e-12)) - (y[i] - fitted[i]))
-        else:
-            d_i[i] = 2.0 * fitted[i]
-    
-    standardized = np.sign(y - fitted) * np.sqrt(np.maximum(d_i, 0.0))
-    residual = y - fitted
-    return {
-        "terms": list(term_names),
-        "coefficients": [float(v) for v in beta.tolist()],
-        "observed": [float(v) for v in y.tolist()],
-        "fitted": [float(v) for v in fitted.tolist()],
-        "residual": [float(v) for v in residual.tolist()],
-        "standardized_residual": [float(v) for v in standardized.tolist()],
-        "rmse": float(math.sqrt(float(np.mean(np.square(residual))))) if len(residual) else None,
-        "mean_residual": float(np.mean(residual)) if len(residual) else None,
-        "sigma": float(np.std(standardized, ddof=1)) if len(standardized) > 1 else 0.0,
-        "solver": "poisson_irls",
-        "irls_iterations": iterations,
-        "irls_converged": converged,
-    }
+_MISSING_TOKENS: frozenset[str] = frozenset({"", "nan", "inf", "-inf", "none", "null", "na"})
 
 
-def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: str, covariate_columns: Sequence[str], offset_column: str | None, family: str) -> dict[str, Any]:
-    y = np.asarray([float(row[response_column]) for row in rows], dtype=float)
-    x_cols = [np.ones(len(rows), dtype=float)]
-    term_names = ["intercept"]
-    for col in covariate_columns:
-        raw_vals = [row.get(col) for row in rows]
-        valid_vals = [float(v) for v in raw_vals if v is not None and str(v).replace('.', '', 1).isdigit() and str(v).lower() not in {"nan", "inf", "-inf"}]
-        median_val = float(np.median(valid_vals)) if valid_vals else 0.0
-        
-        imputed = []
-        indicators = []
-        for v in raw_vals:
-            if v is None or not str(v).replace('.', '', 1).isdigit() or str(v).lower() in {"nan", "inf", "-inf"}:
-                imputed.append(median_val)
-                indicators.append(1.0)
-            else:
-                imputed.append(float(v))
-                indicators.append(0.0)
-                
-        x_cols.append(np.asarray(imputed, dtype=float))
-        if sum(indicators) > 0:
-            x_cols.append(np.asarray(indicators, dtype=float))
-            term_names.extend([col, f"{col}_is_missing"])
-        else:
-            term_names.append(col)
-    X = np.column_stack(x_cols)
-    offset_vector = np.zeros(len(rows), dtype=float)
-    transformed_y = y.copy()
-    if family == "poisson_count_with_log_offset":
-        if offset_column is not None:
-            raw_offset = np.asarray([max(float(row[offset_column]), 1e-12) for row in rows], dtype=float)
-            offset_vector = np.log(raw_offset)
-        if np.any(y < 0):
-            raise PIRSModelExecutionError("Poisson PIRS response contains negative counts")
-        return _fit_poisson_irls(y=y, X=X, offset_vector=offset_vector, term_names=term_names)
-    if family in {"negative_binomial", "gamma", "hurdle", "zero_inflated", "dirichlet", "binomial_proportion", "sih_gamma_cost_component"}:
-        raise NotImplementedError(f"MSD 6.2 required model family '{family}' is not yet implemented.")
-    if family not in {"gaussian_identity", "ols"}:
-        # default to OLS if not strict, but maybe add warning? We will just pass through for now, as OLS is the fallback.
-        pass
-
-    if offset_column is not None:
-        raw_offset = np.asarray([max(float(row[offset_column]), 1e-12) for row in rows], dtype=float)
-        x_cols.append(raw_offset)
-        X = np.column_stack(x_cols)
-        term_names.append(offset_column)
-        
-    ridge = np.eye(X.shape[1], dtype=float) * 1e-8
+def _to_float(value: Any) -> float | None:
+    """Robust numeric parse. Unlike the previous ``.isdigit()`` check, this does
+    not misclassify negative or scientific-notation values as missing."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    text = str(value).strip()
+    if text.lower() in _MISSING_TOKENS:
+        return None
     try:
-        beta = np.linalg.solve(X.T @ X + ridge, X.T @ transformed_y)
-    except np.linalg.LinAlgError:
-        beta, *_ = np.linalg.lstsq(X, transformed_y, rcond=None)
-    linear = X @ beta
-    if family == "poisson_count_with_log_offset" and offset_column is not None:
-        fitted = np.exp(offset_vector + linear)
-    else:
-        fitted = linear
-    residual = y - fitted
-    sigma = float(np.std(residual, ddof=1)) if len(residual) > 1 else 0.0
-    standardized = residual / sigma if sigma > 0 else residual * 0.0
+        f = float(text)
+    except (TypeError, ValueError):
+        return None
+    return None if (math.isnan(f) or math.isinf(f)) else f
+
+
+def _build_design(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    response_column: str,
+    covariate_columns: Sequence[str],
+) -> tuple[np.ndarray, np.ndarray, list[str], list[str], dict[str, float]]:
+    """Build (y, X, term_names) with honest, non-silent missingness handling.
+
+    MSD §2.3: missingness is an observer signal, never erased silently. For every
+    covariate with missing cells we emit an explicit ``*_is_missing`` indicator
+    column and impute the underlying with the observed mean, recording the
+    missing share and a warning so the imputation is auditable, not invisible.
+    """
+    n = len(rows)
+    y = np.asarray([_to_float(row.get(response_column)) or 0.0 for row in rows], dtype=float)
+    x_cols: list[np.ndarray] = [np.ones(n, dtype=float)]
+    term_names: list[str] = ["intercept"]
+    warnings: list[str] = []
+    missing_shares: dict[str, float] = {}
+    for col in covariate_columns:
+        parsed = [_to_float(row.get(col)) for row in rows]
+        observed = [v for v in parsed if v is not None]
+        fill = float(np.mean(observed)) if observed else 0.0
+        missing_mask = [v is None for v in parsed]
+        share = float(sum(missing_mask)) / n if n else 0.0
+        values = np.asarray([fill if v is None else v for v in parsed], dtype=float)
+        x_cols.append(values)
+        term_names.append(col)
+        if share > 0.0:
+            x_cols.append(np.asarray([1.0 if m else 0.0 for m in missing_mask], dtype=float))
+            term_names.append(f"{col}_is_missing")
+            missing_shares[col] = share
+            warnings.append(f"covariate_missingness_indicator_added:{col}:{share:.4f}")
+    X = np.column_stack(x_cols) if x_cols else np.ones((n, 1))
+    return y, X, term_names, warnings, missing_shares
+
+
+def _block_index(rows: Sequence[Mapping[str, Any]]) -> list[int] | None:
+    """Spatial/temporal block id per row for block-preserving cross-fitting."""
+    keys = ("block_id", "spatial_block", "support_block", "municipality", "uf", "year")
+    for key in keys:
+        if rows and key in rows[0]:
+            return [hash(str(row.get(key))) for row in rows]
+    return None
+
+
+def _fit_model(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    response_column: str,
+    covariate_columns: Sequence[str],
+    offset_column: str | None,
+    family: str,
+    residual_mode: str,
+) -> dict[str, Any]:
+    """Fit a real GLM and compute the residuals HSIC will consume.
+
+    For ``cross_fitted``/``parametric_bootstrap`` residual modes (standard/deep
+    budgets) the residual field is genuinely out-of-fold — fitted on the
+    complement of each fold — satisfying MSD §6.6.1 and the §10 hard-abort that
+    forbids in-sample residuals for standard/deep HSIC.
+    """
+    y, X, term_names, missing_warnings, missing_shares = _build_design(
+        rows=rows, response_column=response_column, covariate_columns=covariate_columns
+    )
+    offset_vec: np.ndarray | None = None
+    if offset_column is not None and rows and offset_column in rows[0]:
+        raw = np.asarray([max(_to_float(row.get(offset_column)) or 1e-12, 1e-12) for row in rows], dtype=float)
+        offset_vec = np.log(raw) if family in {"poisson_count_with_log_offset", "negative_binomial"} else raw
+    if family == "poisson_count_with_log_offset" and np.any(y < 0):
+        raise PIRSModelExecutionError("Poisson PIRS response contains negative counts")
+
+    try:
+        fit = fit_glm(
+            y=y,
+            X=X,
+            family=family,
+            offset=offset_vec if family in {"poisson_count_with_log_offset", "negative_binomial"} else None,
+            term_names=term_names,
+        )
+    except GLMError as exc:
+        raise PIRSModelExecutionError(f"glm_fit_failed:{family}:{exc}") from exc
+
+    in_sample_residual = fit.primary_residual
+    residual_vector = in_sample_residual
+    actual_mode = "in_sample"
+    crossfit_diag: dict[str, Any] = {}
+    if residual_mode in {"cross_fitted", "parametric_bootstrap"}:
+        oof, crossfit_diag = crossfit_residuals(
+            y=y,
+            X=X,
+            family=family,
+            offset=offset_vec if family in {"poisson_count_with_log_offset", "negative_binomial"} else None,
+            n_folds=5,
+            block_index=_block_index(rows),
+        )
+        # Fall back to in-sample only for rows no fold could cover; record it and
+        # — critically — DO NOT keep claiming pure "cross_fitted" when some rows
+        # are in-sample. The §10 hard-abort forbids standard/deep HSIC consuming
+        # in-sample residuals, so a mixed vector must be labelled mixed and
+        # warned, never silently passed off as fully out-of-fold.
+        nan_mask = np.isnan(oof)
+        if nan_mask.any():
+            oof = oof.copy()
+            oof[nan_mask] = in_sample_residual[nan_mask]
+            backfilled = int(nan_mask.sum())
+            crossfit_diag["in_sample_backfilled_rows"] = backfilled
+            actual_mode = "cross_fitted_with_in_sample_backfill"
+            missing_warnings.append(
+                f"residual_mode_mixed_cross_fitted_and_in_sample_backfill:{backfilled}_rows"
+            )
+        else:
+            actual_mode = "cross_fitted"
+        residual_vector = oof
+
+    residual = residual_vector
     return {
-        "terms": term_names,
-        "coefficients": [float(v) for v in beta.tolist()],
+        "terms": fit.terms,
+        "coefficients": [float(v) for v in fit.coefficients.tolist()],
         "observed": [float(v) for v in y.tolist()],
-        "fitted": [float(v) for v in fitted.tolist()],
+        "fitted": [float(v) for v in fit.fitted.tolist()],
         "residual": [float(v) for v in residual.tolist()],
-        "standardized_residual": [float(v) for v in standardized.tolist()],
+        "standardized_residual": [float(v) for v in residual.tolist()],
+        "in_sample_residual": [float(v) for v in in_sample_residual.tolist()],
         "rmse": float(math.sqrt(float(np.mean(np.square(residual))))) if len(residual) else None,
         "mean_residual": float(np.mean(residual)) if len(residual) else None,
-        "sigma": sigma,
-        "solver": "ordinary_least_squares",
+        "sigma": float(np.std(residual, ddof=1)) if len(residual) > 1 else 0.0,
+        "solver": f"glm_irls:{family}",
+        "residual_type": fit.residual_type,
+        "residual_mode_requested": residual_mode,
+        "residual_mode_actual": actual_mode,
+        "irls_iterations": fit.n_iter,
+        "irls_converged": fit.converged,
+        "deviance": fit.deviance,
+        "dispersion": fit.dispersion,
+        "crossfit": crossfit_diag,
+        "missing_shares": missing_shares,
+        "warnings": missing_warnings,
     }
 
 
@@ -279,7 +309,15 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
     digest = _hash_payload(model_basis)[:12]
     model_id = f"pirs_model_{_safe_id(outcome_field_id)}_{digest}"
     residual_field_id = f"pirs_residual_{_safe_id(outcome_field_id)}_{digest}"
-    fit = _fit_least_squares(rows=rows, response_column=response_column, covariate_columns=covariate_columns, offset_column=offset_column, family=family)
+    residual_mode = str(manifest.get("residual_mode") or "in_sample")
+    fit = _fit_model(
+        rows=rows,
+        response_column=response_column,
+        covariate_columns=covariate_columns,
+        offset_column=offset_column,
+        family=family,
+        residual_mode=residual_mode,
+    )
     coefficients = [{"model_id": model_id, "term": term, "coefficient": coef, "term_index": i, "family": family} for i, (term, coef) in enumerate(zip(fit["terms"], fit["coefficients"], strict=False))]
     fitted_rows = []
     residual_rows = []
@@ -321,8 +359,14 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
             "rmse": fit["rmse"],
             "mean_residual": fit["mean_residual"],
             "sigma": fit["sigma"],
-            "residual_mode": manifest.get("residual_mode"),
+            "residual_mode": fit.get("residual_mode_actual"),
+            "residual_mode_requested": fit.get("residual_mode_requested"),
+            "residual_type": fit.get("residual_type"),
             "fold_scheme": manifest.get("fold_scheme"),
+            "crossfit": fit.get("crossfit"),
+            "deviance": fit.get("deviance"),
+            "dispersion": fit.get("dispersion"),
+            "missing_shares": fit.get("missing_shares"),
             "solver": fit.get("solver"),
             "irls_iterations": fit.get("irls_iterations"),
             "irls_converged": fit.get("irls_converged"),

@@ -179,6 +179,141 @@ def linear_hsic_statistic(x: list[float], residuals: list[float]) -> float:
     return max(0.0, covariance * covariance / (variance_x * variance_y))
 
 
+def _np_rff_features(values: "Any", *, bandwidth: float, features: int, seed: int) -> "Any":
+    """Random Fourier features approximating an RBF kernel (NumPy)."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    v = np.asarray(values, dtype=float)
+    omega = rng.standard_normal(features) / bandwidth
+    phase = rng.uniform(0.0, 2.0 * math.pi, features)
+    return math.sqrt(2.0 / features) * np.cos(np.outer(v, omega) + phase[None, :])
+
+
+def _np_nystrom_features(values: "Any", *, bandwidth: float, landmarks: int, seed: int) -> "Any":
+    """Nyström RBF feature map from a landmark subset (NumPy)."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    v = np.asarray(values, dtype=float)
+    m = min(landmarks, v.shape[0])
+    idx = rng.choice(v.shape[0], size=m, replace=False)
+    sel = v[idx]
+    cross = np.exp(-((v[:, None] - sel[None, :]) ** 2) / (2.0 * bandwidth ** 2))
+    basis = np.exp(-((sel[:, None] - sel[None, :]) ** 2) / (2.0 * bandwidth ** 2))
+    eigenvalues, eigenvectors = np.linalg.eigh(basis)
+    inv_root = eigenvectors @ np.diag(1.0 / np.sqrt(np.clip(eigenvalues, 1e-8, None))) @ eigenvectors.T
+    return cross @ inv_root
+
+
+def _np_feature_hsic(x_features: "Any", y_features: "Any") -> float:
+    import numpy as np
+
+    n = x_features.shape[0]
+    xc = x_features - x_features.mean(axis=0, keepdims=True)
+    yc = y_features - y_features.mean(axis=0, keepdims=True)
+    cross = xc.T @ yc / max(n - 1, 1)
+    return float((cross * cross).sum())
+
+
+def numpy_kernel_hsic_permutation_test(
+    *,
+    covariate: list[float],
+    residuals: list[float],
+    permutations: int,
+    seed: int,
+    kernel: str = "rbf",
+    permutation_indices: list[list[int]] | None = None,
+    budget: str = "fast",
+    max_exact: int = 5000,
+) -> tuple[float, list[float], dict[str, Any]]:
+    """Real non-linear centered-kernel HSIC + permutation null, NumPy-only.
+
+    Mode selection (MSD §6.7): exact centered-kernel HSIC for ``n <= max_exact``;
+    for larger ``n`` it switches to feature-map HSIC to avoid an n×n matrix —
+    Random Fourier Features for fast budget, Nyström for standard/deep — keeping
+    the estimator genuinely non-linear at national scale rather than degrading to
+    a linear stand-in.
+
+    ``permutation_indices`` supplies structured permutations (e.g. within-block
+    cyclic time shifts, MSD §6.8/§6.9); otherwise an i.i.d. null is used.
+    """
+    import numpy as np
+
+    n = len(covariate)
+    if n < 2 or len(residuals) != n:
+        return 0.0, [], {"kernel": kernel, "n": n, "degenerate": True}
+
+    bandwidth_x = _bandwidth(covariate, seed=seed)
+    bandwidth_y = _bandwidth(residuals, seed=seed + 1)
+    null_kind = "structured_provided" if permutation_indices is not None else "iid_permutation"
+
+    def _iter_perms() -> "Any":
+        if permutation_indices is not None:
+            for perm in permutation_indices:
+                perm_arr = np.asarray(perm, dtype=int)
+                if perm_arr.shape[0] == n:
+                    yield perm_arr
+        else:
+            rng = np.random.default_rng(seed)
+            for _ in range(max(int(permutations), 1)):
+                yield rng.permutation(n)
+
+    if n <= max_exact:
+        hsic_mode = "exact"
+
+        def _kernel_matrix(values: list[float], bandwidth: float) -> "np.ndarray":
+            v = np.asarray(values, dtype=float)
+            dist = np.abs(v[:, None] - v[None, :])
+            if kernel == "linear":
+                return v[:, None] * v[None, :]
+            if kernel == "matern":
+                scaled = math.sqrt(3.0) * dist / bandwidth
+                return (1.0 + scaled) * np.exp(-scaled)
+            return np.exp(-(dist ** 2) / (2.0 * bandwidth ** 2))
+
+        def _center(matrix: "np.ndarray") -> "np.ndarray":
+            m = matrix.shape[0]
+            h = np.eye(m) - np.full((m, m), 1.0 / m)
+            return h @ matrix @ h
+
+        k_centered = _center(_kernel_matrix(covariate, bandwidth_x))
+        l_centered = _center(_kernel_matrix(residuals, bandwidth_y))
+        denom = max((n - 1) ** 2, 1)
+        statistic = float(np.sum(k_centered * l_centered) / denom)
+        null_statistics = [
+            float(np.sum(k_centered * l_centered[np.ix_(perm, perm)]) / denom) for perm in _iter_perms()
+        ]
+        approximation = None
+    else:
+        n_features = int(min(max(128, int(math.sqrt(n) * 4)), 1024))
+        if budget == "fast":
+            hsic_mode = "rff"
+            x_feat = _np_rff_features(covariate, bandwidth=bandwidth_x, features=n_features, seed=seed)
+            y_feat = _np_rff_features(residuals, bandwidth=bandwidth_y, features=n_features, seed=seed + 1)
+        else:
+            hsic_mode = "nystrom"
+            landmarks = int(min(max(64, int(math.sqrt(n))), 1024))
+            x_feat = _np_nystrom_features(covariate, bandwidth=bandwidth_x, landmarks=landmarks, seed=seed)
+            y_feat = _np_nystrom_features(residuals, bandwidth=bandwidth_y, landmarks=landmarks, seed=seed + 1)
+        statistic = _np_feature_hsic(x_feat, y_feat)
+        null_statistics = [_np_feature_hsic(x_feat, y_feat[perm]) for perm in _iter_perms()]
+        approximation = hsic_mode
+
+    diagnostics = {
+        "kernel": kernel,
+        "bandwidth_x": bandwidth_x,
+        "bandwidth_y": bandwidth_y,
+        "estimator": "biased_centered_kernel_hsic_numpy",
+        "hsic_mode": hsic_mode,
+        "approximation": approximation,
+        "null_kind": null_kind,
+        "permutations_executed": len(null_statistics),
+        "n": n,
+    }
+    return statistic, null_statistics, diagnostics
+
+
 def permutation_p_value(
     *,
     statistic: float,

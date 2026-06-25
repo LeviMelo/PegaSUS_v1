@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pegasus.sidra.category_maps import bounded_pushforward_scaffold
+
+if TYPE_CHECKING:
+    import polars as pl
 
 
 class HighDimensionalExposureError(ValueError):
@@ -72,3 +75,40 @@ def bound_high_dimensional_sidra_exposure(
 def require_bounded_pushforward(bound: HighDimensionalBound) -> None:
     if bound.status == "blocked":
         raise HighDimensionalExposureError(bound.reason or "High-dimensional SIDRA exposure is not legally bounded.")
+
+
+def execute_bounded_pushforward(
+    frame: "pl.DataFrame",
+    bound: HighDimensionalBound,
+    *,
+    value_col: str,
+    numerator_col: str | None = None,
+    denominator_col: str | None = None,
+) -> "pl.DataFrame":
+    """Physically marginalize a SIDRA fact frame onto the bounded axis set.
+
+    This is the real groupby-sum the scaffold only ever decided about. For
+    additive measures it sums ``value_col`` over the dropped axes; for
+    rates/proportions it requires numerator/denominator columns and recovers the
+    ratio via Radon-Nikodym (direct ratio marginalization is illegal, §3.9.1).
+    """
+    require_bounded_pushforward(bound)
+    if bound.status == "not_required":
+        return frame
+    from pegasus.sidra.pushforward import (
+        execute_additive_pushforward,
+        execute_rate_pushforward,
+    )
+
+    keep = list(bound.exposed_axes)
+    drop = list(bound.axes_dropped)
+    if numerator_col is not None and denominator_col is not None:
+        return execute_rate_pushforward(
+            frame,
+            numerator_col=numerator_col,
+            denominator_col=denominator_col,
+            keep_axes=keep,
+        )
+    return execute_additive_pushforward(
+        frame, value_col=value_col, keep_axes=keep, drop_axes=drop
+    )

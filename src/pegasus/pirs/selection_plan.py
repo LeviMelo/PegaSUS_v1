@@ -6,7 +6,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from pegasus.efg.empirical_compression import empirical_compress
 from pegasus.pirs.crossfit import assert_standard_deep_not_in_sample, fold_scheme_for_budget
+from pegasus.pirs.design_matrix import _q_value_vector, _read_rows as _read_q_rows
 from pegasus.pirs.diagnostics import build_pirs_diagnostics
 from pegasus.pirs.families import exposure_offset_source, family_for_outcome
 from pegasus.pirs.field_selection import select_fields_for_pirs
@@ -219,6 +221,26 @@ def selection_plan_summary(plan: PIRSSelectionPlan, *, manifest_path: str | Path
     }
 
 
+def _empirical_compression_for_plan(run_dir: Path, plan: PIRSSelectionPlan) -> Any | None:
+    """MSD §3.15.2 Stage-2: fold empirically-equivalent (C_emp >= 0.98) selected
+    covariates into higher-utility canonicals, on materialized Q_tensor vectors.
+
+    Runs only post-TopK (here) and only when value vectors exist; if Q_tensor is
+    not yet materialized every vector is missing and the report is a no-op.
+    """
+    covariates = plan.selected_covariates
+    if len(covariates) < 2:
+        return None
+    q_rows = _read_q_rows(run_dir / "Q_tensor.parquet")
+    q_by_id = {str(row.get("field_id")): row for row in q_rows if row.get("field_id") not in (None, "")}
+    items: list[tuple[str, float, list[float] | None]] = []
+    for candidate in covariates:
+        q = q_by_id.get(candidate.field_id)
+        vector = _q_value_vector(q) if q is not None else None
+        items.append((candidate.field_id, float(candidate.utility), vector))
+    return empirical_compress(items)
+
+
 def write_pirs_selection_plan(
     *,
     run_dir: str | Path,
@@ -233,6 +255,31 @@ def write_pirs_selection_plan(
     manifest = plan.as_manifest()
     manifest["manifest_path"] = str(output_path)
     manifest["summary"] = selection_plan_summary(plan, manifest_path=output_path)
+
+    # Stage-2 empirical compression realises (not just reports) by filtering the
+    # selected covariate set the design plan consumes downstream. Suppressed
+    # nodes are retained in V_fields/Q_tensor and recorded here — no data lost.
+    compression = _empirical_compression_for_plan(root, plan)
+    if compression is not None and compression.suppressed_count:
+        survivors = [
+            field_id
+            for field_id in plan.selected_covariate_field_ids
+            if compression.canonical_by_field_id.get(field_id, field_id) == field_id
+        ]
+        manifest["empirical_compression"] = compression.as_manifest()
+        manifest["selected_covariate_field_ids_precompression"] = list(plan.selected_covariate_field_ids)
+        manifest["selected_covariate_field_ids"] = survivors
+        survivor_set = set(survivors)
+        manifest["selected_covariates"] = [
+            covariate
+            for covariate in manifest["selected_covariates"]
+            if covariate.get("field_id") in survivor_set
+        ]
+        manifest["summary"]["selected_covariate_count"] = len(survivors)
+        manifest["summary"]["empirical_compression_suppressed"] = compression.suppressed_count
+    elif compression is not None:
+        manifest["empirical_compression"] = compression.as_manifest()
+
     _write_json(output_path, manifest)
     return manifest
 

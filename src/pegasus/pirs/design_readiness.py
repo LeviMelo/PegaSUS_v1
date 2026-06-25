@@ -30,7 +30,7 @@ BLOCKING_MATERIALIZATION_STATES: frozenset[str] = frozenset({
     "blocked",
 })
 PLACEHOLDER_WARNING_TOKENS: frozenset[str] = frozenset({
-    "q_tensor_placeholder_no_numerical_tensor",
+    "q_tensor_unmaterialized_candidate_no_numerical_tensor",
     "efg_promotion_metadata_only",
 })
 
@@ -249,7 +249,7 @@ def design_readiness_rejection_reasons(*, field: dict[str, Any] | None, q_state:
             reasons.append(f"q_state_not_model_ready:{q_status}")
         for warning in _warnings(q_state):
             if warning in PLACEHOLDER_WARNING_TOKENS:
-                reasons.append(f"q_tensor_placeholder:{warning}")
+                reasons.append(f"q_tensor_unmaterialized_candidate:{warning}")
         n_eff = q_state.get("n_eff")
         try:
             if n_eff is not None and float(n_eff) <= 0:

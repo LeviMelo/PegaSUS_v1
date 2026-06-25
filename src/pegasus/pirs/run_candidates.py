@@ -36,7 +36,7 @@ class PIRSRunCandidateGateResult:
                 "metadata_only_fields_model_eligible": False,
                 "quarantined_descriptive_fields_model_eligible": False,
                 "dashboard_unsafe_fields_model_eligible": False,
-                "placeholder_q_tensor_fields_model_eligible": False,
+                "unmaterialized_candidate_q_tensor_fields_model_eligible": False,
             },
         }
 
@@ -152,8 +152,8 @@ def pirs_candidate_rejection_reason(field: dict[str, Any], q: dict[str, Any] | N
     if q_state in {"illegal_excluded", "blocked", "quarantined_descriptive"}:
         return f"q_state_{q_state}_not_model_eligible"
     q_warnings = {str(value) for value in _as_list(q.get("warnings"))}
-    if "q_tensor_placeholder_no_numerical_tensor" in q_warnings or "efg_promotion_metadata_only" in q_warnings:
-        return "placeholder_q_tensor_not_model_eligible"
+    if "q_tensor_unmaterialized_candidate_no_numerical_tensor" in q_warnings or "efg_promotion_metadata_only" in q_warnings:
+        return "unmaterialized_candidate_q_tensor_not_model_eligible"
     n_eff = _safe_float(q.get("n_eff"), 0.0) or 0.0
     if n_eff <= 0.0:
         return "nonpositive_n_eff_not_model_eligible"

@@ -515,3 +515,176 @@ def build_efg(*args, **kwargs):
             "blocked_count": 1,
         })
     return result
+
+# ---- Hardline MSD bridge expansion ----
+# This override turns the Slice 28Y bridge manifest from passive metadata into
+# graph expansion. Bridge candidates are evaluated through the same Δ legality
+# boundary as ordinary operators and become FieldNodes when legal.
+from pegasus.efg.bridges import bridge_summary as _hardline_bridge_summary
+from pegasus.efg.bridges import plan_bridge_candidates as _hardline_plan_bridge_candidates
+from pegasus.efg.core_seed import build_core_seed_set as _hardline_build_core_seed_set
+from pegasus.efg.core_seed import core_seed_summary as _hardline_core_seed_summary
+
+
+def _hardline_expand_bridge_candidates(
+    result: EFGResult,
+    *,
+    registry_root: str | Path = "config/registries",
+    intent: Any = None,
+    registries: Any = None,
+    operator_budget: int = 256,
+) -> EFGResult:
+    fields = list(result.fields)
+    edges = list(result.edges)
+    failures = list(result.failed_branches)
+    warnings = list(result.warnings)
+    legality = dict(result.legality_summary)
+    registry_arg = registries or {"registry_root": str(registry_root)}
+    by_id = {field.id: field for field in fields}
+
+    bridge_plan = _hardline_plan_bridge_candidates(fields, registry_root=registry_root, intent=intent)
+    applied = 0
+    for candidate in bridge_plan.candidates:
+        if applied >= operator_budget:
+            failures.append(make_failed_branch_record(
+                parents=[],
+                operator=OperatorSpec(name=candidate.required_operator, role=candidate.bridge_type),
+                reason="bridge_operator_budget_exhausted",
+                disposition="deferred",
+                warnings=["bridge_operator_budget_exhausted"],
+            ))
+            legality["blocked"] = int(legality.get("blocked", 0)) + 1
+            continue
+
+        parents = [by_id.get(candidate.numerator_id)]
+        if candidate.denominator_id:
+            parents.append(by_id.get(candidate.denominator_id))
+        parents = [parent for parent in parents if parent is not None]
+        if not parents:
+            failures.append(make_failed_branch_record(
+                parents=[],
+                operator=OperatorSpec(name=candidate.required_operator, role=candidate.bridge_type),
+                reason="bridge_candidate_parent_missing",
+                disposition="blocked",
+                warnings=list(candidate.warnings),
+            ))
+            legality["blocked"] = int(legality.get("blocked", 0)) + 1
+            continue
+
+        operator = OperatorSpec(
+            name=str(candidate.required_operator),
+            role=str(candidate.bridge_type),
+            output_kind="bridge_module" if not candidate.denominator_id else "intensive_density",
+            params={
+                "bridge_id": candidate.bridge_id,
+                "bridge_type": candidate.bridge_type,
+                "support_relation": candidate.support_relation,
+                "registry_evidence": list(candidate.registry_evidence),
+            },
+        )
+        alignment = None
+        if len(parents) == 2:
+            try:
+                alignment = align_fields(parents[0], parents[1])
+            except Exception:
+                alignment = None
+        legality["attempted"] = int(legality.get("attempted", 0)) + 1
+        try:
+            delta = evaluate_delta(
+                parents=parents,
+                operator=operator,
+                intent=intent,
+                registries=registry_arg,
+                alignment=alignment,
+            )
+        except ValueError as exc:
+            failures.append(make_failed_branch_record(
+                parents=parents,
+                operator=operator,
+                reason=str(exc),
+                disposition="unsupported",
+                warnings=list(candidate.warnings),
+            ))
+            legality["illegal"] = int(legality.get("illegal", 0)) + 1
+            continue
+
+        if not delta.legal:
+            failures.append(make_failed_branch_record(
+                parents=parents,
+                operator=operator,
+                delta=delta,
+                alignment=alignment,
+                reason=(alignment.failure_reason if alignment and alignment.failure_reason else ";".join(delta.failed_terms) or "bridge_delta_rejected"),
+                warnings=list(candidate.warnings),
+            ))
+            legality["illegal"] = int(legality.get("illegal", 0)) + 1
+            continue
+
+        op_result, field = apply_operator(
+            operator=operator,
+            parents=parents,
+            delta=delta,
+            alignment=alignment,
+            registries=registry_arg,
+        )
+        if op_result.status != "success" or field is None:
+            failures.append(make_failed_branch_record(
+                parents=parents,
+                operator=operator,
+                delta=delta,
+                alignment=alignment,
+                reason="bridge_operator_application_blocked",
+                disposition="blocked",
+                warnings=list(op_result.warnings),
+            ))
+            legality["blocked"] = int(legality.get("blocked", 0)) + 1
+            continue
+
+        fields.append(field)
+        by_id[field.id] = field
+        for parent in parents:
+            edges.append(_edge(parent, field, operator))
+        legality["legal"] = int(legality.get("legal", 0)) + 1
+        applied += 1
+
+    seed_set = _hardline_build_core_seed_set(fields, registry_root=registry_root, intent=intent)
+    payload = {
+        "field_ids": [field.id for field in fields],
+        "edge_ids": [edge.edge_id for edge in edges],
+        "failed_ids": [branch.failed_branch_id for branch in failures],
+        "registry_hashes": result.registry_hashes,
+        "bridge_expansion": bridge_plan.as_manifest(),
+    }
+    expanded = EFGResult(
+        schema_version=result.schema_version,
+        efg_id=f"efg_{content_hash(payload)[:24]}",
+        substrate_id=result.substrate_id,
+        fields=tuple(fields),
+        edges=tuple(_dedupe_edges(edges)),
+        failed_branches=tuple(failures),
+        warnings=tuple(dict.fromkeys(warnings)),
+        variable_dictionary=tuple(_dictionary(field) for field in fields),
+        precompression=result.precompression,
+        source_hashes=result.source_hashes,
+        registry_hashes=result.registry_hashes,
+        legality_summary=legality,
+        operator_mode=result.operator_mode,
+    )
+    object.__setattr__(expanded, "_slice28y_core_seed_summary", _hardline_core_seed_summary(seed_set))
+    object.__setattr__(expanded, "_slice28y_bridge_plan_summary", _hardline_bridge_summary(bridge_plan))
+    return expanded
+
+
+_HARDLINE_BASE_BUILD_EFG = _build_efg_base
+
+
+def build_efg(*args, **kwargs):
+    base = _HARDLINE_BASE_BUILD_EFG(*args, **kwargs)
+    return _hardline_expand_bridge_candidates(
+        base,
+        registry_root=kwargs.get("registry_root", "config/registries"),
+        intent=kwargs.get("intent"),
+        registries=kwargs.get("registries"),
+        operator_budget=int(kwargs.get("operator_budget", 256)),
+    )
+

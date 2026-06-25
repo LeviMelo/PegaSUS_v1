@@ -1,4 +1,4 @@
-"""Attach an autonomous EFG result to an existing 17-key run bundle."""
+"""Attach autonomous EFG output as first-class graph surfaces."""
 
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ from typing import Any
 
 from pegasus.core.hashing import sha256_file
 from pegasus.efg.dag import EFGResult
+from pegasus.efg.executor import execute_efg_result
 from pegasus.efg.lineage import lineage_hash
+from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.output.validate import validate_output_bundle
-from pegasus.storage import append_replace, read_table, write_table
+from pegasus.storage import write_table
 
 
 def _now() -> str:
@@ -23,20 +25,11 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    return read_table(path).to_pylist()
-
-
 def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
     write_table(path, rows, schema_policy="preserve")
 
 
-def _append_replace(path: Path, rows: list[dict[str, Any]], *, id_column: str) -> None:
-    append_replace(path, rows, id_column=id_column)
-
-
 def _v_row(field) -> dict[str, Any]:
-    warnings = list(dict.fromkeys([*field.warnings, "autonomous_efg_metadata_only"]))
     return {
         "field_id": field.id,
         "name": field.name,
@@ -50,87 +43,45 @@ def _v_row(field) -> dict[str, Any]:
         "axes_json": _json(field.axes),
         "operator": field.operator,
         "provenance": _json(field.provenance),
-        "state": "quarantined_descriptive",
-        "dashboard_safe": "False",
-        "warnings": _json(warnings),
+        "state": field.state.value if hasattr(field.state, "value") else str(field.state),
+        "dashboard_safe": str(field.dashboard_safe),
+        "warnings": _json(field.warnings),
         "lineage_hash": lineage_hash(field.lineage),
-        "registry_hash": str(field.lineage.registry_versions.get("efg_operator_registry", "slice19a")),
-        "materialization_state": field.materialization_state.value,
+        "registry_hash": str(field.lineage.registry_versions.get("efg_operator_registry", "unknown")),
+        "materialization_state": field.materialization_state.value if hasattr(field.materialization_state, "value") else str(field.materialization_state),
         "path": field.path,
     }
 
 
 def _q_row(field) -> dict[str, Any]:
-    missingness = field.support.get("missing_rate")
+    support = field.support or {}
     return {
         "field_id": field.id,
-        "n_events": float(field.support.get("row_count") or 0.0),
-        "n_denom": None,
-        "n_eff": float(field.support.get("non_null_count") or 0.0),
-        "cov_S": None,
-        "cov_T": None,
-        "missingness": float(missingness) if missingness is not None else None,
-        "zero_inflation": None,
-        "denom_fragility": 1.0,
-        "cv": None,
-        "moran_i": None,
-        "temporal_roughness": None,
-        "spatial_entropy": None,
-        "provenance_risk": 0.75,
-        "race_axis_source": field.axes.get("race_axis_type"),
-        "race_axis_target": None,
-        "missing_race_share": None,
-        "emission_prior_strength": None,
-        "race_bridge_cv": None,
-        "sensitivity_width": None,
-        "bridge_mode": None,
-        "state": "quarantined_descriptive",
-        "dashboard_safe": "False",
-        "warnings": _json(["autonomous_efg_metadata_only", "q_tensor_no_materialized_tensor"]),
+        "n_events": float(support.get("n_events") or support.get("row_count") or 0.0),
+        "n_denom": support.get("n_denom"),
+        "n_eff": support.get("n_eff"),
+        "cov_S": support.get("cov_S"),
+        "cov_T": support.get("cov_T"),
+        "missingness": support.get("missing_rate") or support.get("missingness"),
+        "zero_inflation": support.get("zero_inflation"),
+        "denom_fragility": support.get("denom_fragility"),
+        "cv": support.get("cv"),
+        "moran_i": support.get("moran_i"),
+        "temporal_roughness": support.get("temporal_roughness"),
+        "spatial_entropy": support.get("spatial_entropy"),
+        "provenance_risk": 0.0 if "official" in set(field.provenance or []) else 0.5,
+        "race_axis_source": field.axes.get("race_axis_type") or field.axes.get("race_axis"),
+        "race_axis_target": field.axes.get("race_axis_target"),
+        "missing_race_share": support.get("missing_race_share"),
+        "emission_prior_strength": support.get("emission_prior_strength"),
+        "race_bridge_cv": support.get("race_bridge_cv"),
+        "sensitivity_width": support.get("sensitivity_width"),
+        "bridge_mode": support.get("bridge_mode"),
+        "state": field.state.value if hasattr(field.state, "value") else str(field.state),
+        "dashboard_safe": str(field.dashboard_safe),
+        "warnings": _json(field.warnings),
         "computed_at": _now(),
         "q_schema_version": "1.0",
-    }
-
-
-def _dictionary_row(field, metadata: dict[str, Any]) -> dict[str, Any]:
-    warning = metadata.get("interpretation_warning") or "Autonomous EFG metadata node; numerical tensor not materialized."
-    return {
-        "field_id": field.id,
-        "display_name": metadata.get("display_name", field.name),
-        "technical_name": metadata.get("technical_name", field.name),
-        "definition": metadata.get("definition", f"Autonomous EFG node generated by {field.operator}."),
-        "estimand_label": metadata.get("estimand_label", field.kind),
-        "source_systems": _json(metadata.get("source_systems", field.source)),
-        "carrier": field.carrier,
-        "unit": field.unit,
-        "support_description": _json(field.support),
-        "axis_description": _json(field.axes),
-        "provenance_description": _json(field.provenance),
-        "state": "quarantined_descriptive",
-        "dashboard_safe": "False",
-        "interpretation_warning": warning,
-    }
-
-
-def _warning_row(field) -> dict[str, Any]:
-    return {
-        "warning_id": f"autonomous_efg_metadata_only_{field.id}",
-        "field_id": field.id,
-        "source": "pegasus.efg.compile_attach",
-        "severity": "info",
-        "code": "autonomous_efg_metadata_only",
-        "message": "Autonomous EFG node is graph-authoritative metadata without a materialized numerical tensor.",
-        "inherited_from": _json(field.warnings),
-        "created_at": _now(),
-    }
-
-
-def _quarantined_row(field) -> dict[str, Any]:
-    return {
-        "field_id": field.id,
-        "state": "quarantined_descriptive",
-        "reason": "autonomous_efg_node_without_materialized_tensor",
-        "warnings": _json(["autonomous_efg_metadata_only", "q_tensor_no_materialized_tensor"]),
     }
 
 
@@ -146,16 +97,66 @@ def _edge_row(edge) -> dict[str, Any]:
     }
 
 
-def _failed_row(branch) -> dict[str, Any]:
+def _warning_rows(field) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, warning in enumerate(field.warnings or []):
+        rows.append({
+            "warning_id": f"warning::{field.id}::{idx}",
+            "field_id": field.id,
+            "source": "pegasus.efg.executor",
+            "severity": "warning",
+            "code": str(warning),
+            "message": str(warning),
+            "inherited_from": _json([]),
+            "created_at": _now(),
+        })
+    return rows
+
+
+def _dictionary_row(field, metadata: dict[str, Any]) -> dict[str, Any]:
     return {
-        "failed_branch_id": branch.failed_branch_id,
-        "attempted_operator": branch.attempted_operator,
-        "parent_field_ids": _json(branch.parent_field_ids),
-        "failure_stage": branch.failure_stage,
-        "failed_terms": _json(branch.failed_terms),
-        "reason": branch.reason,
-        "warnings": _json(branch.warnings),
-        "created_at": branch.created_at,
+        "field_id": field.id,
+        "name": field.name,
+        "carrier": field.carrier,
+        "unit": field.unit,
+        "support_description": _json(field.support),
+        "axis_description": _json(field.axes),
+        "provenance_description": _json(field.provenance),
+        "state": field.state.value if hasattr(field.state, "value") else str(field.state),
+        "dashboard_safe": str(field.dashboard_safe),
+        "interpretation_warning": ";".join(field.warnings or []),
+        "diagnostic_role": metadata.get("diagnostic_role"),
+        "topology": metadata.get("topology"),
+        "position": metadata.get("position"),
+        "icd_group_kind": metadata.get("icd_group_kind"),
+        "icd_group_id": metadata.get("icd_group_id"),
+    }
+
+
+def _failed_row(branch) -> dict[str, Any]:
+    if hasattr(branch, "as_manifest"):
+        payload = branch.as_manifest()
+    else:
+        payload = dict(branch)
+    return {
+        "failed_branch_id": str(payload.get("failed_branch_id") or payload.get("id") or f"failed::{hash(str(payload))}"),
+        "attempted_operator": str(payload.get("attempted_operator") or payload.get("operator") or payload.get("operator_name") or "unknown"),
+        "parent_field_ids": _json(payload.get("parent_field_ids") or payload.get("parents") or []),
+        "failure_stage": str(payload.get("failure_stage") or payload.get("stage") or "declaration"),
+        "failed_terms": _json(payload.get("failed_terms") or []),
+        "reason": str(payload.get("reason") or payload.get("failure_reason") or "blocked"),
+        "warnings": _json(payload.get("warnings") or []),
+        "created_at": str(payload.get("created_at") or _now()),
+    }
+
+
+def _quarantined_row(field) -> dict[str, Any]:
+    return {
+        "field_id": field.id,
+        "reason": ";".join(field.warnings or []) or "not_dashboard_safe",
+        "state": field.state.value if hasattr(field.state, "value") else str(field.state),
+        "dashboard_safe": str(field.dashboard_safe),
+        "created_at": _now(),
     }
 
 
@@ -169,74 +170,115 @@ class AutonomousEFGAttachResult:
     edge_count: int
     failed_branch_count: int
     output_validation_ok: bool
+    execution_manifest_path: str | None = None
 
     def as_manifest(self) -> dict[str, Any]:
-        return {
-            "schema_version": "19B.1",
+        return dict(vars(self)) | {
             "status": "attached",
-            "run_dir": self.run_dir,
-            "manifest_path": self.manifest_path,
-            "manifest_hash": self.manifest_hash,
-            "efg_id": self.efg_id,
-            "field_count": self.field_count,
-            "edge_count": self.edge_count,
-            "failed_branch_count": self.failed_branch_count,
-            "output_validation_ok": self.output_validation_ok,
             "graph_authority": "autonomous_efg_core",
-            "legacy_computed_fields_preserved": True,
-            "first_class_output_keys_added": 0,
+            "legacy_computed_fields_preserved": False,
+            "first_class_output_keys_added": 7,
+            "first_class_output_keys_replaced": [
+                "V_fields",
+                "E_DAG",
+                "Q_tensor",
+                "Warnings",
+                "VariableDictionary",
+                "FailedBranches",
+                "QuarantinedFields",
+            ],
         }
 
 
 def attach_autonomous_efg_to_run(
     *,
     run_dir: str | Path,
-    result: EFGResult,
+    efg: EFGResult | None = None,
+    result: EFGResult | None = None,
     validate: bool = True,
+    bundle: OutputBundleManager | None = None,
 ) -> AutonomousEFGAttachResult:
+    efg = efg or result
+    if efg is None:
+        raise TypeError("attach_autonomous_efg_to_run requires efg= or result=")
+
     root = Path(run_dir)
     tables = root / "Tables"
     tables.mkdir(parents=True, exist_ok=True)
-    manifest_path = tables / "efg_autonomous_manifest.json"
-    manifest_path.write_text(
-        json.dumps(result.as_manifest(), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+
+    efg, execution_report = execute_efg_result(
+        efg,
+        output_dir=tables / "efg_tensors",
+        require_materialized=True,
+    )
+    execution_path = tables / "efg_execution_manifest.json"
+    execution_path.write_text(
+        json.dumps(execution_report.as_manifest(), indent=2, sort_keys=True, ensure_ascii=False, default=str) + "\n",
         encoding="utf-8",
     )
-    dictionary = {str(item["field_id"]): item for item in result.variable_dictionary}
 
-    _append_replace(root / "V_fields.parquet", [_v_row(field) for field in result.fields], id_column="field_id")
-    _append_replace(root / "Q_tensor.parquet", [_q_row(field) for field in result.fields], id_column="field_id")
-    _append_replace(
-        root / "VariableDictionary.parquet",
-        [_dictionary_row(field, dictionary.get(field.id, {})) for field in result.fields],
-        id_column="field_id",
+    manifest_path = tables / "efg_autonomous_manifest.json"
+    manifest_payload = efg.as_manifest()
+    manifest_payload["execution"] = execution_report.as_manifest()
+    manifest_payload["legacy_computed_fields_preserved"] = False
+    manifest_payload["graph_authority"] = "autonomous_efg_core"
+    manifest_path.write_text(
+        json.dumps(manifest_payload, indent=2, sort_keys=True, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
     )
-    _append_replace(root / "Warnings.parquet", [_warning_row(field) for field in result.fields], id_column="warning_id")
-    _append_replace(
-        root / "QuarantinedFields.parquet",
-        [_quarantined_row(field) for field in result.fields],
-        id_column="field_id",
-    )
-    _append_replace(root / "E_DAG.parquet", [_edge_row(edge) for edge in result.edges], id_column="edge_id")
-    _append_replace(
-        root / "FailedBranches.parquet",
-        [_failed_row(branch) for branch in result.failed_branches],
-        id_column="failed_branch_id",
-    )
+    manifest_hash = sha256_file(manifest_path)
 
-    validation_ok = True
-    if validate:
+    metadata_by_field = {
+        str(item.get("field_id")): item
+        for item in efg.variable_dictionary
+        if isinstance(item, dict) and item.get("field_id")
+    }
+
+    v_rows = [_v_row(field) for field in efg.fields]
+    edge_rows = [_edge_row(edge) for edge in efg.edges]
+    q_rows = [_q_row(field) for field in efg.fields]
+    warning_rows = [row for field in efg.fields for row in _warning_rows(field)]
+    dictionary_rows = [_dictionary_row(field, metadata_by_field.get(field.id, {})) for field in efg.fields]
+    failed_rows = [_failed_row(branch) for branch in efg.failed_branches]
+    quarantined_rows = [_quarantined_row(field) for field in efg.fields if str(field.dashboard_safe) != "True"]
+
+    if bundle is not None:
+        bundle.set_table("V_fields", v_rows)
+        bundle.set_table("E_DAG", edge_rows)
+        bundle.set_table("Q_tensor", q_rows)
+        bundle.set_table("Warnings", warning_rows)
+        bundle.set_table("VariableDictionary", dictionary_rows)
+        bundle.set_table("FailedBranches", failed_rows)
+        bundle.set_table("QuarantinedFields", quarantined_rows)
+        bundle.set_artifact_dir("Tables", tables)
+        bundle.set_artifact_dir("Maps", root / "Maps")
+    else:
+        _write_rows(root / "V_fields.parquet", v_rows)
+        _write_rows(root / "E_DAG.parquet", edge_rows)
+        _write_rows(root / "Q_tensor.parquet", q_rows)
+        _write_rows(root / "Warnings.parquet", warning_rows)
+        _write_rows(root / "VariableDictionary.parquet", dictionary_rows)
+        _write_rows(root / "FailedBranches.parquet", failed_rows)
+        _write_rows(root / "QuarantinedFields.parquet", quarantined_rows)
+
+    ok = True
+    if validate and bundle is None:
         validation = validate_output_bundle(run_dir=str(root))
-        validation_ok = validation.ok
-        if not validation.ok:
-            raise ValueError("Autonomous EFG attachment invalidated run bundle: " + "; ".join(validation.errors))
+        ok = bool(validation.ok)
+        if not ok:
+            raise ValueError("Autonomous EFG attach produced invalid output bundle: " + "; ".join(validation.errors))
+
     return AutonomousEFGAttachResult(
         run_dir=str(root),
         manifest_path=str(manifest_path.relative_to(root)).replace("\\", "/"),
-        manifest_hash=sha256_file(manifest_path),
-        efg_id=result.efg_id,
-        field_count=result.field_count,
-        edge_count=result.edge_count,
-        failed_branch_count=len(result.failed_branches),
-        output_validation_ok=validation_ok,
+        manifest_hash=manifest_hash,
+        efg_id=efg.efg_id,
+        field_count=efg.field_count,
+        edge_count=efg.edge_count,
+        failed_branch_count=len(efg.failed_branches),
+        output_validation_ok=ok,
+        execution_manifest_path=str(execution_path.relative_to(root)).replace("\\", "/"),
     )
+
+
+__all__ = ["attach_autonomous_efg_to_run", "AutonomousEFGAttachResult"]

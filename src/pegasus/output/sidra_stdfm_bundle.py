@@ -10,7 +10,6 @@ import polars as pl
 
 from pegasus.core.hashing import sha256_file, sha256_text, stable_json
 from pegasus.output.bundle import create_empty_output_bundle
-from pegasus.output.cnes_sih_efg_bundle import write_rows_like
 from pegasus.output.reproducibility import COMPILE_TELEMETRY_STAGES
 from pegasus.sidra.projection import load_projection_matrix, projection_metadata
 from pegasus.sidra.stitching import SIDRASegment, stitch_sidra_longitudinal_segments

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pegasus.output.population_tensor_bundle import write_population_tensor_fixture_bundle
-from pegasus.output.population_tensor_compile_attach import attach_population_tensor_compile_fields
 from pegasus.output.validate import validate_output_bundle
 from pegasus.she.population.solvers import dense_national_abort_check, solve_population_tensor_from_sidra_anchor
 
@@ -33,15 +31,9 @@ def run_population_dense_abort_check(*, localities: int, periods: int, strata: i
     return {"status": "allowed", "cells": cells}
 
 
-def run_attach_population_tensor_compile_fields(
-    *,
-    run_dir: str | Path,
-    sidra_facts_path: str | Path,
-    mode: str = "independent_denominator",
-) -> dict[str, object]:
-    metadata = attach_population_tensor_compile_fields(
-        run_dir=run_dir,
-        sidra_facts_path=sidra_facts_path,
-        mode=mode,
+def run_attach_population_tensor_compile_fields(*args, **kwargs):
+    raise RuntimeError(
+        "Population tensor manual workflow is retired. "
+        "Population denominators must enter through SHE/EFG/PIRS contracts."
     )
-    return {"status": "success", "population_tensor": metadata, "run_dir": str(run_dir)}
+

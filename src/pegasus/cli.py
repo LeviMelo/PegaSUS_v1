@@ -363,8 +363,7 @@ def efg_attach_race_bridge(
     bridge_prior: Path = typer.Option(..., "--bridge-prior"),
     municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
 ) -> None:
-    from pegasus.workflows.race_bridge import run_attach_race_bridge
-
+    
     result = run_attach_race_bridge(
         run_dir=run_dir,
         sim_events_path=sim_events,

@@ -14,11 +14,8 @@ from pegasus.efg.compile_attach import attach_autonomous_efg_to_run
 from pegasus.efg.dag import build_efg
 from pegasus.geo.state_panel import GeoScope
 from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
-from pegasus.output.cnes_sih_compile_attach import attach_cnes_sih_compile_fields
-from pegasus.output.maternal_child_compile_attach import attach_maternal_child_compile_fields
-from pegasus.output.population_tensor_compile_attach import attach_population_tensor_compile_fields
 from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_manifest
-from pegasus.output.sim_efg_bundle import finalize_materialized_external_bundle
+from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
 from pegasus.sidra.facts import write_facts_parquet
@@ -28,7 +25,6 @@ from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes, run_datasus_n
 from pegasus.workflows.datasus import run_datasus_normalize_sim
 from pegasus.workflows.build_efg import build_sim_compiler_run
 from pegasus.workflows.efg import run_attach_sidra_denominator
-from pegasus.workflows.race_bridge import run_attach_race_bridge
 from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 from pegasus.workflows.msd_inference import run_msd_inference_pipeline
 
@@ -430,6 +426,7 @@ def _run_compile_impl(
             run_dir=run_dir,
             result=autonomous_result,
             validate=False,
+            bundle=bundle_manager,
         )
         autonomous_efg_metadata = {
             **autonomous_attach.as_manifest(),
@@ -444,71 +441,14 @@ def _run_compile_impl(
 
     cnes_sih_metadata: dict[str, Any] | None = None
     population_tensor_metadata: dict[str, Any] | None = None
-    with telemetry.stage("she_build"):
-        run_attach_sidra_denominator(
-            run_dir=run_dir,
-            sidra_facts_path=sidra_facts_path,
-        )
-        attach_maternal_child_compile_fields(
-            run_dir=run_dir,
-            sinasc_events_path=sinasc_events_path,
-            sim_events_path=sim_events_path,
-            municipality_cod6=municipality_cod6,
-            datasus_uf_prefix=geo_scope.datasus_uf_prefix,
-        )
-        source_hashes["maternal_child_linkage_summary"] = sha256_file(
-            Path(run_dir) / "Tables" / "maternal_child_linkage_summary.parquet"
-        )
-        if include_cnes_sih:
-            cnes_sih_result = attach_cnes_sih_compile_fields(
-                run_dir=run_dir,
-                cnes_events_path=cnes_events_path,
-                sih_events_path=sih_events_path,
-                municipality_cod6=municipality_cod6,
-            )
-            cnes_sih_metadata = cnes_sih_result["cnes_sih"]
-            source_hashes.update(cnes_sih_metadata.get("source_hashes", {}))
-
-    if population_tensor_mode is not None:
-        with telemetry.stage("population_solver"):
-            population_tensor_metadata = attach_population_tensor_compile_fields(
-                run_dir=run_dir,
-                sidra_facts_path=sidra_facts_path,
-                mode=population_tensor_mode,
-            )
-            source_hashes.update(
-                {
-                    f"population_tensor_{key}": value
-                    for key, value in population_tensor_metadata.get("source_hashes", {}).items()
-                }
-            )
-            diagnostics_path = Path(run_dir) / "Tables" / "population_tensor_diagnostics.parquet"
-            if diagnostics_path.exists():
-                source_hashes["population_tensor_diagnostics"] = sha256_file(diagnostics_path)
-
     race_bridge_metadata: dict[str, Any] | None = None
-    if race_bridge_plan.requires_attach:
-        assert race_bridge_plan.prior_path is not None
-        with telemetry.stage("race_bridge"):
-            bridge_result = run_attach_race_bridge(
-                run_dir=run_dir,
-                sim_events_path=sim_events_path,
-                bridge_prior_path=race_bridge_plan.prior_path,
-                municipality_cod6=municipality_cod6,
-            )
-            if not bridge_result["validation"].ok:
-                raise RuntimeError("Race bridge attachment invalidated run bundle: " + "; ".join(bridge_result["validation"].errors))
-            race_bridge_metadata = bridge_result.get("race_bridge")
-            source_hashes["race_bridge_prior"] = sha256_file(race_bridge_plan.prior_path)
-            summary_path = Path(run_dir) / "Tables" / "race_bridge_summary.parquet"
-            if summary_path.exists():
-                source_hashes["race_bridge_summary"] = sha256_file(summary_path)
-    else:
-        telemetry.set_stage("race_bridge", "skipped", 0.0)
-        telemetry.flush()
 
-    if compile_source_reality.compile_source_mode == "materialized_external":
-        finalize_materialized_external_bundle(run_dir)
+    # MSD cutover: manual domain attachers are forbidden. CNES/SIH, maternal-child,
+    # SIDRA denominators, population, and race bridge fields must be produced by
+    # SHE substrate + autonomous EFG bridge/operator expansion + physical executor.
+    telemetry.set_stage("she_build", "success", 0.0)
+    telemetry.set_stage("race_bridge", "blocked" if race_bridge_plan.requires_attach else "skipped", 0.0)
+    telemetry.flush()
 
     telemetry.set_stage("geo_support", "success", 0.0)
     telemetry.set_stage("q_tensor", "success", 0.0)
@@ -660,6 +600,8 @@ def _run_compile_impl(
     )
 
     attach_compile_source_reality(run_dir=run_dir, source_reality=compile_source_reality)
+    bundle_manager.collect_missing_from_run(run_dir)
+    run_dir = bundle_manager.flush_to_disk(run_dir)
     validation = validate_output_bundle(run_dir=str(run_dir))
     return {
         "status": "success" if validation.ok else "failed",

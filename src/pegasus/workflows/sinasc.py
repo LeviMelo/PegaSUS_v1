@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from pegasus.datasus.sinasc_normalize import normalize_sinasc_events
-from pegasus.output.sinasc_efg_bundle import write_sinasc_fixture_efg_bundle
 from pegasus.output.validate import validate_output_bundle
 
 
@@ -21,18 +20,8 @@ def run_datasus_normalize_sinasc(
     )
 
 
-def run_build_sinasc_fixture(
-    *,
-    sinasc_events_path: str | Path,
-    run_dir: str | Path,
-    municipality_cod6: str | None = None,
-    datasus_uf_prefix: str | None = None,
-) -> dict[str, Any]:
-    output = write_sinasc_fixture_efg_bundle(
-        sinasc_events_path=sinasc_events_path,
-        run_dir=run_dir,
-        municipality_cod6=municipality_cod6,
-        datasus_uf_prefix=datasus_uf_prefix,
+def run_build_sinasc_fixture(*args, **kwargs):
+    raise RuntimeError(
+        "SINASC fixture EFG workflow is retired from src production surface."
     )
-    validation = validate_output_bundle(run_dir=str(output))
-    return {"run_dir": output, "validation": validation}
+

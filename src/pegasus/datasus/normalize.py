@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pegasus.datasus.declarative_normalize import normalize_sim_do_record as _registry_normalize_sim_do_record, normalize_sinasc_record as _registry_normalize_sinasc_record
+
 import hashlib
 import json
 import re
@@ -260,154 +262,6 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def normalize_sim_do_record(row: dict[str, Any], *, source_manifest_hash: str) -> dict[str, Any]:
-    death_date = _parse_datasus_date(_raw(row, "DTOBITO", "death_date"))
-    birth_date = _parse_datasus_date(_raw(row, "DTNASC", "birth_date"))
-    death_hour = _parse_hour(_raw(row, "HORAOBITO", "death_hour"))
-    year = _year_from_date(death_date, _raw(row, "ANO", "year"))
-
-    decoded_age = decode_sim_idade(_raw(row, "IDADE", "age_source"))
-    date_age_days = _days_between(birth_date, death_date)
-
-    age_days = float(date_age_days) if date_age_days is not None and date_age_days >= 0 else decoded_age.age_days
-    age_years = (age_days / 365.25) if age_days is not None else decoded_age.age_years
-    age_source = "date_difference" if date_age_days is not None and date_age_days >= 0 else "IDADE"
-
-    race, race_state = _race_state(_raw(row, "RACACOR", "race_color_admin"))
-    mun_res6, mun_res7 = _mun_codes(_raw(row, "CODMUNRES", "mun_residence"))
-    mun_occ6, mun_occ7 = _mun_codes(_raw(row, "CODMUNOCOR", "mun_occurrence"))
-    facility_code, facility_state = _facility_code(_raw(row, "CODESTAB", "facility_code"))
-
-    underlying = parse_icd(
-        _raw(row, "CAUSABAS", "underlying_icd_raw"),
-        topology_role="underlying_cause",
-        source_field="CAUSABAS",
-    )
-
-    chain_fields = [
-        ("LINHAA", "A"),
-        ("LINHAB", "B"),
-        ("LINHAC", "C"),
-        ("LINHAD", "D"),
-    ]
-    chain_raw: dict[str, Any] = {}
-    chain_norm: dict[str, Any] = {}
-    chain_states: dict[str, Any] = {}
-
-    for field, position in chain_fields:
-        raw_value = _raw(row, field)
-        parsed = parse_icd(
-            raw_value,
-            topology_role="terminal_chain",
-            source_field=field,
-            position=position,
-        )
-        chain_raw[position] = None if raw_value is None else str(raw_value)
-        chain_norm[position] = parsed.normalized
-        chain_states[position] = parsed.parse_state
-
-    associated_raw = _raw(row, "LINHAII")
-    associated = parse_icd(
-        associated_raw,
-        topology_role="associated_condition",
-        source_field="LINHAII",
-    )
-
-    living_children = decode_count2(_raw(row, "QTDFILVIVO"), sentinels={"99"})
-    deceased_children = decode_count2(_raw(row, "QTDFILMORT"), sentinels={"99"})
-
-    birth_weight = decode_physical_scalar(
-        _raw(row, "PESO"),
-        unit="grams",
-        lower=300,
-        upper=6500,
-        sentinels={"9999", "0000"},
-    )
-
-    certificate_date = _parse_datasus_date(_raw(row, "DTATESTADO"))
-    investigation_date = _parse_datasus_date(_raw(row, "DTINVESTIG"))
-
-    reporting_delay = _days_between(certificate_date, death_date)
-    if reporting_delay is not None:
-        reporting_delay = abs(reporting_delay)
-
-    raw_hash = _stable_hash(row)
-
-    normalized = {
-        "event_id": _stable_hash(
-            {
-                "source": "SIM-DO",
-                "death_date": death_date,
-                "mun_residence": mun_res6,
-                "underlying": underlying.normalized,
-                "raw_hash": raw_hash,
-            }
-        ),
-        "source_system": "SIM-DO",
-        "year": year,
-        "death_date": death_date,
-        "death_hour": death_hour,
-        "birth_date": birth_date,
-        "age_source": age_source,
-        "age_days": age_days,
-        "age_years": age_years,
-        "age_unit": decoded_age.age_unit,
-        "raw_age_code": None if _raw(row, "IDADE") is None else str(_raw(row, "IDADE")).strip(),
-        "sex": _clean_str(_raw(row, "SEXO", "sex")),
-        "race_color_admin": race,
-        "race_axis_type": "administrative_death_declaration",
-        "race_missingness_state": race_state,
-        "mun_residence_cod6": mun_res6,
-        "mun_residence_cod7": mun_res7,
-        "mun_occurrence_cod6": mun_occ6,
-        "mun_occurrence_cod7": mun_occ7,
-        "place_of_death": _clean_str(_raw(row, "LOCOCOR")),
-        "facility_code": facility_code,
-        "facility_code_state": facility_state,
-        "underlying_icd_raw": underlying.raw,
-        "underlying_icd_norm": underlying.normalized,
-        "underlying_icd_parse_state": underlying.parse_state,
-        "cause_chain_raw": _json(chain_raw),
-        "cause_chain_norm": _json(chain_norm),
-        "cause_chain_parse_states": _json(chain_states),
-        "associated_conditions_raw": None if associated_raw is None else str(associated_raw),
-        "associated_conditions_norm": associated.normalized,
-        "associated_conditions_parse_states": associated.parse_state,
-        "death_type": _clean_str(_raw(row, "TIPOBITO", "death_type")),
-        "fetal_or_liveborn_status_source": _clean_str(_raw(row, "TIPOBITO", "OBITOFETAL", "death_type")),
-        "maternal_age_years": _int_or_none(_raw(row, "IDADEMAE")),
-        "maternal_education_legacy": _clean_str(_raw(row, "ESCMAE")),
-        "maternal_education_2010": _clean_str(_raw(row, "ESCMAE2010")),
-        "maternal_occupation_cbo": _clean_str(_raw(row, "OCUPMAE")),
-        "maternal_living_children_count": living_children.value,
-        "maternal_deceased_children_count": deceased_children.value,
-        "pregnancy_type": _clean_str(_raw(row, "GRAVIDEZ")),
-        "gestational_weeks_death": _int_or_none(_raw(row, "SEMAGESTAC")),
-        "gestational_age_group_death": _clean_str(_raw(row, "GESTACAO")),
-        "delivery_type_death_context": _clean_str(_raw(row, "PARTO")),
-        "death_timing_relative_to_delivery": _clean_str(_raw(row, "OBITOPARTO")),
-        "birth_weight_death_context_grams": birth_weight.value,
-        "death_during_pregnancy": _clean_str(_raw(row, "OBITOGRAV")),
-        "death_during_puerperium": _clean_str(_raw(row, "OBITOPUERP")),
-        "medical_assistance": _clean_str(_raw(row, "ASSISTMED")),
-        "exam_performed": _clean_str(_raw(row, "EXAME")),
-        "surgery_performed": _clean_str(_raw(row, "CIRURGIA")),
-        "autopsy_performed": _clean_str(_raw(row, "NECROPSIA")),
-        "svo_iml_municipality": _clean_str(_raw(row, "COMUNSVOIM")),
-        "certificate_date": certificate_date,
-        "reporting_delay": reporting_delay,
-        "investigation_status": _clean_str(_raw(row, "TPPOS")),
-        "investigation_date": investigation_date,
-        "cause_altered": _clean_str(_raw(row, "CAUSABAS_O", "ALTERADA", "cause_altered")),
-        "raw_record_hash": raw_hash,
-        "processed_record_hash": "",
-        "source_manifest_hash": source_manifest_hash,
-    }
-
-    normalized["processed_record_hash"] = _stable_hash({k: v for k, v in normalized.items() if k != "processed_record_hash"})
-    return normalized
-
-
 def normalize_sim_do_events(
     *,
     input_path: str | Path,
@@ -443,3 +297,9 @@ def normalize_sim_do_events(
         "column_count": len(df.columns),
         "columns": df.columns,
     }
+
+# ---- Hardline MSD SHE registry-routed entrypoint ----
+def normalize_sim_do_record(row: dict[str, Any], *args, **kwargs) -> dict[str, Any]:
+    registry_root = kwargs.get('registry_root', 'config/registries')
+    return _registry_normalize_sim_do_record(row, registry_root=registry_root)
+

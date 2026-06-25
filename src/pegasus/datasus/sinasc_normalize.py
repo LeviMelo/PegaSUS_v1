@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pegasus.datasus.declarative_normalize import normalize_sim_do_record as _registry_normalize_sim_do_record, normalize_sinasc_record as _registry_normalize_sinasc_record
+
 import hashlib
 import json
 import re
@@ -235,83 +237,6 @@ def normalize_anomaly_icd(value: Any, anomaly_flag: bool | None) -> tuple[str | 
     return code, "valid_non_q_not_anomaly", False
 
 
-def normalize_sinasc_record(row: dict[str, Any], *, source_manifest_hash: str) -> dict[str, Any]:
-    raw_payload = {str(k): v for k, v in row.items()}
-    birth_date, birth_year, birth_date_state = parse_sinasc_date(_raw(row, "DTNASC", "DT_NASC", "NASCIMENTO"))
-    mun_cod6, mun_cod7, mun_state = municipality_codes(_raw(row, "CODMUNRES", "CODMUNNASC", "MUN_RES"))
-    weight, weight_state, low_weight = decode_birth_weight(_raw(row, "PESO", "PESO_NASC"))
-    gest_weeks, gest_state, preterm = decode_gestational_age(_raw(row, "SEMAGESTAC", "GESTACAO", "QTSEMANAS"))
-    apgar1, apgar1_state, low_apgar1 = decode_apgar(_raw(row, "APGAR1", "APGAR_1"))
-    apgar5, apgar5_state, low_apgar5 = decode_apgar(_raw(row, "APGAR5", "APGAR_5"))
-    delivery_code, delivery_state, cesarean = decode_delivery_mode(_raw(row, "PARTO", "TPPARTO"))
-    consultations, consultations_state, consultations_raw = decode_count_preserve_leading_zero(
-        _raw(row, "CONSULTAS", "QTCONSULTAS", "CONSPRENAT"),
-        sentinels={"99"},
-        upper=40,
-    )
-    mother_age = int_or_none(_raw(row, "IDADEMAE", "IDADE_MAE"))
-    mother_race, mother_race_state = decode_race(_raw(row, "RACACORMAE", "RACA_COR_MAE"))
-    newborn_race, newborn_race_state = decode_race(_raw(row, "RACACOR", "RACA_COR"))
-    anomaly_flag, anomaly_flag_state = decode_anomaly_flag(_raw(row, "IDANOMAL", "ANOMALIA_FLAG"))
-    anomaly_code, anomaly_state, anomaly_any = normalize_anomaly_icd(_raw(row, "CODANOMAL", "ANOMALIA"), anomaly_flag)
-
-    event_key = _clean(_raw(row, "NUMERODN", "DN", "ID"))
-    if event_key is None:
-        event_key = _stable_hash(raw_payload)[:16]
-    event_id = f"SINASC-{event_key}"
-
-    record_state = "valid"
-    if birth_date_state == "invalid" or mun_state == "invalid" or birth_year is None or mun_cod6 is None:
-        record_state = "invalid_identity"
-
-    return {
-        "event_id": event_id,
-        "birth_date": birth_date,
-        "birth_year": birth_year,
-        "birth_date_state": birth_date_state,
-        "mun_residence_cod6": mun_cod6,
-        "mun_residence_cod7": mun_cod7,
-        "municipality_code_state": mun_state,
-        "mother_age_years": mother_age,
-        "adolescent_mother_flag": mother_age is not None and mother_age < 20,
-        "advanced_maternal_age_flag": mother_age is not None and mother_age >= 35,
-        "mother_race_admin_code": mother_race,
-        "mother_race_state": mother_race_state,
-        "newborn_race_admin_code": newborn_race,
-        "newborn_race_state": newborn_race_state,
-        "sex_code": _digits(_raw(row, "SEXO")),
-        "birth_weight_g": weight,
-        "birth_weight_state": weight_state,
-        "low_birth_weight_flag": low_weight,
-        "gestational_age_weeks": gest_weeks,
-        "gestational_age_state": gest_state,
-        "prematurity_flag": preterm,
-        "apgar1": apgar1,
-        "apgar1_state": apgar1_state,
-        "low_apgar1_flag": low_apgar1,
-        "apgar5": apgar5,
-        "apgar5_state": apgar5_state,
-        "low_apgar5_flag": low_apgar5,
-        "delivery_mode_code": delivery_code,
-        "delivery_mode_state": delivery_state,
-        "cesarean_flag": cesarean,
-        "prenatal_consult_count": consultations,
-        "prenatal_consult_state": consultations_state,
-        "prenatal_consult_raw_digits": consultations_raw,
-        "insufficient_prenatal_flag": consultations is not None and consultations < 7,
-        "anomaly_flag": anomaly_flag,
-        "anomaly_flag_state": anomaly_flag_state,
-        "anomaly_icd_raw": _clean(_raw(row, "CODANOMAL", "ANOMALIA")),
-        "anomaly_icd_code": anomaly_code,
-        "anomaly_icd_state": anomaly_state,
-        "congenital_anomaly_flag": anomaly_any,
-        "record_state": record_state,
-        "source_manifest_hash": source_manifest_hash,
-        "row_hash": _stable_hash(raw_payload),
-        "raw_json": json.dumps(raw_payload, ensure_ascii=False, sort_keys=True, default=str),
-    }
-
-
 def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, source_manifest_hash: str) -> dict[str, Any]:
     df = _read_table(input_path)
     rows = [normalize_sinasc_record(row, source_manifest_hash=source_manifest_hash) for row in df.to_dicts()]
@@ -339,3 +264,9 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
         "insufficient_prenatal_rows": sum(1 for row in rows if row["insufficient_prenatal_flag"] is True),
         "anomaly_rows": anomaly_rows,
     }
+
+# ---- Hardline MSD SHE registry-routed entrypoint ----
+def normalize_sinasc_record(row: dict[str, Any], *args, **kwargs) -> dict[str, Any]:
+    registry_root = kwargs.get('registry_root', 'config/registries')
+    return _registry_normalize_sinasc_record(row, registry_root=registry_root)
+

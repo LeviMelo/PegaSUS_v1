@@ -58,7 +58,15 @@ def _inverse_transform(values: list[float], problem: STDFMProblem) -> tuple[floa
             elif link == "clr":
                 output[i + f_idx] = clr_exp[f_idx] / clr_sum if clr_sum > 0 else 0.0
             else:
-                output[i + f_idx] = 1.0 / (1.0 + math.exp(-max(min(val, 700.0), -700.0)))
+                val_sig = 1.0 / (1.0 + math.exp(-max(min(val, 700.0), -700.0)))
+                denominator = problem.denominator_by_cell[i + f_idx] if problem.denominator_by_cell else None
+                
+                if denominator is not None and denominator > 1:
+                    recovered = (val_sig * denominator - 0.5) / (denominator - 1.0)
+                else:
+                    recovered = val_sig * (1.0 + 2.0 * 1e-9) - 1e-9
+                    
+                output[i + f_idx] = max(0.0, min(1.0, recovered))
     return tuple(output)
 
 

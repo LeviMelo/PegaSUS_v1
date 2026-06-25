@@ -335,6 +335,10 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
     missing_denom_count = joined.filter(pl.col("value_denominator").is_null() | pl.col("value_denominator").is_nan()).height
     denom_fragility = float(missing_denom_count) / float(joined.height) if joined.height > 0 else 1.0
 
+    parent_denom_id = parent_ids[1]
+    parent_fragility = float(parents_by_id[parent_denom_id].support.get("denom_fragility", 0.0))
+    combined_fragility = min(1.0, parent_fragility + denom_fragility)
+
     out = joined.with_columns(
         pl.when((pl.col("value_denominator") > 0) & pl.col("value_denominator").is_not_null())
         .then(pl.col("value_numerator") / pl.col("value_denominator"))
@@ -352,7 +356,7 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
         pl.lit("RN").alias("operator"),
     ])
     path, rows = _write(output_dir / f"{field.id}.parquet", out)
-    return path, rows, {"denom_fragility": denom_fragility}
+    return path, rows, {"denom_fragility": combined_fragility}
 
 
 

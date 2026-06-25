@@ -19,6 +19,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pegasus.output.bundle_manager import OutputBundleManager
 
 
 DEFAULT_MATRIX_MANIFEST = Path("Tables") / "pirs_design_matrix_manifest.json"
@@ -209,7 +210,7 @@ def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: st
     }
 
 
-def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, mutate_output_bundle: bool = True, validate: bool = True) -> dict[str, Any]:
+def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, mutate_output_bundle: bool = True, validate: bool = True, bundle: OutputBundleManager | None = None) -> dict[str, Any]:
     root = Path(run_dir)
     design_manifest_path = Path(design_matrix_manifest) if isinstance(design_matrix_manifest, (str, Path)) else root / DEFAULT_MATRIX_MANIFEST
     model_manifest_path = Path(output_manifest) if output_manifest is not None else root / DEFAULT_MODEL_MANIFEST
@@ -282,7 +283,7 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
         "mutated_output_bundle": False,
     }
     if mutate_output_bundle:
-        _mutate_output_bundle_with_model_result(root, payload, residual_vector=fit["residual"])
+        _mutate_output_bundle_with_model_result(root, payload, residual_vector=fit["residual"], bundle=bundle)
         payload["mutated_output_bundle"] = True
         if validate:
             from pegasus.output.validate import validate_output_bundle
@@ -298,7 +299,7 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
     return payload
 
 
-def _mutate_output_bundle_with_model_result(root: Path, payload: Mapping[str, Any], *, residual_vector: Sequence[float]) -> None:
+def _mutate_output_bundle_with_model_result(root: Path, payload: Mapping[str, Any], *, residual_vector: Sequence[float], bundle: OutputBundleManager | None = None) -> None:
     residual_field_id = str(payload["residual_field_id"])
     model_id = str(payload["model_id"])
     outcome = str(payload.get("outcome_field_id") or "")
@@ -369,12 +370,20 @@ def _mutate_output_bundle_with_model_result(root: Path, payload: Mapping[str, An
     model_assoc = {"id": model_id, "model_id": model_id, "status": payload.get("status"), "family": payload.get("family"), "outcome_field_id": outcome, "covariate_field_id": _compact(covariates), "covariate_field_ids": _compact(covariates), "offset_field_id": payload.get("offset_field_id"), "residual_field_id": residual_field_id, "diagnostics_json": _compact(payload.get("diagnostics", {})), "created_at": _now()}
     residual_assoc = {"id": residual_field_id, "residual_association_id": residual_field_id, "residual_field_id": residual_field_id, "model_id": model_id, "parent_model_id": model_id, "outcome_field_id": outcome, "residual_type": "raw_response_residual", "status": "materialized", "created_at": _now()}
     warning = {"warning_id": warning_id, "field_id": residual_field_id, "source": "PIRS", "severity": "warning", "code": RESIDUAL_WARNING, "message": "PIRS residual is a model-derived diagnostic field, not a raw epidemiological observation.", "inherited_from": "[]", "created_at": _now()}
-    _append_unique_rows_like(root / "V_fields.parquet", [residual_field], id_column="field_id")
-    _append_unique_rows_like(root / "Q_tensor.parquet", [q_row], id_column="field_id")
-    _append_unique_rows_like(root / "VariableDictionary.parquet", [vd_row], id_column="field_id")
-    _append_unique_rows_like(root / "ModelAssociations.parquet", [model_assoc], id_column="id")
-    _append_unique_rows_like(root / "ResidualAssociations.parquet", [residual_assoc], id_column="id")
-    _append_unique_rows_like(root / "Warnings.parquet", [warning], id_column="warning_id")
+    if bundle is not None:
+        bundle.append_table("V_fields", [residual_field])
+        bundle.append_table("Q_tensor", [q_row])
+        bundle.append_table("VariableDictionary", [vd_row])
+        bundle.append_table("ModelAssociations", [model_assoc])
+        bundle.append_table("ResidualAssociations", [residual_assoc])
+        bundle.append_table("Warnings", [warning])
+    else:
+        _append_unique_rows_like(root / "V_fields.parquet", [residual_field], id_column="field_id")
+        _append_unique_rows_like(root / "Q_tensor.parquet", [q_row], id_column="field_id")
+        _append_unique_rows_like(root / "VariableDictionary.parquet", [vd_row], id_column="field_id")
+        _append_unique_rows_like(root / "ModelAssociations.parquet", [model_assoc], id_column="id")
+        _append_unique_rows_like(root / "ResidualAssociations.parquet", [residual_assoc], id_column="id")
+        _append_unique_rows_like(root / "Warnings.parquet", [warning], id_column="warning_id")
 
 
 def pirs_model_execution_summary(payload: Mapping[str, Any], *, manifest_path: str | Path | None = None) -> dict[str, Any]:
@@ -416,8 +425,8 @@ def attach_pirs_model_execution_gate_to_run(*, run_dir: str | Path, summary: Map
         _write_json(path, doc)
 
 
-def execute_pirs_model_from_design_matrix(*, run_dir: str | Path, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, mutate_output_bundle: bool = True, validate: bool = True, attach: bool = True) -> dict[str, Any]:
-    payload = build_pirs_model_execution_manifest(run_dir=run_dir, design_matrix_manifest=design_matrix_manifest, output_manifest=output_manifest, mutate_output_bundle=mutate_output_bundle, validate=validate)
+def execute_pirs_model_from_design_matrix(*, run_dir: str | Path, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, mutate_output_bundle: bool = True, validate: bool = True, attach: bool = True, bundle: OutputBundleManager | None = None) -> dict[str, Any]:
+    payload = build_pirs_model_execution_manifest(run_dir=run_dir, design_matrix_manifest=design_matrix_manifest, output_manifest=output_manifest, mutate_output_bundle=mutate_output_bundle, validate=validate, bundle=bundle)
     summary = pirs_model_execution_summary(payload, manifest_path=payload.get("manifest_path"))
     payload["summary"] = summary
     _write_json(Path(str(payload["manifest_path"])), payload)

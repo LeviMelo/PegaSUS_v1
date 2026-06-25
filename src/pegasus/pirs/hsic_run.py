@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pegasus.output.bundle_manager import OutputBundleManager
 
 from pegasus.pirs.hsic import linear_hsic_statistic, permutation_p_value
 
@@ -291,7 +292,7 @@ def _blocking_manifest(*, run_dir: Path, manifest_path: Path, reasons: Sequence[
     return payload
 
 
-def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_manifest: str | Path | Mapping[str, Any] | None = None, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, budget: str = "fast", permutations: int = 199, min_support: int = 3, seed: int = 20260613, mutate_output_bundle: bool = True, validate: bool = True) -> dict[str, Any]:
+def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_manifest: str | Path | Mapping[str, Any] | None = None, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, budget: str = "fast", permutations: int = 199, min_support: int = 3, seed: int = 20260613, mutate_output_bundle: bool = True, validate: bool = True, bundle: OutputBundleManager | None = None) -> dict[str, Any]:
     root = Path(run_dir)
     manifest_path = Path(output_manifest) if output_manifest is not None else root / DEFAULT_HSIC_MANIFEST
     model_manifest_path = Path(model_execution_manifest) if isinstance(model_execution_manifest, (str, Path)) else root / DEFAULT_MODEL_MANIFEST
@@ -395,18 +396,25 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
         "created_at": _now(),
     }
     if mutate_output_bundle:
-        _append_unique_rows_like(root / "Hypotheses.parquet", [_hypothesis_row(row) for row in scan_rows], id_column="hypothesis_id")
-        warnings = _warning_rows(scan_rows)
-        if warnings:
-            _append_unique_rows_like(root / "Warnings.parquet", warnings, id_column="warning_id")
-        if validate:
-            try:
-                from pegasus.output.validate import validate_output_bundle
-                validation = validate_output_bundle(run_dir=str(root))
-            except TypeError:
-                from pegasus.output.validate import validate_output_bundle
-                validation = validate_output_bundle(run_dir=str(root), schema_registry=None)  # type: ignore[arg-type]
-            payload["output_validation"] = {"ok": bool(validation.ok), "errors": list(getattr(validation, "errors", []) or [])}
+        if bundle is not None:
+            bundle.append_table("Hypotheses", [_hypothesis_row(row) for row in scan_rows])
+            warnings = _warning_rows(scan_rows)
+            if warnings:
+                bundle.append_table("Warnings", warnings)
+        else:
+            _append_unique_rows_like(root / "Hypotheses.parquet", [_hypothesis_row(row) for row in scan_rows], id_column="hypothesis_id")
+            warnings = _warning_rows(scan_rows)
+            if warnings:
+                _append_unique_rows_like(root / "Warnings.parquet", warnings, id_column="warning_id")
+
+    if validate:
+        try:
+            from pegasus.output.validate import validate_output_bundle
+            validation = validate_output_bundle(run_dir=str(root))
+        except TypeError:
+            from pegasus.output.validate import validate_output_bundle
+            validation = validate_output_bundle(run_dir=str(root), schema_registry=None)  # type: ignore[arg-type]
+        payload["output_validation"] = {"ok": bool(validation.ok), "errors": list(getattr(validation, "errors", []) or [])}
     _write_json(manifest_path, payload)
     return payload
 
@@ -450,8 +458,8 @@ def attach_hsic_residual_scan_gate_to_run(*, run_dir: str | Path, summary: Mappi
         _write_json(path, doc)
 
 
-def execute_hsic_residual_scan(*, run_dir: str | Path, model_execution_manifest: str | Path | Mapping[str, Any] | None = None, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, budget: str = "fast", permutations: int = 199, min_support: int = 3, seed: int = 20260613, mutate_output_bundle: bool = True, validate: bool = True, attach: bool = True) -> dict[str, Any]:
-    payload = build_hsic_residual_scan_manifest(run_dir=run_dir, model_execution_manifest=model_execution_manifest, design_matrix_manifest=design_matrix_manifest, output_manifest=output_manifest, budget=budget, permutations=permutations, min_support=min_support, seed=seed, mutate_output_bundle=mutate_output_bundle, validate=validate)
+def execute_hsic_residual_scan(*, run_dir: str | Path, model_execution_manifest: str | Path | Mapping[str, Any] | None = None, design_matrix_manifest: str | Path | Mapping[str, Any] | None = None, output_manifest: str | Path | None = None, budget: str = "fast", permutations: int = 199, min_support: int = 3, seed: int = 20260613, mutate_output_bundle: bool = True, validate: bool = True, attach: bool = True, bundle: OutputBundleManager | None = None) -> dict[str, Any]:
+    payload = build_hsic_residual_scan_manifest(run_dir=run_dir, model_execution_manifest=model_execution_manifest, design_matrix_manifest=design_matrix_manifest, output_manifest=output_manifest, budget=budget, permutations=permutations, min_support=min_support, seed=seed, mutate_output_bundle=mutate_output_bundle, validate=validate, bundle=bundle)
     summary = hsic_residual_scan_summary(payload, manifest_path=payload.get("manifest_path"))
     payload["summary"] = summary
     _write_json(Path(str(payload["manifest_path"])), payload)

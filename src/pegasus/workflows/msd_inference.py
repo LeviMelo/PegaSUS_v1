@@ -112,6 +112,16 @@ def _artifact(payload: Any, *keys: str) -> Any:
     return payload
 
 
+
+
+def _prepare_pirs_workspace(bundle: Any | None, root: Path) -> Path:
+    if bundle is None:
+        return root
+    workspace = root.parent / f"{root.name}__pirs_stage_workspace"
+    return bundle.write_stage_workspace(workspace)
+
+
+
 def run_msd_inference_pipeline(
     *,
     run_dir: str | Path,
@@ -132,6 +142,7 @@ def run_msd_inference_pipeline(
         "artifacts": {},
     }
 
+    pirs_root = _prepare_pirs_workspace(bundle, root)
     model_success = False
     design_matrix_manifest: Any = None
     model_execution_manifest: Any = None
@@ -153,7 +164,7 @@ def run_msd_inference_pipeline(
                 "run_pirs_planning_pipeline",
                 "run_attach_pirs_planning_pipeline_to_run",
             )
-            planning = run_planning(run_dir=root, budget=budget)
+            planning = run_planning(run_dir=pirs_root, budget=budget)
             payload["artifacts"]["pirs_planning_pipeline"] = _artifact(planning, "manifest_path")
             status, reason = _pipeline_gate_status(planning)
 
@@ -173,7 +184,7 @@ def run_msd_inference_pipeline(
                     "run_pirs_design_matrix",
                 )
                 matrix = run_matrix(
-                    run_dir=root,
+                    run_dir=pirs_root,
                     design_plan=design_plan,
                     readiness_manifest=readiness,
                 )
@@ -190,11 +201,12 @@ def run_msd_inference_pipeline(
                     "run_pirs_model",
                 )
                 model = run_model(
-                    run_dir=root,
+                    run_dir=pirs_root,
                     design_matrix_manifest=matrix,
                     mutate_output_bundle=True,
                     validate=True,
                     attach=True,
+                    bundle=bundle,
                 )
                 model_execution_manifest = model
                 payload["artifacts"]["pirs_model_execution"] = _artifact(
@@ -202,7 +214,7 @@ def run_msd_inference_pipeline(
                     "manifest_path",
                     "model_execution_manifest",
                 )
-                _stage_first_class_tables_from_run(bundle, root)
+                
 
                 elapsed = time.perf_counter() - started
                 _record_stage(telemetry, stage_id="pirs_model", status="success", elapsed=elapsed)
@@ -236,13 +248,14 @@ def run_msd_inference_pipeline(
                 "run_hsic_residual_scan",
             )
             scan = run_scan(
-                run_dir=root,
+                run_dir=pirs_root,
                 model_execution_manifest=model_execution_manifest,
                 design_matrix_manifest=design_matrix_manifest,
                 budget=budget,
                 mutate_output_bundle=True,
                 validate=True,
                 attach=True,
+                bundle=bundle,
             )
             payload["artifacts"]["hsic_residual_scan"] = _artifact(scan, "manifest_path", "output_manifest")
 
@@ -252,12 +265,12 @@ def run_msd_inference_pipeline(
             ):
                 try:
                     fn = _load_callable(module_name, *names)
-                    result = fn(run_dir=root)
+                    result = fn(run_dir=pirs_root)
                     payload["artifacts"][key] = _artifact(result, "manifest_path", f"{key}_manifest")
                 except Exception as exc:
                     payload.setdefault("warnings", []).append(f"{key}_not_attached:{type(exc).__name__}:{exc}")
 
-            _stage_first_class_tables_from_run(bundle, root)
+            
             elapsed = time.perf_counter() - started
             _record_stage(telemetry, stage_id="pirs_hsic", status="success", elapsed=elapsed)
             payload["pirs_hsic"].update({"status": "success", "scan": scan})

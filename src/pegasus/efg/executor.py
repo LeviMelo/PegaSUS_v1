@@ -324,15 +324,64 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
     return _write(output_dir / f"{field.id}.parquet", out)
 
 
+
+def _is_bridge_divergence(field: FieldNode) -> bool:
+    op = str(field.operator or "").lower()
+    kind = str(field.kind or "").lower()
+    support = _as_dict(field.support)
+    params = _as_dict(support.get("operator_params") or support.get("params") or {})
+    haystack = " ".join([
+        op,
+        kind,
+        str(support.get("bridge_type") or "").lower(),
+        str(params.get("bridge_type") or "").lower(),
+        str(params.get("operator") or "").lower(),
+    ])
+    return (
+        "divergence" in haystack
+        or "morbidity_mortality" in haystack
+        or "mortality_morbidity" in haystack
+        or op in {"bridge_divergence", "divergence_log_ratio"}
+    )
+
+
 def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode], output_dir: Path) -> tuple[Path, int]:
     parent_ids = list(field.lineage.parent_ids or [])
     if not parent_ids:
-        return _write(output_dir / f"{field.id}.parquet", pl.DataFrame({
+        out = pl.DataFrame({
             "field_id": [field.id],
             "field_name": [field.name],
             "operator": [field.operator or "bridge"],
             VALUE_COLUMN: [None],
-        }))
+        }).cast({VALUE_COLUMN: pl.Float64})
+        return _write(output_dir / f"{field.id}.parquet", out)
+
+    if _is_bridge_divergence(field) and len(parent_ids) == 2:
+        p0 = _load_parent_tensor(parents_by_id[parent_ids[0]])
+        p1 = _load_parent_tensor(parents_by_id[parent_ids[1]])
+        keys = _join_keys(p0, p1)
+        if not keys:
+            raise RuntimeError("Bridge divergence requires intersecting support axes.")
+
+        joined = p0.join(p1, on=keys, how="inner", suffix="_right")
+        epsilon = 1e-9
+        out = joined.with_columns(
+            ((pl.col(VALUE_COLUMN) + epsilon) / (pl.col(VALUE_COLUMN + "_right") + epsilon))
+            .log()
+            .cast(pl.Float64)
+            .alias(VALUE_COLUMN)
+        )
+        keep = [c for c in keys if c in out.columns]
+        out = out.select([
+            *[pl.col(c) for c in keep],
+            pl.col(VALUE_COLUMN),
+            pl.lit(field.id).alias("field_id"),
+            pl.lit(field.name).alias("field_name"),
+            pl.lit(field.operator or "divergence_log_ratio").alias("operator"),
+        ])
+        return _write(output_dir / f"{field.id}.parquet", out)
+
+    # Fallback for Bridge_R / unary bridges
     parent = parents_by_id[parent_ids[0]]
     df = _load_parent_tensor(parent)
     out = df.with_columns([

@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from pegasus.datasus.sinasc_normalize import normalize_sinasc_events
-from pegasus.output.validate import validate_output_bundle
 
 
 def run_datasus_normalize_sinasc(
@@ -20,8 +19,4 @@ def run_datasus_normalize_sinasc(
     )
 
 
-def run_build_sinasc_fixture(*args, **kwargs):
-    raise RuntimeError(
-        "SINASC fixture EFG workflow is retired from src production surface."
-    )
-
+__all__ = ["run_datasus_normalize_sinasc"]

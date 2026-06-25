@@ -43,11 +43,16 @@ class DatasusConfig:
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "DatasusConfig":
         r_library_path = payload.get("r_library_path")
+        r_timeout_raw = os.environ.get("PEGASUS_DATASUS_R_TIMEOUT_SECONDS", payload.get("r_timeout_seconds", 7200))
+        heartbeat_timeout_raw = os.environ.get(
+            "PEGASUS_DATASUS_HEARTBEAT_TIMEOUT_SECONDS",
+            payload.get("heartbeat_timeout_seconds", 900),
+        )
         return cls(
             rscript_path=str(payload.get("rscript_path", "Rscript")),
             r_library_path=None if r_library_path in {None, ""} else str(r_library_path),
-            r_timeout_seconds=int(payload.get("r_timeout_seconds", 7200)),
-            heartbeat_timeout_seconds=int(payload.get("heartbeat_timeout_seconds", 900)),
+            r_timeout_seconds=int(r_timeout_raw),
+            heartbeat_timeout_seconds=int(heartbeat_timeout_raw),
         )
 
     @classmethod

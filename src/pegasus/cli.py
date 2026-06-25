@@ -17,8 +17,8 @@ from pegasus.registries.validators import validate_registry_tree
 from pegasus.workflows.compile import run_compile
 from pegasus.sidra.api import SidraClient, SidraClientConfig
 from pegasus.workflows.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
-from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
-from pegasus.workflows.sinasc import run_build_sinasc_fixture, run_datasus_normalize_sinasc
+from pegasus.workflows.efg import run_attach_sidra_denominator
+from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 from pegasus.workflows.sidra import (
     run_sidra_extract,
     run_sidra_metadata,
@@ -204,40 +204,16 @@ def datasus_normalize_sinasc(
 
 
 @efg_app.command("build-sim-fixture")
-def efg_build_sim_fixture(
-    sim_events: Path = typer.Option(..., "--sim-events"),
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
-) -> None:
-    result = run_build_sim_fixture(
-        sim_events_path=sim_events,
-        run_dir=run_dir,
-        municipality_cod6=municipality_cod6,
-    )
-    validation = result["validation"]
-    if not validation.ok:
-        _fail(validation.errors)
-    print(f"[green]sim fixture EFG bundle valid[/green] {result['run_dir']}")
+def efg_build_sim_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@efg_app.command("build-sinasc-fixture")
-def efg_build_sinasc_fixture(
-    sinasc_events: Path = typer.Option(..., "--sinasc-events"),
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
-) -> None:
-    result = run_build_sinasc_fixture(
-        sinasc_events_path=sinasc_events,
-        run_dir=run_dir,
-        municipality_cod6=municipality_cod6,
-    )
-    validation = result["validation"]
-    if not validation.ok:
-        _fail(validation.errors)
-    print(f"[green]SINASC maternal-child EFG bundle valid[/green] {result['run_dir']}")
+def efg_build_sinasc_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@efg_app.command("attach-sidra-denominator")
 def efg_attach_sidra_denominator(
     run_dir: Path = typer.Option(..., "--run-dir"),
     sidra_facts: Path = typer.Option(..., "--sidra-facts"),
@@ -253,33 +229,21 @@ def efg_attach_sidra_denominator(
 
 
 @sidra_app.command("metadata-fixture")
-def sidra_metadata_fixture(
-    output_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--output-dir"),
-) -> None:
-    outputs = run_sidra_metadata_fixture(output_dir=output_dir)
-    for name, path in outputs.items():
-        print(f"[green]{name}[/green] {path}")
+def sidra_metadata_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@sidra_app.command("plan-fixture")
-def sidra_plan_fixture(
-    output: Path = typer.Option(Path("data/manifests/sidra/fixture_plan.json"), "--output"),
-    max_cells: int = typer.Option(49900, "--max-cells"),
-) -> None:
-    result = run_sidra_plan_fixture(output=output, max_cells=max_cells)
-    print(f"[green]planned[/green] chunks={len(result['chunks'])} output={result['output']}")
+def sidra_plan_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@sidra_app.command("normalize-fixture")
-def sidra_normalize_fixture(
-    input_path: Path = typer.Option(..., "--input"),
-    output_path: Path = typer.Option(Path("data/processed/sidra/facts/9606/fixture.parquet"), "--output"),
-) -> None:
-    output = run_sidra_normalize_fixture(input_path=input_path, output_path=output_path)
-    print(f"[green]sidra facts normalized[/green] {output}")
+def sidra_normalize_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@sidra_app.command("metadata")
 def sidra_metadata(
     tables: Path = typer.Option(..., "--tables"),
     level: str = typer.Option("N6", "--level"),
@@ -357,26 +321,11 @@ def compile(
 
 
 @efg_app.command("attach-race-bridge")
-def efg_attach_race_bridge(
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    sim_events: Path = typer.Option(..., "--sim-events"),
-    bridge_prior: Path = typer.Option(..., "--bridge-prior"),
-    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
-) -> None:
-    
-    result = run_attach_race_bridge(
-        run_dir=run_dir,
-        sim_events_path=sim_events,
-        bridge_prior_path=bridge_prior,
-        municipality_cod6=municipality_cod6,
-    )
-    validation = result["validation"]
-    if not validation.ok:
-        _fail(validation.errors)
-    print(f"[green]race bridge fields attached and run bundle valid[/green] {result['run_dir']}")
+def efg_attach_race_bridge(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@efg_app.command("validate-race-bridge-prior")
 def efg_validate_race_bridge_prior(
     bridge_prior: Path = typer.Option(..., "--bridge-prior"),
 ) -> None:
@@ -429,138 +378,51 @@ def datasus_normalize_sih(
 
 
 @efg_app.command("build-cnes-sih-fixture")
-def efg_build_cnes_sih_fixture(
-    cnes_events: Path = typer.Option(..., "--cnes-events"),
-    sih_events: Path = typer.Option(..., "--sih-events"),
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
-) -> None:
-    from pegasus.workflows.cnes_sih import run_build_cnes_sih_fixture
-    result = run_build_cnes_sih_fixture(cnes_events_path=cnes_events, sih_events_path=sih_events, run_dir=run_dir, municipality_cod6=municipality_cod6)
-    validation = result["validation"]
-    if not validation.ok:
-        _fail(validation.errors)
-    print(f"[green]CNES/SIH fixture EFG bundle valid[/green] {result['run_dir']}")
+def efg_build_cnes_sih_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@population_app.command("build-fixture")
-def population_build_fixture(
-    sidra_facts: Path = typer.Option(..., "--sidra-facts"),
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    mode: str = typer.Option("independent_denominator", "--mode"),
-) -> None:
-    from pegasus.workflows.population import run_population_tensor_fixture
-    result = run_population_tensor_fixture(sidra_facts_path=sidra_facts, run_dir=run_dir, mode=mode)
-    validation = result["validation"]
-    if not validation.ok:
-        _fail(validation.errors)
-    print(f"[green]population tensor fixture bundle valid[/green] {result['run_dir']}")
+def population_build_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@population_app.command("plan-fixture")
-def population_plan_fixture(
-    sidra_facts: Path = typer.Option(..., "--sidra-facts"),
-    mode: str = typer.Option("independent_denominator", "--mode"),
-) -> None:
-    from pegasus.workflows.population import run_population_tensor_plan
-    print(run_population_tensor_plan(sidra_facts_path=sidra_facts, mode=mode))
-
-# Slice 7A SIDRA context/ST-DFM commands
-@sidra_app.command("context-plan-fixture")
-def sidra_context_plan_fixture(
-    input_path: Path = typer.Option(..., "--input"),
-) -> None:
-    from pegasus.workflows.sidra_context import run_sidra_context_plan_fixture
-
-    result = run_sidra_context_plan_fixture(input_path=input_path)
-    print(
-        "[green]sidra context plan[/green] "
-        f"segments={result['segments']} projection_status={result['projection_status']} "
-        f"stdfm_status={result['stdfm_status']}"
-    )
+def population_plan_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@sidra_app.command("context-build-fixture")
-def sidra_context_build_fixture(
-    input_path: Path = typer.Option(..., "--input"),
-    run_dir: Path = typer.Option(..., "--run-dir"),
-) -> None:
-    from pegasus.workflows.sidra_context import run_sidra_context_build_fixture
-
-    result = run_sidra_context_build_fixture(input_path=input_path, run_dir=run_dir)
-    print(f"[green]sidra context fixture bundle built[/green] run={result['run_dir']}")
-@pirs_app.command("plan-fixture")
-def pirs_plan_fixture(
-    input_path: Path = typer.Option(..., "--input"),
-    budget: str = typer.Option("standard", "--budget"),
-) -> None:
-    from pegasus.workflows.run_pirs import run_pirs_plan_fixture
-
-    result = run_pirs_plan_fixture(input_path=input_path, budget=budget)
-    print(
-        f"[green]pirs planned[/green] outcome={result['outcome_field_id']} "
-        f"covariates={len(result['covariate_field_ids'])} residual_mode={result['residual_mode']}"
-    )
+def sidra_context_plan_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@pirs_app.command("build-fixture")
-def pirs_build_fixture(
-    input_path: Path = typer.Option(..., "--input"),
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    budget: str = typer.Option("standard", "--budget"),
-) -> None:
-    from pegasus.workflows.run_pirs import run_pirs_build_fixture
-
-    result = run_pirs_build_fixture(input_path=input_path, run_dir=run_dir, budget=budget)
-    validation = result["validation"]
-    if not validation.ok:
-        _fail(validation.errors)
-    print(f"[green]pirs fixture bundle valid[/green] {result['run_dir']}")
-
-@pirs_app.command("hsic-plan-fixture")
-def pirs_hsic_plan_fixture(
-    input_path: Path = typer.Option(..., "--input"),
-    budget: str = typer.Option("standard", "--budget"),
-    cuda_required: bool = typer.Option(False, "--cuda-required"),
-) -> None:
-    from pegasus.workflows.hsic import run_hsic_plan_fixture
-
-    result = run_hsic_plan_fixture(input_path=input_path, budget=budget, cuda_required=cuda_required)
-    typer.echo(
-        "hsic planned "
-        f"mode={result['hsic_mode']} "
-        f"null={result['null_strategy']} "
-        f"fdr={result['fdr_method']} "
-        f"n_eff={result['n_eff']}"
-    )
+def sidra_context_build_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@pirs_app.command("hsic-build-fixture")
-def pirs_hsic_build_fixture(
-    input_path: Path = typer.Option(..., "--input"),
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    budget: str = typer.Option("standard", "--budget"),
-    cuda_required: bool = typer.Option(False, "--cuda-required"),
-) -> None:
-    from pegasus.workflows.hsic import run_hsic_build_fixture
-
-    result = run_hsic_build_fixture(
-        input_path=input_path,
-        run_dir=run_dir,
-        budget=budget,
-        cuda_required=cuda_required,
-    )
-    typer.echo(f"hsic fixture bundle valid run={result['run_dir']}")
+def pirs_plan_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-# -----------------------------------------------------------------------------
-# Slice 10A: read-only dashboard inspection commands
-# -----------------------------------------------------------------------------
-dashboard_app = typer.Typer(help="Read-only inspection of completed PegaSUS run bundles.")
-app.add_typer(dashboard_app, name="dashboard")
+def pirs_build_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
 
 
-@dashboard_app.command("assert-read-only")
+def pirs_hsic_plan_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
+
+
+def pirs_hsic_build_fixture(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    raise typer.Exit(2)
+
+
 def dashboard_assert_read_only() -> None:
     from pegasus.dashboard.contracts import dashboard_policy_manifest
 

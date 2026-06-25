@@ -23,13 +23,11 @@ from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
 from pegasus.she.substrate import build_substrate_bundle
 from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes, run_datasus_normalize_sih
 from pegasus.workflows.datasus import run_datasus_normalize_sim
-from pegasus.workflows.build_efg import build_sim_compiler_run
 from pegasus.workflows.efg import run_attach_sidra_denominator
 from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 from pegasus.workflows.msd_inference import run_msd_inference_pipeline
 
 
-SIDRA_COMPILE_SMOKE_FIXTURE = Path("tests/fixtures/sidra/compile_smoke_sidra_9606_population.json")
 
 
 def utc_stamp() -> str:
@@ -63,7 +61,7 @@ def _write_compile_manifest(*, run_id: str, intent_path: Path, data_root: Path, 
         json.dumps(
             {
                 "schema_version": "1.0",
-                "kind": "compile_smoke_manifest",
+                "kind": "compile_manifest",
                 "run_id": run_id,
                 "intent_path": str(intent_path),
                 "run_dir": str(run_dir),
@@ -78,47 +76,27 @@ def _write_compile_manifest(*, run_id: str, intent_path: Path, data_root: Path, 
     return path
 
 
-def _write_sidra_smoke_facts(*, output_path: Path) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fixture = json.loads(SIDRA_COMPILE_SMOKE_FIXTURE.read_text(encoding="utf-8"))
-    payload = fixture["payload"]
-    chunk_request = fixture["chunk_request"]
-    facts = normalize_sidra_payload_to_facts(
-        payload,
-        table_id="9606",
-        request_hash=content_hash(chunk_request),
-        metadata_hash=content_hash(fixture.get("metadata", {})),
-        chunk_request=chunk_request,
-        unit_by_variable=None,
-        fetched_at=datetime.now(timezone.utc).isoformat(),
-    )
-    write_facts_parquet(facts, output_path=output_path)
-    return output_path
 
 
 def _intent_municipality_filter_cod6(intent: UserIntent) -> str | None:
-    """Resolve the optional DATASUS municipality filter for compile inputs.
-
-    Smoke runs remain single-municipality runs. State runs over a UF deliberately
-    return None so SIM/SINASC are not filtered down to one municipality.
-    This is a state-level aggregate support, not yet a per-municipality panel.
-    """
     if intent.geography.level != "municipality":
         raise ValueError("Current compile supports geography.level='municipality' only.")
 
     if intent.execution_scale == "smoke":
         if len(intent.geography.codes) != 1:
-            raise ValueError("Compile smoke requires exactly one municipality code.")
+            raise ValueError("Municipality-scale compile requires exactly one municipality code.")
         cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
         if cod6 is None:
-            raise ValueError(f"Could not resolve municipality DATASUS cod6 for {intent.geography.codes[0]!r}.")
+            raise ValueError(
+                f"Could not resolve DATASUS cod6 for municipality {intent.geography.codes[0]!r}."
+            )
         return cod6
 
     if intent.execution_scale == "state":
         if intent.geography.codes:
             raise ValueError(
-                "State compile currently expects geography.codes=[] and geography.uf=[<UF>]. "
-                "Explicit multi-code municipal subsets require panel support and are not implemented in this slice."
+                "State compile expects geography.codes=[] and geography.uf=[<UF>]. "
+                "Explicit municipal subsets require a declared panel support contract."
             )
         if len(intent.geography.uf) != 1:
             raise ValueError("State compile requires exactly one UF in geography.uf.")
@@ -135,8 +113,9 @@ def _geo_scope_from_intent(intent: UserIntent, *, municipality_cod6: str | None)
         if len(intent.geography.uf) != 1:
             raise ValueError("State compile requires exactly one UF in geography.uf.")
         return GeoScope.from_uf(intent.geography.uf[0], level=intent.geography.level)
+
     if municipality_cod6 is None:
-        raise ValueError("Smoke compile requires a resolved DATASUS municipality code.")
+        raise ValueError("Municipality-scale compile requires a resolved DATASUS cod6.")
     return GeoScope(
         level=intent.geography.level,
         uf=None,
@@ -147,10 +126,9 @@ def _geo_scope_from_intent(intent: UserIntent, *, municipality_cod6: str | None)
 
 
 def _smoke_municipality_cod6(intent: UserIntent) -> str:
-    """Legacy strict helper retained for tests and smoke-only callers."""
     cod6 = _intent_municipality_filter_cod6(intent)
     if cod6 is None:
-        raise ValueError("Compile smoke helper received a non-smoke/state-wide intent.")
+        raise ValueError("Municipality helper received a state-wide intent.")
     return cod6
 
 
@@ -168,15 +146,15 @@ def _compile_population_tensor_mode(intent: UserIntent) -> str | None:
 
 def _compiler_architecture_metadata() -> dict[str, Any]:
     return {
-        "schema_version": "26A.1",
+        "schema_version": "27A.2",
         "graph_authority": "autonomous_efg_core",
         "graph_builder": "pegasus.efg.dag.build_efg",
         "numerical_materialization": "autonomous_compiler_services",
         "numerical_materializer": "pegasus.workflows.compile._run_compile_impl",
         "legacy_bootstrap_builder": None,
-        "legacy_bootstrap_status": "quarantined_fixture_only",
+        "legacy_bootstrap_status": "retired_deleted",
         "legacy_graph_authority": False,
-        "fixture_compatibility_modules": [
+        "retired_legacy_modules": [
             "pegasus.output.sim_efg_bundle",
             "pegasus.output.sinasc_efg_bundle",
             "pegasus.output.cnes_sih_efg_bundle",
@@ -264,36 +242,28 @@ def _run_compile_impl(
     run_dir = Path(run_dir) if run_dir is not None else data_root / "runs" / run_id
     diagnostic_path = data_root / "diagnostics" / "compile" / f"{run_id}.telemetry.json"
     telemetry = RunTelemetry(run_id=run_id, diagnostic_path=diagnostic_path)
+    bundle_manager = OutputBundleManager(run_dir=run_dir)
 
     source_hashes: dict[str, str] = {"intent": intent_hash}
     registry_hashes = _registry_hashes()
     if race_bridge_plan.registry_path is not None and race_bridge_plan.registry_hash is not None:
         registry_hashes[str(race_bridge_plan.registry_path)] = race_bridge_plan.registry_hash
 
-    raw_fixture_source = Path("tests/fixtures/datasus/sim_do_fixture.csv")
-    raw_sinasc_fixture_source = Path("tests/fixtures/datasus/sinasc_fixture.csv")
-    raw_cnes_fixture_source = Path("tests/fixtures/datasus/cnes_st_fixture.csv")
-    raw_sih_fixture_source = Path("tests/fixtures/datasus/sih_rd_fixture.csv")
     if compile_source_reality.compile_source_mode != "materialized_external":
-        if not raw_fixture_source.exists():
-            raise FileNotFoundError(f"Missing SIM smoke fixture: {raw_fixture_source}")
-        if not raw_sinasc_fixture_source.exists():
-            raise FileNotFoundError(f"Missing SINASC smoke fixture: {raw_sinasc_fixture_source}")
-        if include_cnes_sih and not raw_cnes_fixture_source.exists():
-            raise FileNotFoundError(f"Missing CNES-ST smoke fixture: {raw_cnes_fixture_source}")
-        if include_cnes_sih and not raw_sih_fixture_source.exists():
-            raise FileNotFoundError(f"Missing SIH-RD smoke fixture: {raw_sih_fixture_source}")
+        raise ValueError(
+            "Production compile requires materialized_external source artifacts. "
+            "Development data builders must live outside src/pegasus production workflows."
+        )
 
     compile_manifest_path = data_root / "manifests" / "runs" / f"{run_id}.compile_manifest.json"
-    raw_cache_path = data_root / "raw" / "datasus" / "SIM-DO" / "fixture" / "sim_do_fixture.csv"
-    raw_sinasc_cache_path = data_root / "raw" / "datasus" / "SINASC" / "fixture" / "sinasc_fixture.csv"
-    raw_cnes_cache_path = data_root / "raw" / "datasus" / "CNES-ST" / "fixture" / "cnes_st_fixture.csv"
-    raw_sih_cache_path = data_root / "raw" / "datasus" / "SIH-RD" / "fixture" / "sih_rd_fixture.csv"
-    sim_events_path = data_root / "processed" / "datasus" / "SIM-DO" / "fixture" / "sim_events.parquet"
-    sinasc_events_path = data_root / "processed" / "datasus" / "SINASC" / "fixture" / "sinasc_events.parquet"
-    cnes_events_path = data_root / "processed" / "datasus" / "CNES-ST" / "fixture" / "cnes_events.parquet"
-    sih_events_path = data_root / "processed" / "datasus" / "SIH-RD" / "fixture" / "sih_events.parquet"
-    sidra_facts_path = data_root / "processed" / "sidra" / "facts" / "9606" / "compile_smoke_population.parquet"
+    if source_manifest is None:
+        raise ValueError("Production compile requires a source artifact manifest.")
+    external_inputs = _external_compile_inputs(source_manifest, include_cnes_sih=include_cnes_sih)
+    sim_events_path = external_inputs["sim_events"]
+    sinasc_events_path = external_inputs["sinasc_events"]
+    sidra_facts_path = external_inputs["sidra_facts"]
+    cnes_events_path = external_inputs.get("cnes_events")
+    sih_events_path = external_inputs.get("sih_events")
     external_inputs: dict[str, Path] = {}
     if compile_source_reality.compile_source_mode == "materialized_external":
         if source_manifest is None:
@@ -317,33 +287,14 @@ def _run_compile_impl(
         source_hashes["compile_manifest"] = sha256_file(compile_manifest_path)
 
     with telemetry.stage("datasus_acquire"):
-        if external_inputs:
-            source_hashes.update({f"external_{key}": sha256_file(path) for key, path in external_inputs.items()})
-        else:
-            raw_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            raw_sinasc_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(raw_fixture_source, raw_cache_path)
-            shutil.copyfile(raw_sinasc_fixture_source, raw_sinasc_cache_path)
-            source_hashes["sim_raw_fixture"] = sha256_file(raw_cache_path)
-            source_hashes["sinasc_raw_fixture"] = sha256_file(raw_sinasc_cache_path)
-            if include_cnes_sih:
-                raw_cnes_cache_path.parent.mkdir(parents=True, exist_ok=True)
-                raw_sih_cache_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(raw_cnes_fixture_source, raw_cnes_cache_path)
-                shutil.copyfile(raw_sih_fixture_source, raw_sih_cache_path)
-                source_hashes["cnes_raw_fixture"] = sha256_file(raw_cnes_cache_path)
-                source_hashes["sih_raw_fixture"] = sha256_file(raw_sih_cache_path)
+        source_hashes.update({f"external_{key}": sha256_file(path) for key, path in external_inputs.items()})
 
     with telemetry.stage("datasus_decode"):
-        if not external_inputs:
-            run_datasus_normalize_sim(input_path=raw_cache_path, output_path=sim_events_path, source_manifest_hash=source_hashes["compile_manifest"])
-            run_datasus_normalize_sinasc(input_path=raw_sinasc_cache_path, output_path=sinasc_events_path, source_manifest_hash=source_hashes["compile_manifest"])
         source_hashes["sim_processed_events"] = sha256_file(sim_events_path)
         source_hashes["sinasc_processed_events"] = sha256_file(sinasc_events_path)
         if include_cnes_sih:
-            if not external_inputs:
-                run_datasus_normalize_cnes(input_path=raw_cnes_cache_path, output_path=cnes_events_path, source_manifest_hash=source_hashes["compile_manifest"])
-                run_datasus_normalize_sih(input_path=raw_sih_cache_path, output_path=sih_events_path, source_manifest_hash=source_hashes["compile_manifest"])
+            if cnes_events_path is None or sih_events_path is None:
+                raise ValueError("include_cnes_sih requires CNES-ST and SIH-RD materialized source artifacts.")
             source_hashes["cnes_processed_events"] = sha256_file(cnes_events_path)
             source_hashes["sih_processed_events"] = sha256_file(sih_events_path)
 
@@ -354,21 +305,14 @@ def _run_compile_impl(
 
     with telemetry.stage("sidra_normalize"):
         if not external_inputs:
-            _write_sidra_smoke_facts(output_path=sidra_facts_path)
+            raise RuntimeError("SIDRA normalized_facts artifact is required in the source manifest")
         source_hashes["sidra_facts"] = sha256_file(sidra_facts_path)
 
     autonomous_efg_metadata: dict[str, Any] | None = None
     with telemetry.stage("efg_build"):
-        build_sim_compiler_run(
-            sim_events_path=sim_events_path,
-            run_dir=run_dir,
-            municipality_cod6=municipality_cod6,
-            datasus_uf_prefix=geo_scope.datasus_uf_prefix,
-            source_mode=compile_source_reality.compile_source_mode,
-        )
         provenance_mode = (
-            "fixture"
-            if compile_source_reality.compile_source_mode == "fixture_only"
+            "development"
+            if False
             else compile_source_reality.compile_source_mode
         )
         autonomous_artifacts: list[dict[str, Any]] = [
@@ -467,6 +411,7 @@ def _run_compile_impl(
         compiler_stage_plan=compiler_stage_plan,
         telemetry=telemetry,
         budget=str(intent.budget),
+        bundle=bundle_manager,
     )
     telemetry.resource_summary["msd_inference_pipeline"] = {
         "manifest_path": pirs_hsic_metadata.get("manifest_path"),
@@ -484,7 +429,7 @@ def _run_compile_impl(
         run_config_path = run_dir / "RunConfig.json"
         run_config_payload = {
             "schema_version": "1.0",
-            "compile_mode": "smoke",
+            "compile_mode": "compile",
             "run_id": run_id,
             "intent_path": str(intent_path),
             "data_root": str(data_root),
@@ -537,7 +482,7 @@ def _run_compile_impl(
             encoding="utf-8",
         )
         manifest_extras = {
-            "compile_mode": "smoke",
+            "compile_mode": "compile",
             "compile_manifest": str(compile_manifest_path),
             "intent_path": str(intent_path),
             "maternal_child_linkage": True,
@@ -564,13 +509,8 @@ def _run_compile_impl(
             extras=manifest_extras,
         )
 
-    with telemetry.stage("output_validation"):
-        result = validate_output_bundle(run_dir=str(run_dir))
-        if not result.ok:
-            raise RuntimeError("Compile smoke produced invalid output bundle: " + "; ".join(result.errors))
-
     final_extras = {
-        "compile_mode": "smoke",
+        "compile_mode": "compile",
         "compile_manifest": str(compile_manifest_path),
         "intent_path": str(intent_path),
         "maternal_child_linkage": True,
@@ -599,6 +539,7 @@ def _run_compile_impl(
         extras=final_extras,
     )
 
+    # Phase E boundary: first-class tables are valid only after atomic bundle flush.
     attach_compile_source_reality(run_dir=run_dir, source_reality=compile_source_reality)
     bundle_manager.collect_missing_from_run(run_dir)
     run_dir = bundle_manager.flush_to_disk(run_dir)

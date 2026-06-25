@@ -27,7 +27,7 @@ FORBIDDEN_DASHBOARD_COMPUTE_STAGES: tuple[str, ...] = (
 )
 
 CANONICAL_ACCEPTANCE_SURFACES: tuple[str, ...] = (
-    "compile_smoke",
+    "compile_local",
     "race_bridge_compile",
     "cnes_sih_compile",
     "population_tensor_compile",
@@ -174,7 +174,7 @@ def acceptance_plan() -> dict[str, Any]:
     }
 
 
-def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) -> AcceptanceRunSummary:
+def summarize_run(run_dir: str | Path, *, require_nonempty: bool = False) -> AcceptanceRunSummary:
     root = Path(run_dir)
     validation = validate_output_bundle(run_dir=str(root))
     errors = list(validation.errors)
@@ -221,8 +221,8 @@ def summarize_run(run_dir: str | Path, *, require_non_scaffold: bool = False) ->
     q_rows = _count_parquet(q_path)
     if fields != q_rows:
         errors.append(f"V_fields/Q_tensor row-count mismatch: {fields} != {q_rows}")
-    if require_non_scaffold and fields <= 1:
-        errors.append("acceptance check required a non-scaffold run but V_fields has <=1 row")
+    if require_nonempty and fields <= 1:
+        errors.append("acceptance check required a nonempty run but V_fields has <=1 row")
     dashboard_values = _string_values(v_path, "dashboard_safe")
     if not dashboard_values:
         errors.append("V_fields.dashboard_safe has no values")
@@ -271,7 +271,7 @@ def _compiler_stage_plan_payload(root: Path, run_config: dict[str, Any]) -> dict
 
 def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
     root = Path(run_dir)
-    summary = summarize_run(root, require_non_scaffold=True)
+    summary = summarize_run(root, require_nonempty=True)
     run_config = _load_json(root / "RunConfig.json")
     architecture = run_config.get("compiler_architecture", {})
     autonomous = run_config.get("autonomous_efg", {})
@@ -319,7 +319,7 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
     checks = {
         "01_exact_first_class_keys": summary.first_class_keys == required_first_class_key_paths(),
         "02_output_bundle_valid": summary.ok,
-        "03_source_reality_declared": summary.compile_source_mode in {"fixture_only", "materialized_external"},
+        "03_source_reality_declared": summary.compile_source_mode in {"materialized_external"},
         "04_materialized_external_for_production": (
             summary.compile_source_mode != "materialized_external"
             or bool(summary.source_reality_production_candidate and summary.source_artifact_manifest_present)
@@ -329,8 +329,8 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
             and autonomous.get("graph_authority") == "autonomous_efg_core"
             and architecture.get("legacy_graph_authority") is False
         ),
-        "06_legacy_materializers_quarantined": architecture.get("legacy_bootstrap_status") == "quarantined_fixture_only",
-        "07_no_production_fixture_builder": architecture.get("legacy_bootstrap_builder") is None,
+        "06_legacy_materializers_quarantined": architecture.get("legacy_bootstrap_status") == "retired_deleted",
+        "07_no_production_development_builder": architecture.get("legacy_bootstrap_builder") is None,
         "08_no_required_registry_scaffold": not any("scaffold" in str(key).lower() for key in registry_hashes),
         "09_registry_hashes_recorded": bool(registry_hashes) and all(bool(value) for value in registry_hashes.values()),
         "10_autonomous_efg_manifest_exists": autonomous_manifest_valid,
@@ -351,8 +351,8 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
     # Stable aliases retained for callers introduced by the 25A/26B acceptance foundation.
     checks["compiler_stage_plan_present"] = stage_plan_present
     checks["stage_skip_proofs_valid"] = not stage_plan_errors
-    fixture_exempt = {"14_protected_non_equivalence"}
-    structural_ok = all(passed for name, passed in checks.items() if name not in fixture_exempt)
+    development_exempt = {"14_protected_non_equivalence"}
+    structural_ok = all(passed for name, passed in checks.items() if name not in development_exempt)
     production_gates_ok = all(checks.values())
     production_candidate = bool(
         production_gates_ok
@@ -362,16 +362,16 @@ def evaluate_level3_acceptance(run_dir: str | Path) -> Level3AcceptanceResult:
         and summary.substrate_registry_backed
     )
     checks["23_production_gate_complete"] = production_candidate or summary.compile_source_mode != "materialized_external"
-    structural_ok = all(passed for name, passed in checks.items() if name not in fixture_exempt)
+    structural_ok = all(passed for name, passed in checks.items() if name not in development_exempt)
     errors = list(summary.errors)
     errors.extend(stage_plan_errors)
-    errors.extend(name for name, passed in checks.items() if not passed and (summary.compile_source_mode == "materialized_external" or name not in fixture_exempt))
+    errors.extend(name for name, passed in checks.items() if not passed and (summary.compile_source_mode == "materialized_external" or name not in development_exempt))
     if not structural_ok:
         status = "failed"
     elif production_candidate:
         status = "production_candidate"
     else:
-        status = "fixture_validated"
+        status = "development_validated"
     return Level3AcceptanceResult(
         run_dir=str(root),
         status=status,

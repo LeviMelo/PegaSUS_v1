@@ -1,9 +1,4 @@
-"""Compile-time source-reality policy for manifest-backed PegaSUS runs.
-
-Slice 12B does not perform source acquisition and does not change SHE/EFG.
-It makes source provenance explicit at compile time so fixture-backed runs cannot
-be mistaken for materialized production runs.
-"""
+"""Compile-time source-reality policy for manifest-backed PegaSUS runs."""
 
 from __future__ import annotations
 
@@ -13,10 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pegasus.core.hashing import sha256_file
-from pegasus.source_artifacts.contracts import (
-    source_manifest_summary,
-    validate_source_artifact_manifest,
-)
+from pegasus.source_artifacts.contracts import source_manifest_summary, validate_source_artifact_manifest
 
 
 class CompileSourceRealityError(ValueError):
@@ -50,55 +42,36 @@ def resolve_compile_source_reality(
     source_manifest: str | Path | None = None,
     require_materialized_external: bool = False,
 ) -> CompileSourceReality:
-    """Resolve compile source mode before running the compiler.
-
-    Missing manifests are explicitly treated as fixture-only. This preserves the
-    historical smoke workflow while making it impossible for a strict production
-    compile to proceed without materialized external artifacts.
-    """
-
     if source_manifest is None:
-        if require_materialized_external:
-            raise CompileSourceRealityError(
-                "compile requires materialized external source artifacts, but no source manifest was provided"
-            )
-        return CompileSourceReality(
-            schema_version="1.0",
-            compile_source_mode="fixture_only",
-            source_artifact_manifest_present=False,
-            source_artifact_manifest_path=None,
-            source_artifact_manifest_hash=None,
-            source_artifact_count=0,
-            source_systems=(),
-            artifact_roles=(),
-            require_materialized_external=False,
-            production_candidate=False,
-            validation_warnings=("compile_source_manifest_missing_assumed_fixture_only",),
-        )
+        raise CompileSourceRealityError("compile requires a source artifact manifest")
 
     manifest_path = Path(source_manifest)
-    result = validate_source_artifact_manifest(
-        manifest_path=manifest_path,
+    validation = validate_source_artifact_manifest(
+        manifest_path,
         require_materialized_external=require_materialized_external,
     )
-    if not result.get("ok", False):
-        errors = "; ".join(str(x) for x in result.get("errors", [])) or "unknown source artifact error"
-        raise CompileSourceRealityError(errors)
+    if not validation["ok"]:
+        raise CompileSourceRealityError("; ".join(validation["errors"]))
 
-    summary = source_manifest_summary(manifest_path=manifest_path)
-    mode = str(summary.get("compile_source_mode") or result.get("compile_source_mode") or "unknown")
+    summary = source_manifest_summary(manifest_path)
+    mode = str(summary["compile_source_mode"])
+    if mode != "materialized_external":
+        raise CompileSourceRealityError(
+            f"compile requires materialized_external source artifacts; got {mode}"
+        )
+
     return CompileSourceReality(
-        schema_version="1.0",
+        schema_version="2.0",
         compile_source_mode=mode,
         source_artifact_manifest_present=True,
         source_artifact_manifest_path=str(manifest_path),
         source_artifact_manifest_hash=sha256_file(manifest_path),
-        source_artifact_count=int(summary.get("artifact_count") or result.get("artifact_count") or 0),
-        source_systems=tuple(str(x) for x in result.get("source_systems", [])),
-        artifact_roles=tuple(str(x) for x in result.get("artifact_roles", [])),
+        source_artifact_count=int(summary["source_artifact_count"]),
+        source_systems=tuple(summary["source_systems"]),
+        artifact_roles=tuple(summary["artifact_roles"]),
         require_materialized_external=bool(require_materialized_external),
-        production_candidate=mode == "materialized_external",
-        validation_warnings=tuple(str(x) for x in result.get("warnings", [])),
+        production_candidate=True,
+        validation_warnings=tuple(summary.get("warnings", []) or []),
     )
 
 
@@ -114,13 +87,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def attach_compile_source_reality(*, run_dir: str | Path, source_reality: CompileSourceReality) -> None:
-    """Attach source-reality metadata to existing 17-key run JSONs.
-
-    This function deliberately does not add a new first-class file, because the
-    output bundle is exact-key validated. Metadata is embedded only into existing
-    JSON keys: RunConfig, P_vector, UserIntent, and ReproducibilityManifest.
-    """
-
     root = Path(run_dir)
     payload = source_reality.as_manifest()
 
@@ -169,3 +135,11 @@ def attach_compile_source_reality(*, run_dir: str | Path, source_reality: Compil
         source_hashes["source_artifact_manifest"] = payload["source_artifact_manifest_hash"]
         manifest["source_hashes"] = source_hashes
     _write_json(manifest_path, manifest)
+
+
+__all__ = [
+    "CompileSourceReality",
+    "CompileSourceRealityError",
+    "resolve_compile_source_reality",
+    "attach_compile_source_reality",
+]

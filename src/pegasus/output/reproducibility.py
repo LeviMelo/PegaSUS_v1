@@ -50,6 +50,7 @@ class RunTelemetry:
     started_at: float = field(default_factory=time.perf_counter)
     stage_status: dict[str, str] = field(default_factory=lambda: {s: "skipped" for s in COMPILE_TELEMETRY_STAGES})
     stage_wall_seconds: dict[str, float] = field(default_factory=lambda: {s: 0.0 for s in COMPILE_TELEMETRY_STAGES})
+    active_stage: str | None = None
     resource_summary: dict[str, Any] = field(
         default_factory=lambda: {
             "peak_rss_mb": None,
@@ -88,20 +89,33 @@ class RunTelemetry:
     @contextmanager
     def stage(self, stage: str) -> Iterator[None]:
         started = time.perf_counter()
+        self.active_stage = stage
         self.flush()
         try:
             yield
         except Exception:
             self.set_stage(stage, "failed", time.perf_counter() - started)
+            self.active_stage = None
             self.flush()
             raise
         else:
             self.set_stage(stage, "success", time.perf_counter() - started)
+            self.active_stage = None
             self.flush()
 
     def flush(self) -> None:
         self.diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
         self.diagnostic_path.write_text(stable_json({"telemetry": self.model()}), encoding="utf-8")
+        
+        # Write heartbeat
+        heartbeat = {
+            "run_id": self.run_id,
+            "timestamp": utc_now(),
+            "active_stage": self.active_stage,
+            "elapsed_seconds": max(0.0, time.perf_counter() - self.started_at)
+        }
+        hb_path = self.diagnostic_path.parent / f"{self.run_id}.heartbeat.json"
+        hb_path.write_text(stable_json(heartbeat), encoding="utf-8")
         if self.run_dir is not None:
             manifest_path = self.run_dir / "ReproducibilityManifest.json"
             if manifest_path.exists():

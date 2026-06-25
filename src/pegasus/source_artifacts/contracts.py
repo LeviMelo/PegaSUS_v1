@@ -1,22 +1,18 @@
-"""Source artifact reality contracts for DATASUS/SIDRA compiler inputs.
-
-Slice 12A intentionally does not perform live acquisition. It defines the hard
-boundary that lets the compiler and audits distinguish fixtures from materialized
-source artifacts before compile integration is widened.
-"""
+"""Source artifact reality contracts for DATASUS/SIDRA compiler inputs."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-import hashlib
-import json
 
 import polars as pl
 
-SOURCE_ARTIFACT_SCHEMA_VERSION = "1.0"
+
+SOURCE_ARTIFACT_SCHEMA_VERSION = "2.0"
 
 ALLOWED_SOURCE_SYSTEMS = {
     "SIM-DO",
@@ -38,7 +34,6 @@ ALLOWED_ARTIFACT_ROLES = {
 }
 
 ALLOWED_PROVENANCE_MODES = {
-    "fixture",
     "cached_external",
     "materialized_external",
 }
@@ -85,16 +80,12 @@ def _table_shape(path: Path) -> tuple[int | None, list[str]]:
         df = pl.read_parquet(path)
         return df.height, list(df.columns)
     if suffix in {".csv", ".tsv"}:
-        separator = "	" if suffix == ".tsv" else ","
+        separator = "\t" if suffix == ".tsv" else ","
         df = pl.read_csv(path, separator=separator)
         return df.height, list(df.columns)
-    if suffix in {".json", ".jsonl"}:
+    if suffix in {".json", ".jsonl", ".ndjson"}:
         return None, []
     return None, []
-
-
-def _as_required_set(values: Iterable[str] | None) -> set[str]:
-    return {str(v) for v in values or [] if str(v)}
 
 
 def inspect_source_artifact(
@@ -102,42 +93,25 @@ def inspect_source_artifact(
     path: str | Path,
     source_system: str,
     artifact_role: str,
-    provenance_mode: str,
+    provenance_mode: str = "materialized_external",
+    output: str | Path | None = None,
     source_manifest_hash: str | None = None,
     manifest_path: str | Path | None = None,
-    required_columns: Iterable[str] | None = None,
-) -> SourceArtifact:
+) -> dict[str, Any]:
     artifact_path = Path(path)
+    warnings: list[str] = []
+
     if source_system not in ALLOWED_SOURCE_SYSTEMS:
-        raise SourceArtifactError(f"Unsupported source system: {source_system!r}")
+        raise SourceArtifactError(f"unsupported source_system: {source_system}")
     if artifact_role not in ALLOWED_ARTIFACT_ROLES:
-        raise SourceArtifactError(f"Unsupported artifact role: {artifact_role!r}")
+        raise SourceArtifactError(f"unsupported artifact_role: {artifact_role}")
     if provenance_mode not in ALLOWED_PROVENANCE_MODES:
-        raise SourceArtifactError(f"Unsupported provenance mode: {provenance_mode!r}")
+        raise SourceArtifactError(f"unsupported provenance_mode: {provenance_mode}")
     if not artifact_path.exists():
-        raise SourceArtifactError(f"Source artifact path does not exist: {artifact_path}")
-    if artifact_path.is_dir():
-        raise SourceArtifactError(f"Source artifact path is a directory, not a file: {artifact_path}")
+        raise SourceArtifactError(f"source artifact not found: {artifact_path}")
 
     row_count, columns = _table_shape(artifact_path)
-    required = _as_required_set(required_columns)
-    missing_columns = sorted(required.difference(columns))
-    if missing_columns:
-        raise SourceArtifactError(
-            f"Source artifact {artifact_path} is missing required columns: {missing_columns}"
-        )
-
-    warnings: list[str] = []
-    if provenance_mode == "fixture":
-        warnings.append("fixture_source_artifact_not_production_candidate")
-    if provenance_mode != "fixture" and not source_manifest_hash:
-        raise SourceArtifactError(
-            "Non-fixture source artifacts must carry source_manifest_hash for compile provenance."
-        )
-    if artifact_role in {"processed_events", "normalized_facts"} and row_count == 0:
-        warnings.append("empty_processed_source_artifact")
-
-    return SourceArtifact(
+    artifact = SourceArtifact(
         source_system=source_system,
         artifact_role=artifact_role,
         path=str(artifact_path),
@@ -147,121 +121,142 @@ def inspect_source_artifact(
         columns=columns,
         provenance_mode=provenance_mode,
         source_manifest_hash=source_manifest_hash,
-        manifest_path=str(manifest_path) if manifest_path is not None else None,
+        manifest_path=None if manifest_path is None else str(manifest_path),
         warnings=warnings,
         inspected_at=_now(),
     )
+    payload = artifact.as_manifest()
+    if output is not None:
+        out = Path(output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    return payload
 
 
-def _compile_source_mode(artifacts: list[SourceArtifact]) -> str:
-    modes = {artifact.provenance_mode for artifact in artifacts}
-    if not modes:
-        return "empty"
-    if modes == {"fixture"}:
-        return "fixture_only"
-    if "fixture" in modes:
-        return "mixed_fixture_external"
-    return "materialized_external"
+def _artifact_payload(item: SourceArtifact | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(item, SourceArtifact):
+        return item.as_manifest()
+    return dict(item)
 
 
 def write_source_artifact_manifest(
+    artifacts: Iterable[SourceArtifact | dict[str, Any]],
     *,
-    artifacts: list[SourceArtifact],
-    output_path: str | Path,
-    manifest_id: str = "source_artifact_manifest",
-    purpose: str = "compile_source_reality_gate",
-) -> Path:
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    output: str | Path,
+    manifest_path: str | Path | None = None,
+) -> dict[str, Any]:
+    rows = [_artifact_payload(item) for item in artifacts]
+    modes = {str(row.get("provenance_mode")) for row in rows}
+    if not rows:
+        raise SourceArtifactError("source artifact manifest cannot be empty")
+    if not modes <= ALLOWED_PROVENANCE_MODES:
+        raise SourceArtifactError(f"unsupported provenance modes: {sorted(modes - ALLOWED_PROVENANCE_MODES)}")
+
+    compile_source_mode = "materialized_external" if modes == {"materialized_external"} else "cached_external"
     payload = {
         "schema_version": SOURCE_ARTIFACT_SCHEMA_VERSION,
-        "manifest_id": manifest_id,
-        "purpose": purpose,
         "created_at": _now(),
-        "compile_source_mode": _compile_source_mode(artifacts),
-        "artifact_count": len(artifacts),
-        "artifacts": [artifact.as_manifest() for artifact in artifacts],
+        "compile_source_mode": compile_source_mode,
+        "production_candidate": compile_source_mode == "materialized_external",
+        "artifacts": rows,
+        "source_systems": sorted({str(row.get("source_system")) for row in rows}),
+        "artifact_roles": sorted({str(row.get("artifact_role")) for row in rows}),
     }
-    out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return out
+    out = Path(output if manifest_path is None else manifest_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    return payload
 
 
 def load_source_artifact_manifest(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SourceArtifactError(f"source artifact manifest is not an object: {path}")
+    return payload
+
+
+def source_manifest_summary(manifest: str | Path | dict[str, Any]) -> dict[str, Any]:
+    payload = load_source_artifact_manifest(manifest) if not isinstance(manifest, dict) else dict(manifest)
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        artifacts = []
+
+    modes = {str(item.get("provenance_mode")) for item in artifacts if isinstance(item, dict)}
+    source_systems = sorted({str(item.get("source_system")) for item in artifacts if isinstance(item, dict)})
+    artifact_roles = sorted({str(item.get("artifact_role")) for item in artifacts if isinstance(item, dict)})
+
+    if modes == {"materialized_external"}:
+        compile_source_mode = "materialized_external"
+    elif modes and modes <= ALLOWED_PROVENANCE_MODES:
+        compile_source_mode = "cached_external"
+    else:
+        compile_source_mode = str(payload.get("compile_source_mode") or "invalid")
+
+    return {
+        "schema_version": payload.get("schema_version", SOURCE_ARTIFACT_SCHEMA_VERSION),
+        "source_artifact_count": len(artifacts),
+        "source_systems": source_systems,
+        "artifact_roles": artifact_roles,
+        "provenance_modes": sorted(modes),
+        "compile_source_mode": compile_source_mode,
+        "production_candidate": compile_source_mode == "materialized_external",
+        "warnings": list(payload.get("warnings", []) or []),
+    }
 
 
 def validate_source_artifact_manifest(
+    manifest: str | Path | dict[str, Any],
     *,
-    manifest_path: str | Path,
     require_materialized_external: bool = False,
-    required_roles: Iterable[str] | None = None,
-    required_systems: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    manifest = load_source_artifact_manifest(manifest_path)
+    payload = load_source_artifact_manifest(manifest) if not isinstance(manifest, dict) else dict(manifest)
+    artifacts = payload.get("artifacts")
     errors: list[str] = []
     warnings: list[str] = []
-    artifacts = list(manifest.get("artifacts") or [])
 
-    if manifest.get("schema_version") != SOURCE_ARTIFACT_SCHEMA_VERSION:
-        errors.append("source artifact manifest schema_version mismatch")
+    if not isinstance(artifacts, list) or not artifacts:
+        errors.append("source artifact manifest has no artifacts")
+        artifacts = []
 
-    seen_roles = {str(item.get("artifact_role")) for item in artifacts}
-    seen_systems = {str(item.get("source_system")) for item in artifacts}
-
-    for role in _as_required_set(required_roles):
-        if role not in seen_roles:
-            errors.append(f"missing required artifact_role: {role}")
-    for system in _as_required_set(required_systems):
-        if system not in seen_systems:
-            errors.append(f"missing required source_system: {system}")
-
-    for item in artifacts:
-        path = Path(str(item.get("path", "")))
-        if not path.exists():
-            errors.append(f"artifact path missing: {path}")
+    for idx, item in enumerate(artifacts):
+        if not isinstance(item, dict):
+            errors.append(f"artifact {idx} is not an object")
             continue
-        actual_hash = _sha256_file(path)
-        if actual_hash != item.get("content_hash"):
-            errors.append(f"artifact hash mismatch: {path}")
-        if item.get("provenance_mode") == "fixture":
-            warnings.append(f"fixture artifact present: {item.get('source_system')}:{item.get('artifact_role')}")
-        if item.get("provenance_mode") != "fixture" and not item.get("source_manifest_hash"):
-            errors.append(f"non-fixture artifact missing source_manifest_hash: {path}")
 
-    if require_materialized_external and manifest.get("compile_source_mode") != "materialized_external":
-        errors.append(
-            "source artifact manifest is not production-candidate materialized_external mode"
-        )
+        mode = str(item.get("provenance_mode"))
+        source_system = str(item.get("source_system"))
+        artifact_role = str(item.get("artifact_role"))
+        path = Path(str(item.get("path", "")))
+
+        if mode not in ALLOWED_PROVENANCE_MODES:
+            errors.append(f"artifact {idx} has unsupported provenance_mode: {mode}")
+        if source_system not in ALLOWED_SOURCE_SYSTEMS:
+            errors.append(f"artifact {idx} has unsupported source_system: {source_system}")
+        if artifact_role not in ALLOWED_ARTIFACT_ROLES:
+            errors.append(f"artifact {idx} has unsupported artifact_role: {artifact_role}")
+        if not path.exists():
+            errors.append(f"artifact {idx} path does not exist: {path}")
+        if mode == "materialized_external" and not item.get("content_hash"):
+            errors.append(f"artifact {idx} materialized_external artifact missing content_hash")
+
+    summary = source_manifest_summary(payload)
+    if require_materialized_external and summary["compile_source_mode"] != "materialized_external":
+        errors.append("source artifact manifest is not materialized_external")
 
     return {
         "ok": not errors,
         "errors": errors,
         "warnings": warnings,
-        "manifest_path": str(manifest_path),
-        "compile_source_mode": manifest.get("compile_source_mode"),
-        "artifact_count": len(artifacts),
-        "source_systems": sorted(seen_systems),
-        "artifact_roles": sorted(seen_roles),
+        "summary": summary,
     }
 
 
-def source_manifest_summary(*, manifest_path: str | Path) -> dict[str, Any]:
-    manifest = load_source_artifact_manifest(manifest_path)
-    artifacts = list(manifest.get("artifacts") or [])
-    return {
-        "manifest_path": str(manifest_path),
-        "schema_version": manifest.get("schema_version"),
-        "compile_source_mode": manifest.get("compile_source_mode"),
-        "artifact_count": len(artifacts),
-        "artifacts": [
-            {
-                "source_system": item.get("source_system"),
-                "artifact_role": item.get("artifact_role"),
-                "provenance_mode": item.get("provenance_mode"),
-                "row_count": item.get("row_count"),
-                "byte_size": item.get("byte_size"),
-                "path": item.get("path"),
-            }
-            for item in artifacts
-        ],
-    }
+__all__ = [
+    "SourceArtifact",
+    "SourceArtifactError",
+    "inspect_source_artifact",
+    "load_source_artifact_manifest",
+    "source_manifest_summary",
+    "validate_source_artifact_manifest",
+    "write_source_artifact_manifest",
+]

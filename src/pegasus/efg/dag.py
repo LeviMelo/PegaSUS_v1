@@ -660,7 +660,7 @@ def _hardline_expand_bridge_candidates(
         efg_id=f"efg_{content_hash(payload)[:24]}",
         substrate_id=result.substrate_id,
         fields=tuple(fields),
-        edges=tuple(_dedupe_edges(edges)),
+        edges=tuple(_dedupe_edges(edges, result.precompression.canonical_by_field_id)),
         failed_branches=tuple(failures),
         warnings=tuple(dict.fromkeys(warnings)),
         variable_dictionary=tuple(_dictionary(field) for field in fields),

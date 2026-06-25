@@ -29,7 +29,7 @@ class SourceArtifactRef:
     path: str
     source_system: str
     artifact_role: str = "processed_events"
-    provenance_mode: str = "fixture"
+    provenance_mode: str = "development"
     source_manifest_hash: str | None = None
     artifact_hash: str | None = None
 
@@ -167,7 +167,7 @@ def normalize_source_artifact_ref(payload: SourceArtifactRef | dict[str, Any] | 
             path=path,
             source_system=source_system,
             artifact_role="processed_events",
-            provenance_mode="fixture" if "fixture" in path.lower() else "cached_external",
+            provenance_mode="development" if "development" in path.lower() else "cached_external",
             artifact_hash=_artifact_hash(path),
         )
     if not isinstance(payload, dict):
@@ -177,7 +177,7 @@ def normalize_source_artifact_ref(payload: SourceArtifactRef | dict[str, Any] | 
         raise SubstrateError(f"Source artifact reference has no path: {payload}")
     source_system = payload.get("source_system") or payload.get("system") or source_system_from_path(path) or "UNKNOWN"
     role = payload.get("artifact_role") or payload.get("role") or payload.get("source_role") or "processed_events"
-    mode = payload.get("provenance_mode") or payload.get("mode") or payload.get("source_mode") or ("fixture" if "fixture" in str(path).lower() else "cached_external")
+    mode = payload.get("provenance_mode") or payload.get("mode") or payload.get("source_mode") or ("development" if "development" in str(path).lower() else "cached_external")
     source_manifest_hash = payload.get("source_manifest_hash") or payload.get("manifest_hash")
     artifact_hash = payload.get("artifact_hash") or payload.get("sha256") or _artifact_hash(path)
     return SourceArtifactRef(
@@ -204,14 +204,14 @@ def load_source_artifacts_from_manifest(path: str | Path) -> tuple[SourceArtifac
 def source_reality_mode(artifacts: Iterable[SourceArtifactRef]) -> str:
     modes = {a.provenance_mode for a in artifacts}
     if not modes:
-        return "fixture_only"
+        return "unresolved_external"
     if modes == {"materialized_external"}:
         return "materialized_external"
     if modes <= {"cached_external", "materialized_external"}:
         return "cached_external"
-    if modes == {"fixture"}:
-        return "fixture_only"
-    return "mixed_fixture_external"
+    if modes == {"development"}:
+        return "unresolved_external"
+    return "mixed_development_external"
 
 
 def _candidate_from_profile(

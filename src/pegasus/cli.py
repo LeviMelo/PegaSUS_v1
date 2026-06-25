@@ -11,7 +11,7 @@ from rich import print
 
 from pegasus.core.config import validate_config_tree
 from pegasus.core.paths import ensure_data_lake
-from pegasus.output.bundle import create_empty_output_bundle
+from pegasus.output.schema_seed import create_schema_seed_output_bundle
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.validators import validate_registry_tree
 from pegasus.workflows.compile import run_compile
@@ -22,10 +22,10 @@ from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 from pegasus.workflows.sidra import (
     run_sidra_extract,
     run_sidra_metadata,
-    run_sidra_metadata_fixture,
-    run_sidra_normalize_fixture,
+    run_sidra_metadata_development,
+    run_sidra_normalize_development,
     run_sidra_plan,
-    run_sidra_plan_fixture,
+    run_sidra_plan_development,
     sidra_runtime_config,
 )
 
@@ -58,8 +58,8 @@ def _fail(errors: list[str]) -> None:
 @app.command()
 def init() -> None:
     ensure_data_lake(".")
-    run_dir = create_empty_output_bundle(Path("data/runs/slice0_empty"))
-    print(f"[green]initialized[/green] data lake and scaffold run: {run_dir}")
+    run_dir = create_schema_seed_output_bundle(Path("data/runs/schema_seed_empty"))
+    print(f"[green]initialized[/green] data lake and schema-seeded run: {run_dir}")
 
 
 @app.command("validate-config")
@@ -179,7 +179,7 @@ def datasus_profile(manifest: Path = typer.Option(..., "--manifest")) -> None:
 def datasus_normalize_sim(
     input_path: Path = typer.Option(..., "--input"),
     output_path: Path = typer.Option(..., "--output"),
-    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+    source_manifest_hash: str = typer.Option("development", "--source-manifest-hash"),
 ) -> None:
     result = run_datasus_normalize_sim(
         input_path=input_path,
@@ -193,7 +193,7 @@ def datasus_normalize_sim(
 def datasus_normalize_sinasc(
     input_path: Path = typer.Option(..., "--input"),
     output_path: Path = typer.Option(..., "--output"),
-    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+    source_manifest_hash: str = typer.Option("development", "--source-manifest-hash"),
 ) -> None:
     result = run_datasus_normalize_sinasc(
         input_path=input_path,
@@ -203,14 +203,14 @@ def datasus_normalize_sinasc(
     print(f"[green]sinasc normalized[/green] rows={result['row_count']} output={result['output_path']}")
 
 
-@efg_app.command("build-sim-fixture")
-def efg_build_sim_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+@efg_app.command("build-sim-development")
+def efg_build_sim_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def efg_build_sinasc_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def efg_build_sinasc_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
@@ -228,19 +228,19 @@ def efg_attach_sidra_denominator(
     print(f"[green]SIDRA denominator anchor attached and run bundle valid[/green] {result['run_dir']}")
 
 
-@sidra_app.command("metadata-fixture")
-def sidra_metadata_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+@sidra_app.command("metadata-development")
+def sidra_metadata_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def sidra_plan_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def sidra_plan_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def sidra_normalize_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def sidra_normalize_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
@@ -322,7 +322,7 @@ def compile(
 
 @efg_app.command("attach-race-bridge")
 def efg_attach_race_bridge(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
@@ -359,7 +359,7 @@ def efg_plan_race_bridge(
 def datasus_normalize_cnes(
     input_path: Path = typer.Option(..., "--input"),
     output_path: Path = typer.Option(..., "--output"),
-    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+    source_manifest_hash: str = typer.Option("development", "--source-manifest-hash"),
 ) -> None:
     from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes
     result = run_datasus_normalize_cnes(input_path=input_path, output_path=output_path, source_manifest_hash=source_manifest_hash)
@@ -370,56 +370,56 @@ def datasus_normalize_cnes(
 def datasus_normalize_sih(
     input_path: Path = typer.Option(..., "--input"),
     output_path: Path = typer.Option(..., "--output"),
-    source_manifest_hash: str = typer.Option("fixture", "--source-manifest-hash"),
+    source_manifest_hash: str = typer.Option("development", "--source-manifest-hash"),
 ) -> None:
     from pegasus.workflows.cnes_sih import run_datasus_normalize_sih
     result = run_datasus_normalize_sih(input_path=input_path, output_path=output_path, source_manifest_hash=source_manifest_hash)
     print(f"[green]sih normalized[/green] rows={result['row_count']} output={result['output_path']}")
 
 
-@efg_app.command("build-cnes-sih-fixture")
-def efg_build_cnes_sih_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+@efg_app.command("build-cnes-sih-development")
+def efg_build_cnes_sih_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def population_build_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def population_build_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def population_plan_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def population_plan_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def sidra_context_plan_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def sidra_context_plan_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def sidra_context_build_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def sidra_context_build_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def pirs_plan_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def pirs_plan_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def pirs_build_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def pirs_build_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def pirs_hsic_plan_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def pirs_hsic_plan_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
-def pirs_hsic_build_fixture(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired fixture/manual command is not available in the production CLI.")
+def pirs_hsic_build_development(*args, **kwargs) -> None:
+    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
     raise typer.Exit(2)
 
 
@@ -459,11 +459,11 @@ def acceptance_plan() -> None:
 @acceptance_app.command("check-run")
 def acceptance_check_run(
     run: Path = typer.Option(..., "--run"),
-    require_non_scaffold: bool = typer.Option(False, "--require-non-scaffold"),
+    require_nonempty: bool = typer.Option(False, "--require-nonempty"),
 ) -> None:
     from pegasus.workflows.acceptance import run_acceptance_check_run
 
-    result = run_acceptance_check_run(run_dir=run, require_non_scaffold=require_non_scaffold)
+    result = run_acceptance_check_run(run_dir=run, require_nonempty=require_nonempty)
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
     if not result.get("ok", False):
         raise typer.Exit(1)
@@ -488,7 +488,7 @@ def source_artifacts_inspect(
     path: Path = typer.Option(..., "--path"),
     source_system: str = typer.Option(..., "--source-system"),
     artifact_role: str = typer.Option(..., "--role"),
-    provenance_mode: str = typer.Option("fixture", "--provenance-mode"),
+    provenance_mode: str = typer.Option("materialized_external", "--provenance-mode"),
     output: Path | None = typer.Option(None, "--output"),
     source_manifest_hash: str | None = typer.Option(None, "--source-manifest-hash"),
 ) -> None:
@@ -556,7 +556,7 @@ app.add_typer(she_app, name="she")
 def she_build_substrate(
     artifact: list[Path] = typer.Option([], "--artifact", help="Processed source artifact path; repeatable."),
     source_system: str = typer.Option("UNKNOWN", "--source-system"),
-    provenance_mode: str = typer.Option("fixture", "--provenance-mode"),
+    provenance_mode: str = typer.Option("materialized_external", "--provenance-mode"),
     output: Path | None = typer.Option(None, "--output"),
 ) -> None:
     from pegasus.workflows.build_substrate import run_build_substrate_from_artifacts

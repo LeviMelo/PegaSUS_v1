@@ -55,6 +55,10 @@ def _gate_from_payload(payload: Any, key: str) -> dict[str, Any]:
     return {}
 
 
+def _as_mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _manifest_path(value: dict[str, Any], fallback: Path) -> str:
     path = value.get("manifest_path")
     if path is not None:
@@ -62,18 +66,21 @@ def _manifest_path(value: dict[str, Any], fallback: Path) -> str:
     return str(fallback)
 
 
-def pirs_planning_pipeline_summary(payload: dict[str, Any], *, manifest_path: str | Path | None = None) -> dict[str, Any]:
-    candidate_gate = payload.get("candidate_gate") if isinstance(payload.get("candidate_gate"), dict) else {}
-    selection_gate = payload.get("selection_gate") if isinstance(payload.get("selection_gate"), dict) else {}
-    design_gate = payload.get("design_gate") if isinstance(payload.get("design_gate"), dict) else {}
-    readiness_gate = payload.get("design_readiness_gate") if isinstance(payload.get("design_readiness_gate"), dict) else {}
+
+def pirs_planning_pipeline_summary(payload: Any, *, manifest_path: str | Path | None = None) -> dict[str, Any]:
+    payload_map = _as_mapping(payload)
+    candidate_gate = _as_mapping(payload_map.get("candidate_gate"))
+    selection_gate = _as_mapping(payload_map.get("selection_gate"))
+    design_gate = _as_mapping(payload_map.get("design_gate"))
+    readiness_gate = _as_mapping(payload_map.get("design_readiness_gate"))
+
     return {
         "schema_version": "1.0",
         "slice": "16F",
         "gate": "pirs_planning_pipeline_gate",
-        "status": str(payload.get("status", "blocked")),
+        "status": str(payload_map.get("status", "blocked")),
         "ready": bool(readiness_gate.get("ready", False)),
-        "budget": payload.get("budget"),
+        "budget": payload_map.get("budget"),
         "candidate_count": candidate_gate.get("candidate_count"),
         "candidate_rejected_count": candidate_gate.get("rejected_count"),
         "selection_status": selection_gate.get("status"),
@@ -87,7 +94,7 @@ def pirs_planning_pipeline_summary(payload: dict[str, Any], *, manifest_path: st
         "model_fit_state": "not_started",
         "residual_state": "not_started",
         "hsic_state": "not_started",
-        "manifest_path": str(manifest_path) if manifest_path is not None else payload.get("manifest_path"),
+        "manifest_path": str(manifest_path) if manifest_path is not None else payload_map.get("manifest_path"),
         "non_mutating_planning_only": True,
     }
 

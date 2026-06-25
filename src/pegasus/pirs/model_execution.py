@@ -210,7 +210,7 @@ def _fit_least_squares(*, rows: Sequence[Mapping[str, Any]], response_column: st
         if np.any(y < 0):
             raise PIRSModelExecutionError("Poisson PIRS response contains negative counts")
         return _fit_poisson_irls(y=y, X=X, offset_vector=offset_vector, term_names=term_names)
-    if family in {"negative_binomial", "gamma", "hurdle", "zero_inflated", "dirichlet"}:
+    if family in {"negative_binomial", "gamma", "hurdle", "zero_inflated", "dirichlet", "binomial_proportion", "sih_gamma_cost_component"}:
         raise NotImplementedError(f"MSD 6.2 required model family '{family}' is not yet implemented.")
     if family not in {"gaussian_identity", "ols"}:
         # default to OLS if not strict, but maybe add warning? We will just pass through for now, as OLS is the fallback.

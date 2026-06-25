@@ -37,15 +37,28 @@ class _Fit:
 
 def _inverse_transform(values: list[float], problem: STDFMProblem) -> tuple[float, ...]:
     _, _, fields = problem.shape
-    output: list[float] = []
-    for index, value in enumerate(values):
-        link = problem.link_function_by_field[index % fields]
-        if link == "identity":
-            output.append(value)
-        elif link == "log":
-            output.append(max(math.exp(min(value, 700.0)) - 1e-9, 0.0))
-        else:
-            output.append(1.0 / (1.0 + math.exp(-max(min(value, 700.0), -700.0))))
+    output: list[float] = [0.0] * len(values)
+    for i in range(0, len(values), fields):
+        group_vals = values[i:i+fields]
+        
+        clr_exp = [0.0] * fields
+        for f_idx in range(fields):
+            if problem.link_function_by_field[f_idx] == "clr":
+                clr_exp[f_idx] = math.exp(max(min(group_vals[f_idx], 700.0), -700.0))
+        
+        clr_sum = sum(clr_exp)
+        
+        for f_idx in range(fields):
+            link = problem.link_function_by_field[f_idx]
+            val = group_vals[f_idx]
+            if link == "identity":
+                output[i + f_idx] = val
+            elif link == "log":
+                output[i + f_idx] = max(math.exp(min(val, 700.0)) - 1e-9, 0.0)
+            elif link == "clr":
+                output[i + f_idx] = clr_exp[f_idx] / clr_sum if clr_sum > 0 else 0.0
+            else:
+                output[i + f_idx] = 1.0 / (1.0 + math.exp(-max(min(val, 700.0), -700.0)))
     return tuple(output)
 
 

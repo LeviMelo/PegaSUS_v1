@@ -55,7 +55,11 @@ def transform_observations(problem: STDFMProblem) -> tuple[tuple[float, ...], tu
         
         clr_vals = [0.0] * fields
         if "clr" in problem.link_function_by_field:
-            positive_obs = [max(v, epsilon) for m, v in zip(group_mask, group_obs) if m]
+            positive_obs = [
+                max(group_obs[f_idx], epsilon)
+                for f_idx in range(fields)
+                if group_mask[f_idx] and problem.link_function_by_field[f_idx] == "clr"
+            ]
             if positive_obs:
                 geom_mean = math.exp(sum(math.log(v) for v in positive_obs) / len(positive_obs))
                 for f_idx in range(fields):

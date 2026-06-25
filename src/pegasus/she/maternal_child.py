@@ -68,7 +68,7 @@ def _congenital_anomaly_count(df: pl.DataFrame) -> int:
 def _assert_plausible_anomaly_rate(*, births_total: int, congenital_anomaly_births: int) -> None:
     if births_total <= 0:
         return
-    # Tiny fixtures can be intentionally high-prevalence to exercise decoder states.
+    # Very small materializations can be high-prevalence; gate only production-sized panels.
     # The plausibility gate is intended for real production-sized SINASC materializations.
     if births_total < 1000:
         return

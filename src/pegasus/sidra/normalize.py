@@ -142,7 +142,7 @@ def flat_response_to_records(payload: Any, *, table_id: str, chunk_request: dict
             "header_row": False,
         }
 
-        # Preserve explicit fixture-style records.
+        # Preserve explicit flat records supplied by upstream normalization.
         for key in [
             "variable_id",
             "period",

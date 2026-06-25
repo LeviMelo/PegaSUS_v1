@@ -26,7 +26,7 @@ def datasus_dependency_unavailable(*, dependency: str, detail: str) -> str:
             "status": "unavailable",
             "required_dependency": dependency,
             "detail": detail,
-            "action": "install/configure Rscript and microdatasus, or use fixture/cached mode",
+            "action": "install/configure Rscript and microdatasus, or provide a materialized source artifact manifest",
         },
         ensure_ascii=True,
         sort_keys=True,

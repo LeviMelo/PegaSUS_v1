@@ -19,13 +19,6 @@ FORBIDDEN_MATERIALIZED_EXTERNAL_TERMS: tuple[str, ...] = (
     "legacy_graph_authority\": true",
 )
 
-# These are transitional architecture flags, not field semantics. The
-# autonomous attach now rewrites them to retired/false, but this narrow
-# allowance avoids false positives in old manifests read during migration.
-ARCHITECTURE_PROOF_ALLOWLIST: tuple[str, ...] = (
-    "quarantined_fixture_only",
-)
-
 PARQUET_SURFACES: tuple[str, ...] = (
     "V_fields.parquet",
     "E_DAG.parquet",
@@ -49,10 +42,7 @@ JSON_SURFACES: tuple[str, ...] = (
 
 
 def _json_text(value: Any) -> str:
-    text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).lower()
-    for allowed in ARCHITECTURE_PROOF_ALLOWLIST:
-        text = text.replace(allowed.lower(), "")
-    return text
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).lower()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -144,7 +134,7 @@ def materialized_external_semantic_errors(
     return errors
 
 
-def assert_no_materialized_external_fixture_semantics(*, root: str | Path) -> None:
+def assert_materialized_external_source_purity(*, root: str | Path) -> None:
     errors = materialized_external_semantic_errors(root=root, include_json=True)
     if errors:
         raise RuntimeError("materialized_external source-reality contamination: " + "; ".join(errors))

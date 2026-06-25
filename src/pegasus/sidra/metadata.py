@@ -6,7 +6,6 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.core.hashing import content_hash
 from pegasus.sidra.api import SidraClient
 from pegasus.sidra.schemas import SIDRAMetadata, SIDRATableMetadata
 
@@ -28,26 +27,6 @@ def table_ids_from_seed(path: str | Path) -> list[str]:
                 ids.add(str(row[key]))
                 break
     return sorted(ids, key=lambda x: int(x) if x.isdigit() else x)
-
-
-def fixture_sidra_metadata(*, localities: list[str] | None = None) -> SIDRAMetadata:
-    table = SIDRATableMetadata(
-        table_id="9606",
-        name="Population by municipality, period and classification fixture",
-        variables=["93"],
-        periods=["2022", "2023"],
-        locality_levels=["N6"],
-        localities_by_level={
-            "N6": [str(value) for value in (localities or ["100001", "100002", "100003"])],
-        },
-        classifications={
-            "2": ["0", "1", "2"],
-            "58": ["0", "1", "2", "3", "4", "5", "9"],
-            "287": ["0", "93070", "93084", "100000"],
-        },
-        units_by_variable={"93": "persons"},
-    )
-    return SIDRAMetadata(tables={"9606": table})
 
 
 def _as_list(payload: Any) -> list[Any]:

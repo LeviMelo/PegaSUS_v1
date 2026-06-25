@@ -48,10 +48,8 @@ class UserIntent(BaseModel):
 
     population_mode: Literal[
         "official_sidra_anchor",
-        "imported_fixture",
         "independent_population_tensor",
         "sim_informed_population_tensor",
-        "synthetic_test_fixture",
         "blocked_missing",
     ] = "official_sidra_anchor"
 
@@ -299,10 +297,8 @@ class DenominatorContract(BaseModel):
 
     mode: Literal[
         "official_sidra_anchor",
-        "imported_fixture",
         "independent_population_tensor",
         "sim_informed_population_tensor",
-        "synthetic_test_fixture",
         "blocked_missing",
     ]
     source: str

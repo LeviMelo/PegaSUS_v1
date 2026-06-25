@@ -10,8 +10,6 @@ from pegasus.efg.race_bridge import (
     load_race_bridge_prior,
     summarize_sim_admin_race_counts,
 )
-from pegasus.output.race_bridge_attach import attach_race_bridge_to_run
-from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import resolve_race_bridge_plan
 
 
@@ -74,23 +72,3 @@ def run_plan_race_bridge(
     }
     return {"summary": summary, "summary_json": json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2)}
 
-
-def run_attach_race_bridge(
-    *,
-    run_dir: str | Path,
-    sim_events_path: str | Path,
-    bridge_prior_path: str | Path,
-    municipality_cod6: str | None = None,
-) -> dict[str, Any]:
-    output = attach_race_bridge_to_run(
-        run_dir=run_dir,
-        sim_events_path=sim_events_path,
-        bridge_prior_path=bridge_prior_path,
-        municipality_cod6=municipality_cod6,
-    )
-    validation = validate_output_bundle(run_dir=str(output))
-    run_config = {}
-    config_path = Path(output) / "RunConfig.json"
-    if config_path.exists():
-        run_config = json.loads(config_path.read_text(encoding="utf-8"))
-    return {"run_dir": output, "validation": validation, "race_bridge": run_config.get("race_bridge")}

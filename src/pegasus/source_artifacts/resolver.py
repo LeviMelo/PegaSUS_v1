@@ -26,7 +26,7 @@ def build_manifest_from_paths(
                 path=entry["path"],
                 source_system=entry["source_system"],
                 artifact_role=entry["artifact_role"],
-                provenance_mode=entry.get("provenance_mode", "fixture"),
+                provenance_mode=entry.get("provenance_mode", "materialized_external"),
                 source_manifest_hash=entry.get("source_manifest_hash"),
                 manifest_path=entry.get("manifest_path"),
                 required_columns=entry.get("required_columns") or [],

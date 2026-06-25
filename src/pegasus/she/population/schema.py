@@ -84,7 +84,7 @@ def official_sidra_anchor_contract(
         state="fragile",
         dashboard_safe="warning",
         allowed_for_rates=True,
-        warnings=warnings or ["fixture_or_unvalidated_sidra_anchor"],
+        warnings=warnings or ["unvalidated_sidra_anchor"],
     )
 
 

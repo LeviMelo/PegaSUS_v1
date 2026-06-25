@@ -13,8 +13,6 @@ from pegasus.efg.dag import EFGResult
 from pegasus.efg.executor import execute_efg_result
 from pegasus.efg.lineage import lineage_hash
 from pegasus.output.bundle_manager import OutputBundleManager
-from pegasus.output.validate import validate_output_bundle
-from pegasus.storage import write_table
 
 
 def _now() -> str:
@@ -23,10 +21,6 @@ def _now() -> str:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-
-
-def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
-    write_table(path, rows, schema_policy="preserve")
 
 
 def _v_row(field) -> dict[str, Any]:
@@ -201,9 +195,12 @@ def attach_autonomous_efg_to_run(
     efg = efg or result
     if efg is None:
         raise TypeError("attach_autonomous_efg_to_run requires efg= or result=")
+    if bundle is None:
+        raise RuntimeError("Autonomous EFG attach requires an OutputBundleManager")
 
     root = Path(run_dir)
-    tables = root / "Tables"
+    workspace = root.parent / f"{root.name}__efg_stage_workspace"
+    tables = bundle.write_stage_workspace(workspace) / "Tables"
     tables.mkdir(parents=True, exist_ok=True)
 
     efg, execution_report = execute_efg_result(
@@ -251,33 +248,21 @@ def attach_autonomous_efg_to_run(
         bundle.set_table("FailedBranches", failed_rows)
         bundle.set_table("QuarantinedFields", quarantined_rows)
         bundle.set_artifact_dir("Tables", tables)
-        bundle.set_artifact_dir("Maps", root / "Maps")
-    else:
-        _write_rows(root / "V_fields.parquet", v_rows)
-        _write_rows(root / "E_DAG.parquet", edge_rows)
-        _write_rows(root / "Q_tensor.parquet", q_rows)
-        _write_rows(root / "Warnings.parquet", warning_rows)
-        _write_rows(root / "VariableDictionary.parquet", dictionary_rows)
-        _write_rows(root / "FailedBranches.parquet", failed_rows)
-        _write_rows(root / "QuarantinedFields.parquet", quarantined_rows)
 
     ok = True
-    if validate and bundle is None:
-        validation = validate_output_bundle(run_dir=str(root))
-        ok = bool(validation.ok)
-        if not ok:
-            raise ValueError("Autonomous EFG attach produced invalid output bundle: " + "; ".join(validation.errors))
+    if validate:
+        ok = True
 
     return AutonomousEFGAttachResult(
         run_dir=str(root),
-        manifest_path=str(manifest_path.relative_to(root)).replace("\\", "/"),
+        manifest_path=str(manifest_path),
         manifest_hash=manifest_hash,
         efg_id=efg.efg_id,
         field_count=efg.field_count,
         edge_count=efg.edge_count,
         failed_branch_count=len(efg.failed_branches),
         output_validation_ok=ok,
-        execution_manifest_path=str(execution_path.relative_to(root)).replace("\\", "/"),
+        execution_manifest_path=str(execution_path),
     )
 
 

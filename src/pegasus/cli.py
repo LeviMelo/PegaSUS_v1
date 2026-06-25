@@ -17,7 +17,6 @@ from pegasus.registries.validators import validate_registry_tree
 from pegasus.workflows.compile import run_compile
 from pegasus.sidra.api import SidraClient, SidraClientConfig
 from pegasus.workflows.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
-from pegasus.workflows.efg import run_attach_sidra_denominator
 from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 from pegasus.workflows.sidra import (
     run_sidra_extract,
@@ -214,20 +213,6 @@ def efg_build_sinasc_development(*args, **kwargs) -> None:
     raise typer.Exit(2)
 
 
-def efg_attach_sidra_denominator(
-    run_dir: Path = typer.Option(..., "--run-dir"),
-    sidra_facts: Path = typer.Option(..., "--sidra-facts"),
-) -> None:
-    result = run_attach_sidra_denominator(
-        run_dir=run_dir,
-        sidra_facts_path=sidra_facts,
-    )
-    validation = result["validation"]
-    if not validation.ok:
-        _fail(validation.errors)
-    print(f"[green]SIDRA denominator anchor attached and run bundle valid[/green] {result['run_dir']}")
-
-
 @sidra_app.command("metadata-development")
 def sidra_metadata_development(*args, **kwargs) -> None:
     print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
@@ -318,12 +303,6 @@ def compile(
     if not validation.ok:
         _fail(validation.errors)
     print(f"[green]compile complete[/green] run={result['run_dir']}")
-
-
-@efg_app.command("attach-race-bridge")
-def efg_attach_race_bridge(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
 
 
 def efg_validate_race_bridge_prior(

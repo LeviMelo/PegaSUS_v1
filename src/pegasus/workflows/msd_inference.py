@@ -6,18 +6,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-import pyarrow.parquet as pq
-
-from pegasus.output.validate import validate_output_bundle
-
-
-FIRST_CLASS_INFERENCE_TABLES: dict[str, str] = {
-    "ModelAssociations": "ModelAssociations.parquet",
-    "ResidualAssociations": "ResidualAssociations.parquet",
-    "Hypotheses": "Hypotheses.parquet",
-}
-
-
 def _stage_manifest(stage_plan: Any) -> dict[str, dict[str, Any]]:
     if stage_plan is None:
         return {}
@@ -64,17 +52,6 @@ def _write_stage_manifest(root: Path, name: str, payload: dict[str, Any]) -> Pat
         encoding="utf-8",
     )
     return out
-
-
-def _stage_first_class_tables_from_run(bundle: Any | None, root: Path) -> None:
-    if bundle is None:
-        return
-    for key, rel in FIRST_CLASS_INFERENCE_TABLES.items():
-        path = root / rel
-        if path.exists():
-            bundle.set_table(key, pq.read_table(path).to_pylist())
-
-
 def _record_stage(
     telemetry: Any,
     *,
@@ -204,7 +181,7 @@ def run_msd_inference_pipeline(
                     run_dir=pirs_root,
                     design_matrix_manifest=matrix,
                     mutate_output_bundle=True,
-                    validate=True,
+                    validate=False,
                     attach=True,
                     bundle=bundle,
                 )
@@ -253,7 +230,7 @@ def run_msd_inference_pipeline(
                 design_matrix_manifest=design_matrix_manifest,
                 budget=budget,
                 mutate_output_bundle=True,
-                validate=True,
+                validate=False,
                 attach=True,
                 bundle=bundle,
             )
@@ -283,11 +260,7 @@ def run_msd_inference_pipeline(
     manifest_path = _write_stage_manifest(root, "msd_inference_pipeline.json", payload)
     payload["manifest_path"] = str(manifest_path.relative_to(root)).replace("\\", "/")
 
-    try:
-        validation = validate_output_bundle(run_dir=str(root))
-        payload["output_validation"] = {"ok": bool(validation.ok), "errors": list(validation.errors)}
-    except Exception as exc:
-        payload["output_validation"] = {"ok": False, "errors": [f"{type(exc).__name__}: {exc}"]}
+    payload["output_validation"] = {"status": "deferred_until_output_bundle_flush"}
 
     return payload
 

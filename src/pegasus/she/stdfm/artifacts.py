@@ -16,6 +16,8 @@ def materialize_stdfm_fit(
     output_dir: str | Path,
 ) -> STDFMFitResult:
     output_dir = Path(output_dir)
+    if output_dir.name in {"Tables", "Maps"}:
+        output_dir = output_dir.parent / "stage_workspace" / "stdfm"
     output_dir.mkdir(parents=True, exist_ok=True)
     space, time, fields = problem.shape
     factors = problem.n_factors

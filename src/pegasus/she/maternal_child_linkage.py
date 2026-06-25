@@ -89,7 +89,7 @@ def _liveborn_death_filter(df: pl.DataFrame) -> pl.DataFrame:
         return df.slice(0, 0)
     filtered = df.filter(pl.col("age_days").is_not_null() & (pl.col("age_days") >= 0))
     if "death_type" in filtered.columns:
-        # SIM TIPOBITO fetal-death coding is source-specific; fixture smoke keeps non-fetal deaths.
+        # SIM TIPOBITO fetal-death coding is source-specific.
         # Do not coerce missing death_type to survived/fetal. Only explicit fetal-like states are excluded.
         filtered = filtered.filter(~pl.col("death_type").cast(pl.Utf8).str.to_lowercase().is_in(["1", "fetal", "obito_fetal", "óbito fetal"]))
     return filtered
@@ -106,8 +106,7 @@ def _congenital_anomaly_count(df: pl.DataFrame) -> int:
 def _assert_plausible_anomaly_rate(*, births_total: int, congenital_anomaly_births: int) -> None:
     if births_total <= 0:
         return
-    # Tiny fixtures can be intentionally high-prevalence to exercise decoder states.
-    # The plausibility gate is intended for real production-sized SINASC materializations.
+    # The plausibility gate is intended for production-sized SINASC materializations.
     if births_total < 1000:
         return
     rate = congenital_anomaly_births / float(births_total)

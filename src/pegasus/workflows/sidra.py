@@ -6,10 +6,8 @@ from typing import Any
 from pegasus.core.config import load_yaml
 from pegasus.sidra.api import SidraClient
 from pegasus.sidra.extract import extract_chunk_plan, read_chunk_plan, write_chunk_plan, write_extraction_log
-from pegasus.sidra.facts import normalize_fixture_json_to_facts
 from pegasus.sidra.metadata import (
     fetch_official_metadata,
-    fixture_sidra_metadata,
     metadata_dir_hash,
     read_normalized_metadata_tables,
     table_ids_from_seed,
@@ -17,50 +15,11 @@ from pegasus.sidra.metadata import (
 )
 from pegasus.sidra.plan import plan_sidra_chunks
 from pegasus.sidra.registry import request_from_view
-from pegasus.sidra.schemas import SIDRARequest
 
 
 def sidra_runtime_config() -> dict[str, Any]:
     data = load_yaml("config/sidra.yaml")
     return data.get("sidra", data)
-
-
-def run_sidra_metadata_fixture(*, output_dir: str | Path) -> dict[str, Path]:
-    metadata = fixture_sidra_metadata()
-    return write_normalized_metadata_tables(metadata, output_dir=output_dir)
-
-
-def run_sidra_plan_fixture(
-    *,
-    output: str | Path,
-    max_cells: int = 49900,
-) -> dict[str, Any]:
-    metadata = fixture_sidra_metadata()
-    table = metadata.tables["9606"]
-    request = SIDRARequest(
-        table_id="9606",
-        variables=table.variables,
-        periods=table.periods,
-        locality_level="N6",
-        localities=table.localities_by_level["N6"],
-        classifications=table.classifications,
-    )
-    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=max_cells)
-    output_path = write_chunk_plan(chunks, output_path=output)
-    return {"chunks": chunks, "output": output_path}
-
-
-def run_sidra_normalize_fixture(
-    *,
-    input_path: str | Path,
-    output_path: str | Path,
-) -> Path:
-    return normalize_fixture_json_to_facts(
-        input_path=input_path,
-        output_path=output_path,
-        table_id="9606",
-        unit_by_variable={"93": "persons"},
-    )
 
 
 def run_sidra_metadata(

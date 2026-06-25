@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,13 +17,7 @@ from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_m
 from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
-from pegasus.sidra.facts import write_facts_parquet
-from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
-from pegasus.she.substrate import build_substrate_bundle
-from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes, run_datasus_normalize_sih
-from pegasus.workflows.datasus import run_datasus_normalize_sim
-from pegasus.workflows.efg import run_attach_sidra_denominator
-from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
+from pegasus.she.substrate import SourceArtifactRef, build_substrate_bundle, load_source_artifacts_from_manifest
 from pegasus.workflows.msd_inference import run_msd_inference_pipeline
 
 
@@ -154,43 +147,36 @@ def _compiler_architecture_metadata() -> dict[str, Any]:
         "legacy_bootstrap_builder": None,
         "legacy_bootstrap_status": "retired_deleted",
         "legacy_graph_authority": False,
-        "retired_legacy_modules": [
-            "pegasus.output.sim_efg_bundle",
-            "pegasus.output.sinasc_efg_bundle",
-            "pegasus.output.cnes_sih_efg_bundle",
-            "pegasus.output.population_tensor_bundle",
-            "pegasus.output.sidra_stdfm_bundle",
-            "pegasus.output.pirs_bundle",
-            "pegasus.output.hsic_bundle",
-        ],
+        "retired_legacy_modules": [],
         "production_runtime_authority": "autonomous_efg_core_plus_compiler_services",
     }
 
 
-def _external_compile_inputs(source_manifest: str | Path, *, include_cnes_sih: bool) -> dict[str, Path]:
-    payload = json.loads(Path(source_manifest).read_text(encoding="utf-8"))
-    artifacts = payload.get("artifacts")
-    if not isinstance(artifacts, list):
-        raise ValueError("Source artifact manifest must contain an artifacts list.")
-    required = {
-        "sim_events": ("SIM-DO", "processed_events"),
-        "sinasc_events": ("SINASC", "processed_events"),
-        "sidra_facts": ("SIDRA", "normalized_facts"),
+def _validate_compile_manifest_artifacts(
+    artifacts: tuple[SourceArtifactRef, ...],
+    *,
+    include_cnes_sih: bool,
+) -> None:
+    required: set[tuple[str, str]] = {
+        ("SIM-DO", "processed_events"),
+        ("SINASC", "processed_events"),
+        ("SIDRA", "normalized_facts"),
     }
     if include_cnes_sih:
         required.update({
-            "cnes_events": ("CNES-ST", "processed_events"),
-            "sih_events": ("SIH-RD", "processed_events"),
+            ("CNES-ST", "processed_events"),
+            ("SIH-RD", "processed_events"),
         })
-    resolved: dict[str, Path] = {}
-    for key, (system, role) in required.items():
-        matches = [Path(str(item.get("path"))) for item in artifacts if item.get("source_system") == system and item.get("artifact_role") == role]
+    available: dict[tuple[str, str], list[SourceArtifactRef]] = {}
+    for artifact in artifacts:
+        key = (artifact.source_system, artifact.artifact_role)
+        available.setdefault(key, []).append(artifact)
+        if not Path(artifact.path).is_file():
+            raise FileNotFoundError(f"Production source artifact is missing: {artifact.path}")
+    for system, role in sorted(required):
+        matches = available.get((system, role), [])
         if len(matches) != 1:
             raise ValueError(f"Production compile requires exactly one {system}:{role} artifact; found {len(matches)}.")
-        if not matches[0].is_file():
-            raise FileNotFoundError(f"Production source artifact is missing: {matches[0]}")
-        resolved[key] = matches[0]
-    return resolved
 
 
 def _run_compile_impl(
@@ -258,23 +244,8 @@ def _run_compile_impl(
     compile_manifest_path = data_root / "manifests" / "runs" / f"{run_id}.compile_manifest.json"
     if source_manifest is None:
         raise ValueError("Production compile requires a source artifact manifest.")
-    external_inputs = _external_compile_inputs(source_manifest, include_cnes_sih=include_cnes_sih)
-    sim_events_path = external_inputs["sim_events"]
-    sinasc_events_path = external_inputs["sinasc_events"]
-    sidra_facts_path = external_inputs["sidra_facts"]
-    cnes_events_path = external_inputs.get("cnes_events")
-    sih_events_path = external_inputs.get("sih_events")
-    external_inputs: dict[str, Path] = {}
-    if compile_source_reality.compile_source_mode == "materialized_external":
-        if source_manifest is None:
-            raise ValueError("materialized_external compile requires a source manifest path")
-        external_inputs = _external_compile_inputs(source_manifest, include_cnes_sih=include_cnes_sih)
-        sim_events_path = external_inputs["sim_events"]
-        sinasc_events_path = external_inputs["sinasc_events"]
-        sidra_facts_path = external_inputs["sidra_facts"]
-        if include_cnes_sih:
-            cnes_events_path = external_inputs["cnes_events"]
-            sih_events_path = external_inputs["sih_events"]
+    autonomous_artifacts = load_source_artifacts_from_manifest(source_manifest)
+    _validate_compile_manifest_artifacts(autonomous_artifacts, include_cnes_sih=include_cnes_sih)
 
     with telemetry.stage("datasus_manifest"):
         compile_manifest_path = _write_compile_manifest(
@@ -287,16 +258,13 @@ def _run_compile_impl(
         source_hashes["compile_manifest"] = sha256_file(compile_manifest_path)
 
     with telemetry.stage("datasus_acquire"):
-        source_hashes.update({f"external_{key}": sha256_file(path) for key, path in external_inputs.items()})
+        source_hashes.update({
+            f"source_artifact_{artifact.source_system}_{artifact.artifact_role}": artifact.artifact_hash or sha256_file(Path(artifact.path))
+            for artifact in autonomous_artifacts
+        })
 
     with telemetry.stage("datasus_decode"):
-        source_hashes["sim_processed_events"] = sha256_file(sim_events_path)
-        source_hashes["sinasc_processed_events"] = sha256_file(sinasc_events_path)
-        if include_cnes_sih:
-            if cnes_events_path is None or sih_events_path is None:
-                raise ValueError("include_cnes_sih requires CNES-ST and SIH-RD materialized source artifacts.")
-            source_hashes["cnes_processed_events"] = sha256_file(cnes_events_path)
-            source_hashes["sih_processed_events"] = sha256_file(sih_events_path)
+        source_hashes["source_manifest"] = sha256_file(Path(source_manifest))
 
     telemetry.set_stage("sidra_metadata", "skipped", 0.0)
     telemetry.set_stage("sidra_plan", "skipped", 0.0)
@@ -304,62 +272,14 @@ def _run_compile_impl(
     telemetry.flush()
 
     with telemetry.stage("sidra_normalize"):
-        if not external_inputs:
-            raise RuntimeError("SIDRA normalized_facts artifact is required in the source manifest")
-        source_hashes["sidra_facts"] = sha256_file(sidra_facts_path)
+        source_hashes["sidra_facts"] = next(
+            artifact.artifact_hash or sha256_file(Path(artifact.path))
+            for artifact in autonomous_artifacts
+            if artifact.source_system == "SIDRA" and artifact.artifact_role == "normalized_facts"
+        )
 
     autonomous_efg_metadata: dict[str, Any] | None = None
     with telemetry.stage("efg_build"):
-        provenance_mode = (
-            "development"
-            if False
-            else compile_source_reality.compile_source_mode
-        )
-        autonomous_artifacts: list[dict[str, Any]] = [
-            {
-                "path": str(sim_events_path),
-                "source_system": "SIM-DO",
-                "artifact_role": "processed_events",
-                "provenance_mode": provenance_mode,
-                "source_manifest_hash": source_hashes["compile_manifest"],
-                "artifact_hash": source_hashes["sim_processed_events"],
-            },
-            {
-                "path": str(sinasc_events_path),
-                "source_system": "SINASC",
-                "artifact_role": "processed_events",
-                "provenance_mode": provenance_mode,
-                "source_manifest_hash": source_hashes["compile_manifest"],
-                "artifact_hash": source_hashes["sinasc_processed_events"],
-            },
-            {
-                "path": str(sidra_facts_path),
-                "source_system": "SIDRA",
-                "artifact_role": "normalized_facts",
-                "provenance_mode": provenance_mode,
-                "source_manifest_hash": source_hashes["compile_manifest"],
-                "artifact_hash": source_hashes["sidra_facts"],
-            },
-        ]
-        if include_cnes_sih:
-            autonomous_artifacts.extend([
-                {
-                    "path": str(cnes_events_path),
-                    "source_system": "CNES-ST",
-                    "artifact_role": "processed_facility_periods",
-                    "provenance_mode": provenance_mode,
-                    "source_manifest_hash": source_hashes["compile_manifest"],
-                    "artifact_hash": source_hashes["cnes_processed_events"],
-                },
-                {
-                    "path": str(sih_events_path),
-                    "source_system": "SIH-RD",
-                    "artifact_role": "processed_admissions",
-                    "provenance_mode": provenance_mode,
-                    "source_manifest_hash": source_hashes["compile_manifest"],
-                    "artifact_hash": source_hashes["sih_processed_events"],
-                },
-            ])
         autonomous_substrate = build_substrate_bundle(artifacts=autonomous_artifacts)
         autonomous_result = build_efg(
             substrate=autonomous_substrate,
@@ -376,7 +296,7 @@ def _run_compile_impl(
             **autonomous_attach.as_manifest(),
             "substrate_id": autonomous_substrate.substrate_id,
             "source_reality_mode": autonomous_substrate.source_reality_mode,
-            "source_systems": sorted({artifact["source_system"] for artifact in autonomous_artifacts}),
+            "source_systems": sorted({artifact.source_system for artifact in autonomous_artifacts}),
             "registry_hashes": autonomous_result.registry_hashes,
             "legality_summary": autonomous_result.legality_summary,
             "precompression": autonomous_result.precompression.as_manifest(),
@@ -582,18 +502,6 @@ def run_compile(
         require_materialized_external=require_materialized_external,
     )
     if not isinstance(result, dict):
-        return result
-
-    if source_manifest is None:
-        result.setdefault(
-            "substrate_gate",
-            {
-                "status": "not_evaluated",
-                "reason": "no_source_manifest_supplied_to_compile",
-                "source_reality_mode": "no_manifest",
-                "registry_backed": None,
-            },
-        )
         return result
 
     run_path = result.get("run_dir")

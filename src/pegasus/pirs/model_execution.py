@@ -77,23 +77,6 @@ def _write_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
     return path
 
 
-def _write_rows_like(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
-    schema = pq.read_table(path).schema
-    shaped = [{name: row.get(name) for name in schema.names} for row in rows]
-    if shaped:
-        table = pa.Table.from_pylist(shaped, schema=schema)
-    else:
-        table = pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
-    pq.write_table(table, path)
-    return path
-
-
-def _append_unique_rows_like(path: Path, rows: Sequence[Mapping[str, Any]], *, id_column: str) -> Path:
-    incoming_ids = {str(row.get(id_column)) for row in rows if row.get(id_column) not in (None, "")}
-    existing = [row for row in _read_rows(path) if str(row.get(id_column)) not in incoming_ids]
-    return _write_rows_like(path, [*existing, *[dict(row) for row in rows]])
-
-
 def _hash_payload(payload: Mapping[str, Any]) -> str:
     raw = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -283,9 +266,11 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
         "mutated_output_bundle": False,
     }
     if mutate_output_bundle:
+        if bundle is None:
+            raise RuntimeError("PIRS execution requires an OutputBundleManager")
         _mutate_output_bundle_with_model_result(root, payload, residual_vector=fit["residual"], bundle=bundle)
         payload["mutated_output_bundle"] = True
-        if validate:
+        if validate and bundle is None:
             from pegasus.output.validate import validate_output_bundle
 
             validation = validate_output_bundle(run_dir=str(root))
@@ -378,12 +363,7 @@ def _mutate_output_bundle_with_model_result(root: Path, payload: Mapping[str, An
         bundle.append_table("ResidualAssociations", [residual_assoc])
         bundle.append_table("Warnings", [warning])
     else:
-        _append_unique_rows_like(root / "V_fields.parquet", [residual_field], id_column="field_id")
-        _append_unique_rows_like(root / "Q_tensor.parquet", [q_row], id_column="field_id")
-        _append_unique_rows_like(root / "VariableDictionary.parquet", [vd_row], id_column="field_id")
-        _append_unique_rows_like(root / "ModelAssociations.parquet", [model_assoc], id_column="id")
-        _append_unique_rows_like(root / "ResidualAssociations.parquet", [residual_assoc], id_column="id")
-        _append_unique_rows_like(root / "Warnings.parquet", [warning], id_column="warning_id")
+        raise RuntimeError("PIRS execution requires an OutputBundleManager")
 
 
 def pirs_model_execution_summary(payload: Mapping[str, Any], *, manifest_path: str | Path | None = None) -> dict[str, Any]:

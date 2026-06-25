@@ -244,7 +244,7 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
     out.parent.mkdir(parents=True, exist_ok=True)
     valid_rows = sum(1 for row in rows if row["record_state"] == "valid")
     anomaly_rows = sum(1 for row in rows if row["congenital_anomaly_flag"] is True)
-    # Do not apply epidemiological plausibility thresholds to tiny synthetic fixtures.
+    # Do not apply epidemiological plausibility thresholds to tiny materialized panels.
     # Real-source SINASC AL 2022 has tens of thousands of births; the threshold below
     # still catches inverted IDANOMAL/CODANOMAL semantics in production-sized data.
     if valid_rows >= 1000 and anomaly_rows / float(valid_rows) > 0.20:
@@ -269,4 +269,3 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
 def normalize_sinasc_record(row: dict[str, Any], *args, **kwargs) -> dict[str, Any]:
     registry_root = kwargs.get('registry_root', 'config/registries')
     return _registry_normalize_sinasc_record(row, registry_root=registry_root)
-

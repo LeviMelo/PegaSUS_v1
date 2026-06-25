@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 import pyarrow as pa
 
-from pegasus.storage import append_replace, read_table, row_count, schema, write_table
+from pegasus.storage import read_table, row_count, schema, write_table
 
 
 def _rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -55,7 +55,7 @@ def write_rows_like(path: str | Path, rows: Iterable[dict[str, Any]]) -> Path:
     """Overwrite a table, preserving its schema when the table already exists.
 
     When the table does not exist yet, fall back to ``write_rows``. This keeps the
-    helper usable for first-write unit fixtures and auxiliary artifacts while
+    helper usable for first-write auxiliary artifacts while
     retaining fixed-schema behavior for existing first-class bundle tables.
     """
     path = Path(path)
@@ -79,21 +79,6 @@ def append_rows(path: str | Path, rows: Iterable[dict[str, Any]]) -> Path:
         return write_rows(path, payload)
     existing = read_rows(path)
     return write_rows_like(path, existing + payload)
-
-
-def append_replace_rows(path: str | Path, rows: Iterable[dict[str, Any]], *, id_column: str) -> Path:
-    """Append/replace rows by id through the storage boundary.
-
-    ``pegasus.storage.append_replace`` is authoritative for existing tables.  For
-    first writes, infer the table schema from the incoming rows so callers do not
-    need to create an empty seed table only to replace into it.
-    """
-    path = Path(path)
-    payload = _rows(rows)
-    if not path.exists():
-        return write_rows(path, payload)
-    append_replace(path, payload, id_column=id_column)
-    return path
 
 
 def empty_like(path: str | Path) -> Path:

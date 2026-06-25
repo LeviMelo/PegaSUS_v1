@@ -16,7 +16,7 @@ from typing import Any, Iterable
 import polars as pl
 
 from pegasus.core.hashing import content_hash, sha256_file
-from pegasus.she.source_registry import SourceFieldSpec, resolve_source_fields, source_system_from_path
+from pegasus.she.source_registry import SourceFieldSpec, resolve_source_field, resolve_source_fields, source_system_from_path
 from pegasus.she.zero_variance import ColumnVarianceProfile, TableVarianceProfile, profile_table_variance
 
 
@@ -62,11 +62,24 @@ class SubstrateFieldCandidate:
     artifact_hash: str | None
     warnings: tuple[str, ...]
 
+    @property
+    def column_name(self) -> str:
+        return self.column
+
+    @property
+    def quality_role(self) -> str | None:
+        try:
+            return resolve_source_field(source_system=self.source_system, column_name=self.column).spec.quality_role
+        except Exception:
+            return None
+
     def as_manifest(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["role"] = list(self.role)
         payload["provenance"] = list(self.provenance)
         payload["warnings"] = list(self.warnings)
+        payload["column_name"] = self.column_name
+        payload["quality_role"] = self.quality_role
         return payload
 
 
@@ -85,9 +98,14 @@ class SubstrateFieldExclusion:
     structural_role: str
     warnings: tuple[str, ...]
 
+    @property
+    def column_name(self) -> str:
+        return self.column
+
     def as_manifest(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["warnings"] = list(self.warnings)
+        payload["column_name"] = self.column_name
         return payload
 
 
@@ -123,17 +141,28 @@ class SubstrateBundle:
     def structural_exclusion_count(self) -> int:
         return sum(1 for e in self.exclusions if e.reason == "structural_or_audit_only")
 
+    @property
+    def candidate_fields(self) -> tuple[SubstrateFieldCandidate, ...]:
+        return self.candidates
+
+    @property
+    def excluded_fields(self) -> tuple[SubstrateFieldExclusion, ...]:
+        return self.exclusions
+
     def summary(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "substrate_id": self.substrate_id,
             "source_reality_mode": self.source_reality_mode,
             "source_artifact_count": len(self.source_artifacts),
+            "candidate_count": len(self.candidates),
+            "excluded_count": len(self.exclusions),
             "admissible_candidate_count": self.admissible_candidate_count,
             "excluded_field_count": self.excluded_field_count,
             "zero_variance_exclusion_count": self.zero_variance_exclusion_count,
             "all_missing_exclusion_count": self.all_missing_exclusion_count,
             "structural_exclusion_count": self.structural_exclusion_count,
+            "registry_backed": bool(self.registry_hashes) and all(bool(v) for v in self.registry_hashes.values()),
             "registry_hashes": dict(self.registry_hashes),
             "warnings": list(self.warnings),
         }
@@ -179,7 +208,7 @@ def normalize_source_artifact_ref(payload: SourceArtifactRef | dict[str, Any] | 
     role = payload.get("artifact_role") or payload.get("role") or payload.get("source_role") or "processed_events"
     mode = payload.get("provenance_mode") or payload.get("mode") or payload.get("source_mode") or ("development" if "development" in str(path).lower() else "cached_external")
     source_manifest_hash = payload.get("source_manifest_hash") or payload.get("manifest_hash")
-    artifact_hash = payload.get("artifact_hash") or payload.get("sha256") or _artifact_hash(path)
+    artifact_hash = payload.get("artifact_hash") or payload.get("content_hash") or payload.get("sha256") or _artifact_hash(path)
     return SourceArtifactRef(
         path=str(path),
         source_system=str(source_system),
@@ -198,7 +227,13 @@ def load_source_artifacts_from_manifest(path: str | Path) -> tuple[SourceArtifac
         raw_artifacts = list(raw_artifacts.values())
     if not isinstance(raw_artifacts, list):
         raise SubstrateError(f"Source artifact manifest does not contain a list of artifacts: {p}")
-    return tuple(normalize_source_artifact_ref(x) for x in raw_artifacts)
+    manifest_hash = sha256_file(p)
+    refs: list[SourceArtifactRef] = []
+    for item in raw_artifacts:
+        if isinstance(item, dict) and not item.get("source_manifest_hash"):
+            item = {**item, "source_manifest_hash": manifest_hash}
+        refs.append(normalize_source_artifact_ref(item))
+    return tuple(refs)
 
 
 def source_reality_mode(artifacts: Iterable[SourceArtifactRef]) -> str:
@@ -429,79 +464,3 @@ def attach_substrate_summary_to_run(*, run_dir: str | Path, bundle: SubstrateBun
             payload.setdefault("registry_hashes", {}).update(bundle.registry_hashes)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary
-
-# ---- Slice 13B source-registry compatibility bridge ----
-# Slice 13B moved source-field semantics to YAML registries. These runtime
-# compatibility accessors keep the Slice 13A SubstrateBundle public surface
-# stable while adding registry-backed metadata required by the 13B tests/audits.
-
-def _slice13b_candidate_column_name(self):
-    return self.column
-
-
-def _slice13b_candidate_quality_role(self):
-    try:
-        from pegasus.she.source_registry import resolve_source_field
-
-        return resolve_source_field(source_system=self.source_system, column_name=self.column).spec.quality_role
-    except Exception:
-        return None
-
-
-def _slice13b_exclusion_column_name(self):
-    return self.column
-
-
-def _slice13b_bundle_candidate_fields(self):
-    return self.candidates
-
-
-def _slice13b_bundle_excluded_fields(self):
-    return self.exclusions
-
-
-SubstrateFieldCandidate.column_name = property(_slice13b_candidate_column_name)  # type: ignore[attr-defined]
-SubstrateFieldCandidate.quality_role = property(_slice13b_candidate_quality_role)  # type: ignore[attr-defined]
-SubstrateFieldExclusion.column_name = property(_slice13b_exclusion_column_name)  # type: ignore[attr-defined]
-SubstrateBundle.candidate_fields = property(_slice13b_bundle_candidate_fields)  # type: ignore[attr-defined]
-SubstrateBundle.excluded_fields = property(_slice13b_bundle_excluded_fields)  # type: ignore[attr-defined]
-
-if not hasattr(SubstrateBundle, "_slice13b_base_summary"):
-    SubstrateBundle._slice13b_base_summary = SubstrateBundle.summary  # type: ignore[attr-defined]
-
-
-def _slice13b_summary(self):
-    payload = self._slice13b_base_summary()  # type: ignore[attr-defined]
-    payload.setdefault("candidate_count", len(self.candidates))
-    payload.setdefault("excluded_count", len(self.exclusions))
-    payload.setdefault("registry_backed", bool(self.registry_hashes) and all(bool(v) for v in self.registry_hashes.values()))
-    return payload
-
-
-SubstrateBundle.summary = _slice13b_summary  # type: ignore[method-assign]
-
-if not hasattr(SubstrateFieldCandidate, "_slice13b_base_as_manifest"):
-    SubstrateFieldCandidate._slice13b_base_as_manifest = SubstrateFieldCandidate.as_manifest  # type: ignore[attr-defined]
-
-
-def _slice13b_candidate_as_manifest(self):
-    payload = self._slice13b_base_as_manifest()  # type: ignore[attr-defined]
-    payload.setdefault("column_name", self.column)
-    payload.setdefault("quality_role", self.quality_role)
-    return payload
-
-
-SubstrateFieldCandidate.as_manifest = _slice13b_candidate_as_manifest  # type: ignore[method-assign]
-
-if not hasattr(SubstrateFieldExclusion, "_slice13b_base_as_manifest"):
-    SubstrateFieldExclusion._slice13b_base_as_manifest = SubstrateFieldExclusion.as_manifest  # type: ignore[attr-defined]
-
-
-def _slice13b_exclusion_as_manifest(self):
-    payload = self._slice13b_base_as_manifest()  # type: ignore[attr-defined]
-    payload.setdefault("column_name", self.column)
-    return payload
-
-
-SubstrateFieldExclusion.as_manifest = _slice13b_exclusion_as_manifest  # type: ignore[method-assign]
-# ---- End Slice 13B source-registry compatibility bridge ----

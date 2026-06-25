@@ -65,5 +65,5 @@ def fit_parametric_model(input_model: ModelInput, *, output_dir: str | Path) -> 
         diagnostics=diagnostics,
         fitted_values_path=str(fitted_path),
         residual_field_id="pirs_residual_all_deaths",
-        warnings=("pirs_fixture_model_not_for_inference",),
+        warnings=("pirs_model_requires_post_fit_validation",),
     )

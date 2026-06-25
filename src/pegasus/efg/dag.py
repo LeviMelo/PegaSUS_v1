@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -10,6 +10,8 @@ from typing import Any, Iterable
 from pegasus.core.hashing import content_hash, sha256_file
 from pegasus.core.schemas import FieldNode, UserIntent
 from pegasus.efg.align import align_fields
+from pegasus.efg.bridges import bridge_summary, plan_bridge_candidates
+from pegasus.efg.core_seed import build_core_seed_set, core_seed_summary
 from pegasus.efg.declaration import OperatorSpec
 from pegasus.efg.equivalence import PrecompressionReport, precompress_fields
 from pegasus.efg.failed_branch import (
@@ -60,6 +62,8 @@ class EFGResult:
     registry_hashes: dict[str, str]
     legality_summary: dict[str, int]
     operator_mode: str
+    core_seed_summary: dict[str, Any] = field(default_factory=dict)
+    bridge_plan_summary: dict[str, Any] = field(default_factory=dict)
 
     @property
     def field_count(self) -> int:
@@ -72,6 +76,7 @@ class EFGResult:
     def as_manifest(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
+            "semantic_manifest_schema": "28Y.1",
             "efg_id": self.efg_id,
             "substrate_id": self.substrate_id,
             "field_count": self.field_count,
@@ -94,7 +99,30 @@ class EFGResult:
             "registry_hashes": dict(self.registry_hashes),
             "legality_summary": dict(self.legality_summary),
             "operator_mode": self.operator_mode,
+            "core_seed_summary": dict(self.core_seed_summary),
+            "bridge_plan_summary": dict(self.bridge_plan_summary),
         }
+
+
+def _empty_core_seed_summary(registry_root: str | Path = "config/registries") -> dict[str, Any]:
+    return {
+        "registry_root": str(registry_root),
+        "seed_count": 0,
+        "blocked_count": 0,
+        "role_counts": {},
+        "seeds": [],
+        "blocked": [],
+    }
+
+
+def _empty_bridge_plan_summary() -> dict[str, Any]:
+    return {
+        "candidate_count": 0,
+        "blocked_count": 0,
+        "bridge_type_counts": {},
+        "candidates": [],
+        "blocked": [],
+    }
 
 
 def _edge(
@@ -377,6 +405,51 @@ def _build_efg_base(
                 )
                 expand(operator, [numerator, denominator], alignment)
 
+    bridge_plan = None
+    if operator_mode != "raw_only":
+        bridge_plan = plan_bridge_candidates(fields, registry_root=root, intent=intent)
+        by_id = {field.id: field for field in fields}
+        for candidate in bridge_plan.candidates:
+            parents = [by_id.get(candidate.numerator_id)]
+            if candidate.denominator_id:
+                parents.append(by_id.get(candidate.denominator_id))
+            parents = [parent for parent in parents if parent is not None]
+            operator_name = EFGOperator.RN.value if str(candidate.required_operator).lower() == "ratio" else str(candidate.required_operator)
+            operator_role = _ratio_role(parents[0], parents[1]) if operator_name == EFGOperator.RN.value and len(parents) == 2 else str(candidate.bridge_type)
+            operator = OperatorSpec(
+                name=operator_name,
+                role=operator_role,
+                output_kind="bridge_module" if not candidate.denominator_id else "intensive_density",
+                params={
+                    "bridge_id": candidate.bridge_id,
+                    "bridge_type": candidate.bridge_type,
+                    "support_relation": candidate.support_relation,
+                    "registry_evidence": list(candidate.registry_evidence),
+                },
+            )
+            if not parents:
+                failures.append(make_failed_branch_record(
+                    parents=[],
+                    operator=operator,
+                    reason="bridge_candidate_parent_missing",
+                    disposition="blocked",
+                    warnings=list(candidate.warnings),
+                ))
+                legality["blocked"] += 1
+                continue
+            alignment = None
+            if len(parents) == 2:
+                alignment = align_fields(
+                    left=parents[0],
+                    right=parents[1],
+                    operator=operator,
+                    intent=intent,
+                    registries=registry_arg,
+                )
+            child = expand(operator, parents, alignment)
+            if child is not None:
+                by_id[child.id] = child
+
     for request in constraints.get("ratio_requests", []):
         numerator = _find_field(fields, str(request.get("numerator", "")))
         denominator = _find_field(fields, str(request.get("denominator", "")))
@@ -420,12 +493,27 @@ def _build_efg_base(
     final_edges = _dedupe_edges(edges, combined_report.canonical_by_field_id)
     registry_hashes = _registry_hashes(substrate, root)
     source_hashes = _source_hashes(substrate)
+    try:
+        seed_set = build_core_seed_set(compressed, registry_root=root, intent=intent)
+        core_summary = core_seed_summary(seed_set)
+    except Exception as exc:  # pragma: no cover - defensive manifest metadata
+        core_summary = {
+            **_empty_core_seed_summary(root),
+            "blocked": [{"reason": "core_seed_summary_failed", "error": str(exc)}],
+            "blocked_count": 1,
+        }
+    if bridge_plan is None:
+        bridge_summary_payload = _empty_bridge_plan_summary()
+    else:
+        bridge_summary_payload = bridge_summary(bridge_plan)
     payload = {
         "substrate_id": substrate.substrate_id,
         "field_ids": [field.id for field in compressed],
         "edge_ids": [edge.edge_id for edge in final_edges],
         "failed_ids": [branch.failed_branch_id for branch in failures],
         "registry_hashes": registry_hashes,
+        "core_seed_summary": core_summary,
+        "bridge_plan_summary": bridge_summary_payload,
     }
     return EFGResult(
         schema_version="19A.1",
@@ -441,250 +529,10 @@ def _build_efg_base(
         registry_hashes=registry_hashes,
         legality_summary=legality,
         operator_mode=operator_mode,
+        core_seed_summary=core_summary,
+        bridge_plan_summary=bridge_summary_payload,
     )
-
-# ---- Slice 28Y EFG semantic manifest integration ----
-# The autonomous DAG now records metadata-only core-seed and bridge-plan evidence
-# without changing first-class output-bundle keys and without materializing tensors.
-from functools import wraps as _slice28y_wraps
-
-from pegasus.efg.bridges import bridge_summary as _slice28y_bridge_summary
-from pegasus.efg.bridges import plan_bridge_candidates as _slice28y_plan_bridge_candidates
-from pegasus.efg.core_seed import build_core_seed_set as _slice28y_build_core_seed_set
-from pegasus.efg.core_seed import core_seed_summary as _slice28y_core_seed_summary
-
-
-def _slice28y_empty_core_seed_summary() -> dict[str, object]:
-    return {
-        "registry_root": "config/registries",
-        "seed_count": 0,
-        "blocked_count": 0,
-        "role_counts": {},
-        "seeds": [],
-        "blocked": [],
-    }
-
-
-def _slice28y_empty_bridge_plan_summary() -> dict[str, object]:
-    return {
-        "candidate_count": 0,
-        "blocked_count": 0,
-        "bridge_type_counts": {},
-        "candidates": [],
-        "blocked": [],
-    }
-
-
-if not hasattr(EFGResult, "_slice28y_base_as_manifest"):
-    EFGResult._slice28y_base_as_manifest = EFGResult.as_manifest  # type: ignore[attr-defined]
-
-
-def _slice28y_efgresult_as_manifest(self):
-    payload = self._slice28y_base_as_manifest()  # type: ignore[attr-defined]
-    payload.setdefault(
-        "core_seed_summary",
-        getattr(self, "_slice28y_core_seed_summary", _slice28y_empty_core_seed_summary()),
-    )
-    payload.setdefault(
-        "bridge_plan_summary",
-        getattr(self, "_slice28y_bridge_plan_summary", _slice28y_empty_bridge_plan_summary()),
-    )
-    payload.setdefault("semantic_manifest_schema", "28Y.1")
-    return payload
-
-
-EFGResult.as_manifest = _slice28y_efgresult_as_manifest  # type: ignore[method-assign]
-
-
-@_slice28y_wraps(_build_efg_base)
-def build_efg(*args, **kwargs):
-    result = _build_efg_base(*args, **kwargs)
-    fields = tuple(getattr(result, "fields", ()) or ())
-    registry_root = kwargs.get("registry_root", "config/registries")
-    intent = kwargs.get("intent")
-    try:
-        seed_set = _slice28y_build_core_seed_set(fields, registry_root=registry_root, intent=intent)
-        bridge_plan = _slice28y_plan_bridge_candidates(fields, registry_root=registry_root, intent=intent)
-        object.__setattr__(result, "_slice28y_core_seed_summary", _slice28y_core_seed_summary(seed_set))
-        object.__setattr__(result, "_slice28y_bridge_plan_summary", _slice28y_bridge_summary(bridge_plan))
-    except Exception as exc:  # pragma: no cover - defensive metadata guard only
-        object.__setattr__(result, "_slice28y_core_seed_summary", _slice28y_empty_core_seed_summary())
-        object.__setattr__(result, "_slice28y_bridge_plan_summary", {
-            **_slice28y_empty_bridge_plan_summary(),
-            "blocked": [{"reason": "semantic_manifest_failed", "error": str(exc)}],
-            "blocked_count": 1,
-        })
-    return result
-
-# ---- Hardline MSD bridge expansion ----
-# This override turns the Slice 28Y bridge manifest from passive metadata into
-# graph expansion. Bridge candidates are evaluated through the same Δ legality
-# boundary as ordinary operators and become FieldNodes when legal.
-from pegasus.efg.bridges import bridge_summary as _hardline_bridge_summary
-from pegasus.efg.bridges import plan_bridge_candidates as _hardline_plan_bridge_candidates
-from pegasus.efg.core_seed import build_core_seed_set as _hardline_build_core_seed_set
-from pegasus.efg.core_seed import core_seed_summary as _hardline_core_seed_summary
-
-
-def _hardline_expand_bridge_candidates(
-    result: EFGResult,
-    *,
-    registry_root: str | Path = "config/registries",
-    intent: Any = None,
-    registries: Any = None,
-    operator_budget: int = 256,
-) -> EFGResult:
-    fields = list(result.fields)
-    edges = list(result.edges)
-    failures = list(result.failed_branches)
-    warnings = list(result.warnings)
-    legality = dict(result.legality_summary)
-    registry_arg = registries or {"registry_root": str(registry_root)}
-    by_id = {field.id: field for field in fields}
-
-    bridge_plan = _hardline_plan_bridge_candidates(fields, registry_root=registry_root, intent=intent)
-    applied = 0
-    for candidate in bridge_plan.candidates:
-        if applied >= operator_budget:
-            failures.append(make_failed_branch_record(
-                parents=[],
-                operator=OperatorSpec(name=candidate.required_operator, role=candidate.bridge_type),
-                reason="bridge_operator_budget_exhausted",
-                disposition="deferred",
-                warnings=["bridge_operator_budget_exhausted"],
-            ))
-            legality["blocked"] = int(legality.get("blocked", 0)) + 1
-            continue
-
-        parents = [by_id.get(candidate.numerator_id)]
-        if candidate.denominator_id:
-            parents.append(by_id.get(candidate.denominator_id))
-        parents = [parent for parent in parents if parent is not None]
-        if not parents:
-            failures.append(make_failed_branch_record(
-                parents=[],
-                operator=OperatorSpec(name=candidate.required_operator, role=candidate.bridge_type),
-                reason="bridge_candidate_parent_missing",
-                disposition="blocked",
-                warnings=list(candidate.warnings),
-            ))
-            legality["blocked"] = int(legality.get("blocked", 0)) + 1
-            continue
-
-        operator = OperatorSpec(
-            name=str(candidate.required_operator),
-            role=str(candidate.bridge_type),
-            output_kind="bridge_module" if not candidate.denominator_id else "intensive_density",
-            params={
-                "bridge_id": candidate.bridge_id,
-                "bridge_type": candidate.bridge_type,
-                "support_relation": candidate.support_relation,
-                "registry_evidence": list(candidate.registry_evidence),
-            },
-        )
-        alignment = None
-        if len(parents) == 2:
-            try:
-                alignment = align_fields(parents[0], parents[1])
-            except Exception:
-                alignment = None
-        legality["attempted"] = int(legality.get("attempted", 0)) + 1
-        try:
-            delta = evaluate_delta(
-                parents=parents,
-                operator=operator,
-                intent=intent,
-                registries=registry_arg,
-                alignment=alignment,
-            )
-        except ValueError as exc:
-            failures.append(make_failed_branch_record(
-                parents=parents,
-                operator=operator,
-                reason=str(exc),
-                disposition="unsupported",
-                warnings=list(candidate.warnings),
-            ))
-            legality["illegal"] = int(legality.get("illegal", 0)) + 1
-            continue
-
-        if not delta.legal:
-            failures.append(make_failed_branch_record(
-                parents=parents,
-                operator=operator,
-                delta=delta,
-                alignment=alignment,
-                reason=(alignment.failure_reason if alignment and alignment.failure_reason else ";".join(delta.failed_terms) or "bridge_delta_rejected"),
-                warnings=list(candidate.warnings),
-            ))
-            legality["illegal"] = int(legality.get("illegal", 0)) + 1
-            continue
-
-        op_result, field = apply_operator(
-            operator=operator,
-            parents=parents,
-            delta=delta,
-            alignment=alignment,
-            registries=registry_arg,
-        )
-        if op_result.status != "success" or field is None:
-            failures.append(make_failed_branch_record(
-                parents=parents,
-                operator=operator,
-                delta=delta,
-                alignment=alignment,
-                reason="bridge_operator_application_blocked",
-                disposition="blocked",
-                warnings=list(op_result.warnings),
-            ))
-            legality["blocked"] = int(legality.get("blocked", 0)) + 1
-            continue
-
-        fields.append(field)
-        by_id[field.id] = field
-        for parent in parents:
-            edges.append(_edge(parent, field, operator))
-        legality["legal"] = int(legality.get("legal", 0)) + 1
-        applied += 1
-
-    seed_set = _hardline_build_core_seed_set(fields, registry_root=registry_root, intent=intent)
-    payload = {
-        "field_ids": [field.id for field in fields],
-        "edge_ids": [edge.edge_id for edge in edges],
-        "failed_ids": [branch.failed_branch_id for branch in failures],
-        "registry_hashes": result.registry_hashes,
-        "bridge_expansion": bridge_plan.as_manifest(),
-    }
-    expanded = EFGResult(
-        schema_version=result.schema_version,
-        efg_id=f"efg_{content_hash(payload)[:24]}",
-        substrate_id=result.substrate_id,
-        fields=tuple(fields),
-        edges=tuple(_dedupe_edges(edges, result.precompression.canonical_by_field_id)),
-        failed_branches=tuple(failures),
-        warnings=tuple(dict.fromkeys(warnings)),
-        variable_dictionary=tuple(_dictionary(field) for field in fields),
-        precompression=result.precompression,
-        source_hashes=result.source_hashes,
-        registry_hashes=result.registry_hashes,
-        legality_summary=legality,
-        operator_mode=result.operator_mode,
-    )
-    object.__setattr__(expanded, "_slice28y_core_seed_summary", _hardline_core_seed_summary(seed_set))
-    object.__setattr__(expanded, "_slice28y_bridge_plan_summary", _hardline_bridge_summary(bridge_plan))
-    return expanded
-
-
-_HARDLINE_BASE_BUILD_EFG = _build_efg_base
-
 
 def build_efg(*args, **kwargs):
-    base = _HARDLINE_BASE_BUILD_EFG(*args, **kwargs)
-    return _hardline_expand_bridge_candidates(
-        base,
-        registry_root=kwargs.get("registry_root", "config/registries"),
-        intent=kwargs.get("intent"),
-        registries=kwargs.get("registries"),
-        operator_budget=int(kwargs.get("operator_budget", 256)),
-    )
+    return _build_efg_base(*args, **kwargs)
 

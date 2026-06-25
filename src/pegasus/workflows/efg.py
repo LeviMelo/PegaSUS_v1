@@ -3,22 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pegasus.output.sidra_denominator_anchor import attach_sidra_population_anchor_to_run
-from pegasus.output.validate import validate_output_bundle
 from pegasus.workflows.build_efg import build_autonomous_efg_from_manifest
-
-
-def run_attach_sidra_denominator(
-    *,
-    run_dir: str | Path,
-    sidra_facts_path: str | Path,
-) -> dict[str, Any]:
-    output = attach_sidra_population_anchor_to_run(
-        run_dir=run_dir,
-        sidra_facts_path=sidra_facts_path,
-    )
-    result = validate_output_bundle(run_dir=str(output))
-    return {"run_dir": output, "validation": result}
 
 
 def run_build_autonomous_efg(
@@ -46,4 +31,4 @@ def run_build_autonomous_efg(
     }
 
 
-__all__ = ["run_attach_sidra_denominator", "run_build_autonomous_efg"]
+__all__ = ["run_build_autonomous_efg"]

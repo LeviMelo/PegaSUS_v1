@@ -35,6 +35,7 @@ class SourceFieldRegistryEntry:
     warning: str | None
     registry_hash: str
     matched_pattern: str | None = None
+    decoder: str | None = None
 
     def as_manifest(self) -> dict[str, Any]:
         return {
@@ -53,6 +54,7 @@ class SourceFieldRegistryEntry:
             "warning": self.warning,
             "registry_hash": self.registry_hash,
             "matched_pattern": self.matched_pattern,
+            "decoder": self.decoder,
         }
 
 
@@ -129,6 +131,7 @@ def _entry_from_spec(*, source_system: str, column_name: str, spec: dict[str, An
         warning=None if spec.get("warning") is None else str(spec.get("warning")),
         registry_hash=registry_hash,
         matched_pattern=matched_pattern,
+        decoder=None if spec.get("decoder") is None else str(spec.get("decoder")),
     )
 
 

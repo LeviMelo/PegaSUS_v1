@@ -197,7 +197,7 @@ def build_compile_stage_plan(
             can_execute=stdfm_requested,
             skip_reason="intent does not request ST-DFM latent-factor fitting",
             executor="pegasus.she.stdfm.torch_solver.solve_stdfm" if stdfm_requested else None,
-            expected_artifacts=("Tables/stdfm_latent_factors.parquet", "Tables/stdfm_certification.parquet") if stdfm_requested else (),
+            expected_artifacts=("stage_workspace/stdfm/stdfm_latent_factors.parquet", "stage_workspace/stdfm/stdfm_certification.parquet") if stdfm_requested else (),
         ),
         _stage(
             stage_id="pirs_model",
@@ -217,7 +217,7 @@ def build_compile_stage_plan(
             can_execute=pirs_hsic_requested,
             skip_reason="intent does not request HSIC residual scan",
             executor="pegasus.pirs.hsic_run.execute_hsic_residual_scan" if pirs_hsic_requested else None,
-            expected_artifacts=("Tables/hsic_residual_scan_manifest.json", "Hypotheses.parquet") if pirs_hsic_requested else (),
+            expected_artifacts=("Tables/hsic_residual_scan_manifest.json",) if pirs_hsic_requested else (),
         ),
     )
     return CompilerStagePlan(

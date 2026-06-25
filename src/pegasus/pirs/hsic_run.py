@@ -77,23 +77,6 @@ def _write_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
     return path
 
 
-def _write_rows_like(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
-    schema = pq.read_table(path).schema
-    shaped = [{name: row.get(name) for name in schema.names} for row in rows]
-    if shaped:
-        table = pa.Table.from_pylist(shaped, schema=schema)
-    else:
-        table = pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
-    pq.write_table(table, path)
-    return path
-
-
-def _append_unique_rows_like(path: Path, rows: Sequence[Mapping[str, Any]], *, id_column: str) -> Path:
-    incoming_ids = {str(row.get(id_column)) for row in rows if row.get(id_column) not in (None, "")}
-    existing = [row for row in _read_rows(path) if str(row.get(id_column)) not in incoming_ids]
-    return _write_rows_like(path, [*existing, *[dict(row) for row in rows]])
-
-
 def _resolve_path(run_dir: Path, raw: Any, default: Path) -> Path:
     if raw in (None, ""):
         return run_dir / default
@@ -402,12 +385,9 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
             if warnings:
                 bundle.append_table("Warnings", warnings)
         else:
-            _append_unique_rows_like(root / "Hypotheses.parquet", [_hypothesis_row(row) for row in scan_rows], id_column="hypothesis_id")
-            warnings = _warning_rows(scan_rows)
-            if warnings:
-                _append_unique_rows_like(root / "Warnings.parquet", warnings, id_column="warning_id")
+            raise RuntimeError("HSIC execution requires an OutputBundleManager")
 
-    if validate:
+    if validate and bundle is None:
         try:
             from pegasus.output.validate import validate_output_bundle
             validation = validate_output_bundle(run_dir=str(root))

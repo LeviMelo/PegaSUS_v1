@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -62,24 +62,6 @@ def write_table(
         raise ValueError(f"strict schema mismatch for {target}")
     pq.write_table(table, target, compression=compression)
     return target
-
-
-def append_replace(
-    path: str | Path,
-    rows: Iterable[dict[str, Any]],
-    *,
-    id_column: str,
-) -> Path:
-    target = Path(path)
-    incoming = list(rows)
-    if not incoming:
-        return target
-    if not target.exists():
-        return write_table(target, incoming)
-    existing = read_table(target).to_pylist()
-    replacement_ids = {str(row[id_column]) for row in incoming if row.get(id_column) is not None}
-    kept = [row for row in existing if str(row.get(id_column)) not in replacement_ids]
-    return write_table(target, kept + incoming, schema_policy="preserve")
 
 
 def row_count(path: str | Path) -> int:

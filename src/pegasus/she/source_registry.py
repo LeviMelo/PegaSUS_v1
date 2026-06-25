@@ -76,6 +76,7 @@ class SourceFieldSpec:
     warning: str | None = None
     matched_pattern: str | None = None
     registry_carrier: str | None = None
+    decoder: str | None = None
 
     @property
     def column(self) -> str:
@@ -112,6 +113,7 @@ class SourceFieldSpec:
         payload["substrate_kind"] = self.substrate_kind
         payload["admissible_by_registry"] = self.admissible_by_registry
         payload["registry_reason"] = self.registry_reason
+        payload["decoder"] = self.decoder
         return payload
 
 
@@ -204,6 +206,7 @@ def _spec_from_entry(entry: SourceFieldRegistryEntry) -> SourceFieldSpec:
         registry_hash=str(entry.registry_hash),
         warning=warning,
         matched_pattern=entry.matched_pattern,
+        decoder=entry.decoder,
     )
 
 

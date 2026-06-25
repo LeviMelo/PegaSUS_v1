@@ -38,7 +38,7 @@ ICD_CHAPTERS = [
     ICDGroup("CHAPTER_22_U00_U99", "Codes for special purposes", "U00", "U99", "chapter"),
 ]
 
-# Minimal stable block registry for current SIM fixture + common examples.
+# Minimal stable block registry for common examples.
 # This is intentionally not a full ICD catalog; the full catalog remains registry-backed.
 ICD_BLOCKS = [
     ICDGroup("BLOCK_A30_A49", "Other bacterial diseases", "A30", "A49", "block"),

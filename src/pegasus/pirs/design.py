@@ -27,7 +27,7 @@ def _read_observations(path: str | Path) -> pl.DataFrame:
         return pl.DataFrame(payload["observations"])
     if path.suffix.lower() == ".parquet":
         return pl.read_parquet(path)
-    raise ValueError(f"Unsupported PIRS fixture path: {path}")
+    raise ValueError(f"Unsupported PIRS observations path: {path}")
 
 
 def build_design_matrix(*, observations_path: str | Path, selection: PIRSSelectionResult, output_dir: str | Path) -> DesignMatrixResult:

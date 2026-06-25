@@ -7,7 +7,6 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.core.hashing import content_hash
 from pegasus.sidra.schemas import SIDRAFactRow
 
 
@@ -143,27 +142,3 @@ def write_facts_parquet(
     facts_to_frame(facts).write_parquet(output_path)
     return output_path
 
-
-def normalize_fixture_json_to_facts(
-    *,
-    input_path: str | Path,
-    output_path: str | Path,
-    table_id: str,
-    unit_by_variable: dict[str, str | None] | None = None,
-) -> Path:
-    input_path = Path(input_path)
-    records = json.loads(input_path.read_text(encoding="utf-8"))
-    if not isinstance(records, list):
-        raise ValueError("SIDRA fixture JSON must contain a list of flat records.")
-
-    request_hash = content_hash({"fixture": str(input_path), "table_id": table_id})
-    metadata_hash = content_hash({"fixture_metadata": table_id, "unit_by_variable": unit_by_variable or {}})
-
-    facts = normalize_flat_records_to_facts(
-        records,
-        table_id=table_id,
-        request_hash=request_hash,
-        metadata_hash=metadata_hash,
-        unit_by_variable=unit_by_variable,
-    )
-    return write_facts_parquet(facts, output_path=output_path)

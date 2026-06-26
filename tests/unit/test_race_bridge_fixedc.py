@@ -12,7 +12,7 @@ from pegasus.efg.race_bridge import (
 
 
 def test_valid_fixedc_prior_bridges_counts_and_preserves_missing():
-    prior = load_race_bridge_prior("tests/fixtures/race_bridge/fixedC_valid.json")
+    prior = load_race_bridge_prior("config/priors/race_bridge/fixedC_sim_admin_to_ibge_selfdeclared_v1.json")
     counts = RaceBridgeCounts(
         raw_admin_counts={"1": 2, "2": 1, "3": 0, "4": 3, "5": 0},
         missing_count=1,

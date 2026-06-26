@@ -252,3 +252,148 @@ entries:
   - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
   warnings: []
   description: Congenital anomaly birth. Denominator is live births (§3.10.4).
+
+- id: cesarean_event
+  status: active
+  source_system: SINASC
+  event_carrier: CesareanBirths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: LiveBirths
+    predicate: cesarean
+    conditions:
+    - {column: cesarean_flag, op: is_true}
+  denominator_carriers: [LiveBirths]
+  default_aggregation: additive
+  allowed_rates: [birth_outcome_share]
+  ratios:
+  - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
+  warnings: []
+  description: Cesarean delivery share / live births (§3.10.4 V_C09).
+
+- id: low_apgar1_event
+  status: active
+  source_system: SINASC
+  event_carrier: LowApgar1Births
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: LiveBirths
+    predicate: low_apgar1
+    conditions:
+    - {column: low_apgar1_flag, op: is_true}
+  denominator_carriers: [LiveBirths]
+  default_aggregation: additive
+  allowed_rates: [birth_outcome_share]
+  ratios:
+  - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
+  warnings: []
+  description: Apgar1 < 7 share / live births (§3.10.4 V_C10).
+
+- id: low_apgar5_event
+  status: active
+  source_system: SINASC
+  event_carrier: LowApgar5Births
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: LiveBirths
+    predicate: low_apgar5
+    conditions:
+    - {column: low_apgar5_flag, op: is_true}
+  denominator_carriers: [LiveBirths]
+  default_aggregation: additive
+  allowed_rates: [birth_outcome_share]
+  ratios:
+  - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
+  warnings: []
+  description: Apgar5 < 7 share / live births (§3.10.4 V_C11).
+
+# --- Observer-process events (MSD §3.10.6) -----------------------------------
+# Data-quality / measurement-process σ-restrictions of Deaths, divided by all-cause
+# Deaths to form observer shares (the denominator is the same source's total count).
+
+- id: ill_defined_cause_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: IllDefinedDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: Deaths
+    predicate: ill_defined_cause
+    conditions:
+    - {column: underlying_icd_parse_state, op: eq, value: ill-defined}
+  denominator_carriers:
+  - Deaths
+  default_aggregation: additive
+  allowed_rates:
+  - observer_share
+  ratios:
+  - {denominator_carrier: Deaths, role: observer_share, output_unit: proportion}
+  warnings: [observer_process_field_not_outcome]
+  description: Ill-defined-cause death share (R-codes / all deaths) (§3.10.6 V_O05).
+
+- id: invalid_icd_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: InvalidICDDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: Deaths
+    predicate: invalid_icd
+    conditions:
+    - {column: underlying_icd_parse_state, op: in, value: [invalid, unparseable, blank, missing]}
+  denominator_carriers:
+  - Deaths
+  default_aggregation: additive
+  allowed_rates:
+  - observer_share
+  ratios:
+  - {denominator_carrier: Deaths, role: observer_share, output_unit: proportion}
+  warnings: [observer_process_field_not_outcome]
+  description: Invalid/unparseable underlying-ICD share / all deaths (§3.10.6 V_O06).
+
+- id: missing_race_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: MissingRaceDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: Deaths
+    predicate: missing_race
+    conditions:
+    - {column: race_missingness_state, op: not_in, value: [valid, valid_admin_race]}
+  denominator_carriers:
+  - Deaths
+  default_aggregation: additive
+  allowed_rates:
+  - observer_share
+  ratios:
+  - {denominator_carrier: Deaths, role: observer_share, output_unit: proportion}
+  warnings: [observer_process_field_not_outcome]
+  description: Missing/unknown administrative-race share / all deaths (§3.10.6 V_O07).
+
+- id: investigation_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: InvestigatedDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: Deaths
+    predicate: investigated
+    conditions:
+    - {column: investigation_status, op: eq, value: S}
+  denominator_carriers:
+  - Deaths
+  default_aggregation: additive
+  allowed_rates:
+  - observer_share
+  ratios:
+  - {denominator_carrier: Deaths, role: observer_share, output_unit: proportion}
+  warnings: [observer_process_field_not_outcome]
+  description: Investigated-death share / all deaths (§3.10.6 V_O04).

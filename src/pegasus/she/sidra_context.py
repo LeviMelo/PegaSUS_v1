@@ -23,6 +23,9 @@ from pegasus.core.schemas import FieldNode
 from pegasus.efg.lineage import lineage_hash, make_lineage
 from pegasus.efg.node import make_field_node
 from pegasus.sidra.regime import classify_sidra_context_regime
+from pegasus.she.sidra_projection import project_and_bound_context_facts
+from pegasus.she.stdfm.pipeline import run_stdfm_pipeline
+from pegasus.she.stdfm.schema import STDFMProblem, build_stdfm_input_schema
 
 
 # Population anchor (handled separately as the denominator, §2.8) — never a context field.
@@ -43,12 +46,12 @@ def _dynamics_for_unit(unit: str) -> str:
     return "continuous"
 
 
-def _classify(unit: str, temporal_points: int) -> Any:
-    # Single-table, single-acquisition context: schema is stable, no break, projectable.
-    # temporal_points drives the ST-DFM gate (needs >= 3); fewer => direct/deflate/cross.
+def _classify(unit: str, temporal_points: int, *, missing_t: bool) -> Any:
+    # The ST-DFM gate is meaningful only when the concept has longitudinal support and
+    # missing cells to reconstruct. Complete stable panels remain direct/deflate.
     return classify_sidra_context_regime(
-        missing_t=temporal_points < 1,
-        schema_stable=True,
+        missing_t=missing_t,
+        schema_stable=not missing_t,
         schema_mismatch=False,
         projectable=True,
         unit=unit,
@@ -59,6 +62,75 @@ def _classify(unit: str, temporal_points: int) -> Any:
     )
 
 
+def _stdfm_transform(unit: str) -> str:
+    dynamics = _dynamics_for_unit(unit)
+    if dynamics == "proportion":
+        return "proportion_logit"
+    if dynamics == "positive":
+        return "log"
+    return "identity"
+
+
+def _run_stdfm_for_context(
+    sub: pl.DataFrame,
+    *,
+    field_stub: str,
+    unit: str,
+    projection_metadata: dict[str, Any],
+    output_dir: Path,
+    warnings: list[str],
+) -> dict[str, Any]:
+    localities = sorted(str(x) for x in sub.get_column("locality_id").drop_nulls().unique().to_list())
+    periods = sorted(str(x) for x in sub.get_column("period").drop_nulls().unique().to_list())
+    locality_index = {value: i for i, value in enumerate(localities)}
+    period_index = {value: i for i, value in enumerate(periods)}
+    observations = [0.0] * (len(localities) * len(periods))
+    observed = [False] * (len(localities) * len(periods))
+    numeric = sub.filter((pl.col("value_status").cast(pl.Utf8) == "numeric") & pl.col("value_numeric").is_not_null())
+    for row in numeric.iter_rows(named=True):
+        s = locality_index.get(str(row["locality_id"]))
+        t = period_index.get(str(row["period"]))
+        if s is None or t is None:
+            continue
+        idx = s * len(periods) + t
+        observations[idx] = float(row["value_numeric"])
+        observed[idx] = True
+    input_schema = build_stdfm_input_schema(
+        field_id=field_stub,
+        concept_id=field_stub,
+        support={"localities": localities, "periods": periods},
+        periods=periods,
+        localities=localities,
+        transform=_stdfm_transform(unit),
+        dynamics=_dynamics_for_unit(unit),
+        projection_matrix_id=str(projection_metadata.get("projection_matrix_id") or ""),
+        stitch_metadata={"status": "single_segment", "segments": []},
+        warnings=warnings,
+    )
+    problem = STDFMProblem(
+        field_ids=(field_stub,),
+        shape=(len(localities), len(periods), 1),
+        observations=tuple(observations),
+        observed_mask=tuple(observed),
+        link_function_by_field=(input_schema.transform,),
+        gamma_spatial=0.0,
+        multi_starts=3,
+    )
+    result = run_stdfm_pipeline(
+        input_schema,
+        problem,
+        output_dir=output_dir,
+        require_cuda=False,
+        prefer_cuda=False,
+        max_iterations=500,
+    )
+    return {
+        "output": result.output.as_manifest(),
+        "certification": result.certification.as_manifest(),
+        "promotable_latent_context": result.certification.status in {"verified", "fragile"},
+    }
+
+
 def build_sidra_context_fields(
     facts_path: str | Path,
     *,
@@ -66,7 +138,9 @@ def build_sidra_context_fields(
     source_manifest_hash: str | None = None,
 ) -> list[FieldNode]:
     """Build one ``context_gradient`` FieldNode per (table_id, variable_id) context variable."""
-    facts_path = Path(facts_path)
+    original_facts_path = Path(facts_path)
+    projection = project_and_bound_context_facts(original_facts_path)
+    facts_path = Path(projection.path)
     frame = pl.read_parquet(facts_path)
     if frame.height == 0:
         return []
@@ -87,33 +161,62 @@ def build_sidra_context_fields(
         unit = str(units[0]) if units else "raw_sidra_value"
         periods = sub.get_column("period").unique().to_list() if "period" in sub.columns else []
         temporal_points = len([p for p in periods if p is not None])
+        n_localities = int(sub.get_column("locality_id").n_unique()) if "locality_id" in sub.columns else 0
+        numeric_support = (
+            sub.filter((pl.col("value_status").cast(pl.Utf8) == "numeric") & pl.col("value_numeric").is_not_null()).height
+            if {"value_status", "value_numeric"} <= set(sub.columns)
+            else sub.height
+        )
+        expected_support = max(1, n_localities) * max(1, temporal_points)
+        missing_t = temporal_points >= 3 and numeric_support < expected_support
 
-        regime = _classify(unit, temporal_points)
-        is_latent = regime.regime in _LATENT_REGIMES and regime.stdfm_gate
+        regime = _classify(unit, temporal_points, missing_t=missing_t)
+        warnings = list(dict.fromkeys([*projection.metadata.get("warnings", []), *regime.warnings]))
+        stdfm_metadata: dict[str, Any] | None = None
+        if regime.regime in _LATENT_REGIMES and regime.stdfm_gate:
+            field_stub = f"sidra_context_{table_id}_{variable_id}"
+            stdfm_metadata = _run_stdfm_for_context(
+                sub,
+                field_stub=field_stub,
+                unit=unit,
+                projection_metadata=projection.metadata,
+                output_dir=facts_path.parent / "stdfm" / field_stub,
+                warnings=warnings,
+            )
+            warnings.extend((stdfm_metadata.get("certification") or {}).get("warnings") or [])
+        is_latent = bool(stdfm_metadata and stdfm_metadata.get("promotable_latent_context"))
 
         support: dict[str, Any] = {
             "support_kind": "sidra_context_facts",
             "source_system": "SIDRA",
-            "artifact_path": str(facts_path),
+            "artifact_path": str(original_facts_path),
             "sidra_facts_path": str(facts_path),
+            "sidra_raw_facts_path": str(original_facts_path),
             "table_id": table_id,
             "variable_id": variable_id,
             "unit_raw": unit,
-            "n_localities": int(sub.get_column("locality_id").n_unique()) if "locality_id" in sub.columns else 0,
+            "n_localities": n_localities,
             "temporal_points": temporal_points,
+            "numeric_support": int(numeric_support),
+            "expected_support": int(expected_support),
             "sidra_regime": regime.regime,
             "stdfm_gate": bool(regime.stdfm_gate),
             "regime_reason": regime.reason,
+            "projection": projection.metadata,
         }
+        if stdfm_metadata is not None:
+            support["stdfm"] = stdfm_metadata
         axes = {
             "geography_axis": "N6",
             "time_axis": "period",
             "context_variable": f"{table_id}:{variable_id}",
             "sidra_regime": regime.regime,
+            "projection_matrix_id": projection.metadata.get("projection_matrix_id"),
         }
-        warnings = list(regime.warnings)
         if is_latent:
             warnings.append("latent")  # §3.6 latent provenance quarantine
+        elif stdfm_metadata is not None:
+            warnings.append("stdfm_executed_not_certified_for_latent_promotion")
         provenance = ["SHE_SubstrateBundle", "sidra_context", f"sidra_regime_{regime.regime}"]
         if is_latent:
             provenance.append("latent")
@@ -124,13 +227,14 @@ def build_sidra_context_fields(
             registry_versions={
                 "SIDRA": str(artifact_hash or source_manifest_hash or "unknown"),
                 "sidra_context_regime": "regime_v1",
+                "sidra_projection": str(projection.metadata.get("projection_matrix_id") or "unknown"),
             },
             source_manifest_hashes=[h for h in (source_manifest_hash, artifact_hash) if h],
             code_version="sidra_context_v1",
         )
         field = make_field_node(
             name=f"sidra_context_{table_id}_{variable_id}",
-            kind="context_gradient",
+            kind="latent_context" if is_latent else "context_gradient",
             carrier="ContextCells",
             unit=unit,
             support=support,

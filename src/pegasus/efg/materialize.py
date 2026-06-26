@@ -357,14 +357,11 @@ def _sidra_context_materialized_fields(bundle: SubstrateBundle) -> list[Substrat
     for artifact in bundle.source_artifacts:
         if artifact.source_system != "SIDRA" or artifact.artifact_role != "context_facts":
             continue
-        try:
-            context_fields = build_sidra_context_fields(
-                artifact.path,
-                artifact_hash=artifact.artifact_hash,
-                source_manifest_hash=artifact.source_manifest_hash,
-            )
-        except Exception:  # pragma: no cover - defensive; malformed context artifact
-            continue
+        context_fields = build_sidra_context_fields(
+            artifact.path,
+            artifact_hash=artifact.artifact_hash,
+            source_manifest_hash=artifact.source_manifest_hash,
+        )
         for field in context_fields:
             out.append(SubstrateMaterializedField(
                 candidate_id=field.id,
@@ -378,8 +375,23 @@ def _sidra_context_materialized_fields(bundle: SubstrateBundle) -> list[Substrat
 
 def _sidra_demographic_population_materialized_fields(bundle: SubstrateBundle) -> list[SubstrateMaterializedField]:
     """Admit disaggregated SIDRA population (by sex/race/age) as a demographic-stratified
-    Population field (MSD §2.8), for SIDRA artifacts with role 'population_strata'."""
+    Population field (MSD §2.8), for SIDRA artifacts with role 'population_strata'.
+
+    Denominator-mode reconciliation (§2.8.2): in independent/sim-informed tensor modes a
+    solver `population_tensor` artifact is the *authoritative reconstructed* denominator and
+    the raw `population_strata` is merely its input anchor. When a solver tensor is present
+    we therefore do NOT also admit the raw strata as a competing demographic denominator
+    (that would yield duplicate/competing stratified rates). In official_sidra_anchor mode
+    no solver tensor exists, so the observed strata are admitted directly.
+    """
     from pegasus.she.demographic_tensor import build_sidra_demographic_population_fields
+
+    has_solver_tensor = any(
+        artifact.source_system == "SIDRA" and artifact.artifact_role == "population_tensor"
+        for artifact in bundle.source_artifacts
+    )
+    if has_solver_tensor:
+        return []
 
     out: list[SubstrateMaterializedField] = []
     for artifact in bundle.source_artifacts:
@@ -404,6 +416,92 @@ def _sidra_demographic_population_materialized_fields(bundle: SubstrateBundle) -
     return out
 
 
+def _population_solver_materialized_fields(bundle: SubstrateBundle) -> list[SubstrateMaterializedField]:
+    """Admit materialized population solver tensors as Population denominator fields.
+
+    These tensors are produced by ``workflows.population`` for
+    ``independent_population_tensor`` / ``sim_informed_population_tensor`` intents. They
+    enter through the source-artifact boundary instead of compile side channels.
+    """
+    out: list[SubstrateMaterializedField] = []
+    for artifact in bundle.source_artifacts:
+        if artifact.source_system != "SIDRA" or artifact.artifact_role != "population_tensor":
+            continue
+        try:
+            import polars as pl
+
+            frame = pl.read_parquet(artifact.path, n_rows=5)
+        except Exception:
+            continue
+        if "population_tensor_mode" not in frame.columns or "solver_id" not in frame.columns:
+            continue
+        mode = str(frame.get_column("population_tensor_mode")[0])
+        solver_id = str(frame.get_column("solver_id")[0])
+        axes = {
+            "geography_axis": "N6",
+            "time_axis": "period",
+            "population_tensor_mode": mode,
+        }
+        demographic_axes: list[str] = []
+        for axis in ("age_group", "sex", "race"):
+            if axis in frame.columns:
+                try:
+                    values = [str(v) for v in frame.get_column(axis).drop_nulls().unique().to_list()]
+                except Exception:
+                    values = []
+                if values and values != ["__total__"]:
+                    demographic_axes.append(axis)
+                    axes[axis] = "stratified"
+                    axes["population_strata_axis"] = axis
+        support = {
+            "support_kind": "population_tensor_solver_output",
+            "source_system": "SIDRA",
+            "artifact_path": str(artifact.path),
+            "population_tensor_path": str(artifact.path),
+            "PopulationTensorMode": mode,
+            "SolverID": solver_id,
+            "population_tensor_diagnostics": "solver_materialized_tensor",
+        }
+        roles = ["population_tensor", "population_denominator_seed", "population_solver", "source_field"]
+        if demographic_axes:
+            roles.insert(3, "demographic_stratified")
+        lineage = make_lineage(
+            parent_ids=[],
+            operator_type="population_tensor_solver",
+            operator_params=support,
+            registry_versions={"SIDRA": artifact.artifact_hash or artifact.source_manifest_hash or "unknown", "population_solver": solver_id},
+            source_manifest_hashes=_unique([artifact.source_manifest_hash, artifact.artifact_hash]),
+            code_version="population_tensor_solver_v1",
+        )
+        field = make_field_node(
+            name=f"population_tensor_solver_{mode}_{solver_id}",
+            kind="extensive_measure",
+            carrier="Population",
+            unit="persons",
+            support=support,
+            axes=axes,
+            aggregation="additive",
+            role=roles,
+            source=["SIDRA", str(artifact.path), "SIDRA_9606_POPULATION_SOLVER"],
+            operator="population_tensor_solver",
+            provenance=["SHE_SubstrateBundle", "population_tensor", "solver", "SIDRA_9606"],
+            state="warning" if mode == "sim_informed_denominator" else "verified",
+            warnings=["sim_informed_population_feedback_risk"] if mode == "sim_informed_denominator" else [],
+            lineage=lineage,
+            materialization_state="metadata_only",
+            path=None,
+            dashboard_safe="warning" if mode == "sim_informed_denominator" else False,
+        ).model_copy(update={"id": f"population_tensor_solver_{lineage_hash(lineage)[:24]}"})
+        out.append(SubstrateMaterializedField(
+            candidate_id=field.id,
+            field=field,
+            lineage_hash=lineage_hash(field.lineage),
+            materialization_reason="population_tensor_solver",
+            warnings=tuple(field.warnings),
+        ))
+    return out
+
+
 def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializationResult:
     """Convert SHE-admissible substrate candidates into metadata-only FieldNodes.
 
@@ -417,6 +515,7 @@ def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializ
         fields_list.append(sidra_anchor)
     fields_list.extend(_sidra_context_materialized_fields(bundle))
     fields_list.extend(_sidra_demographic_population_materialized_fields(bundle))
+    fields_list.extend(_population_solver_materialized_fields(bundle))
     fields = tuple(fields_list)
     excluded = tuple(_exclusion_manifest(exclusion) for exclusion in bundle.exclusions)
     payload = {

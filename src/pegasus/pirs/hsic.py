@@ -216,6 +216,47 @@ def _np_feature_hsic(x_features: "Any", y_features: "Any") -> float:
     return float((cross * cross).sum())
 
 
+def hsic_point_statistic(*, covariate: list[float], residuals: list[float], seed: int, budget: str = "standard") -> float:
+    """HSIC statistic only (no permutation null) — for bootstrap replicate scoring (§6.6.2)."""
+    statistic, _null, _diag = numpy_kernel_hsic_permutation_test(
+        covariate=covariate, residuals=residuals, permutations=1, seed=seed, budget=budget,
+    )
+    return float(statistic)
+
+
+def bootstrap_adjusted_hsic(
+    *,
+    covariate: list[float],
+    residual_replicates: "Any",
+    seed: int,
+    budget: str = "deep",
+    epsilon: float = 1e-9,
+) -> dict[str, Any]:
+    """Bootstrap-adjusted nonlinear score (MSD §6.6.2): D* = E_b[D_b] / (SD_b[D_b] + ε).
+
+    ``residual_replicates`` is a (B, n) array of parametric-bootstrap residual vectors
+    (from ``glm.bootstrap_deviance_residual_replicates``). Each yields D_b = HSIC(X, e^(b)).
+    """
+    import numpy as np
+
+    reps = np.asarray(residual_replicates, dtype=float)
+    if reps.ndim != 2 or reps.shape[0] == 0:
+        return {"bootstrap_count": 0, "d_star": None, "mean_hsic": None, "sd_hsic": None, "residual_uncertainty": None}
+    d_values: list[float] = []
+    for b in range(reps.shape[0]):
+        d_values.append(hsic_point_statistic(covariate=covariate, residuals=[float(v) for v in reps[b]], seed=seed + b, budget=budget))
+    arr = np.asarray(d_values, dtype=float)
+    mean_d = float(np.mean(arr))
+    sd_d = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+    return {
+        "bootstrap_count": int(reps.shape[0]),
+        "mean_hsic": mean_d,
+        "sd_hsic": sd_d,
+        "d_star": mean_d / (sd_d + epsilon),
+        "residual_uncertainty": sd_d,
+    }
+
+
 def numpy_kernel_hsic_permutation_test(
     *,
     covariate: list[float],

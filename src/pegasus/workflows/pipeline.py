@@ -28,10 +28,18 @@ from pegasus.datasus.client_microdatasus import MicrodatasusClient
 from pegasus.datasus.manifests import normalize_system
 from pegasus.geo.state_panel import GeoScope
 from pegasus.sidra.api import SidraClient
-from pegasus.sidra.extract import extract_chunk_plan
+from pegasus.sidra.compendium import (
+    BlockedCompendiumTable,
+    CompendiumRequestPlan,
+    SIDRACompendiumError,
+    load_sidra_compendium,
+    plan_compendium_request,
+    select_compendium_tables,
+)
+from pegasus.sidra.extract import extract_chunk_plan, write_extraction_log
 from pegasus.sidra.metadata import read_normalized_metadata_tables
 from pegasus.sidra.plan import plan_sidra_chunks
-from pegasus.sidra.schemas import SIDRARequest
+from pegasus.sidra.schemas import SIDRAMetadata, SIDRARequest
 from pegasus.source_artifacts.contracts import (
     inspect_source_artifact,
     write_source_artifact_manifest,
@@ -53,6 +61,36 @@ SIDRA_POPULATION_TOTAL_CLASSIFICATIONS: dict[str, list[str]] = {
 }
 
 
+def _population_tensor_requested(intent: UserIntent) -> bool:
+    return intent.population_mode in {"independent_population_tensor", "sim_informed_population_tensor"}
+
+
+def _sidra_population_demographic_strata_classifications(metadata) -> dict[str, list[str]]:
+    """Official 9606 demographic strata on the registered non-overlapping basis."""
+    from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, map_category
+
+    table = metadata.tables[SIDRA_POPULATION_TABLE]
+    selected: dict[str, list[str]] = {}
+    for classification_id, axis in (("86", "race"), ("2", "sex"), ("287", "age_group")):
+        categories = []
+        for category in table.classifications.get(classification_id, []):
+            canonical = map_category(axis, "SIDRA", category)
+            if canonical in {TOTAL, UNKNOWN}:
+                continue
+            categories.append(str(category))
+        if not categories:
+            raise LivePipelineError(
+                f"SIDRA 9606 metadata has no registered non-total categories for {axis} "
+                f"(classification {classification_id})."
+            )
+        selected[classification_id] = sorted(categories, key=lambda x: int(x) if x.isdigit() else x)
+    return {
+        "86": selected["86"],
+        "2": selected["2"],
+        "287": selected["287"],
+    }
+
+
 @dataclass(frozen=True)
 class LivePipelineResult:
     status: str
@@ -61,6 +99,8 @@ class LivePipelineResult:
     datasus_artifacts: list[dict[str, Any]]
     sidra_artifact: dict[str, Any] | None
     compile_result: dict[str, Any] | None
+    sidra_artifacts: list[dict[str, Any]] | None = None
+    sidra_compendium: dict[str, Any] | None = None
     reason: str | None = None
 
     def as_manifest(self) -> dict[str, Any]:
@@ -70,6 +110,8 @@ class LivePipelineResult:
             "source_manifest": self.source_manifest,
             "datasus_artifact_count": len(self.datasus_artifacts),
             "sidra_artifact": self.sidra_artifact,
+            "sidra_artifact_count": len(self.sidra_artifacts or ([] if self.sidra_artifact is None else [self.sidra_artifact])),
+            "sidra_compendium": self.sidra_compendium,
             "reason": self.reason,
         }
 
@@ -213,26 +255,49 @@ def _select_population_period(metadata, intent: UserIntent) -> str:
     return eligible[-1] if eligible else periods[0]
 
 
-def _ensure_sidra_metadata(*, metadata_dir: Path, data_root: Path, client: SidraClient | None):
+def _ensure_sidra_metadata_tables(
+    *,
+    table_ids: list[str],
+    metadata_dir: Path,
+    data_root: Path,
+    client: SidraClient | None,
+) -> SIDRAMetadata:
     """Read cached SIDRA 9606 metadata, or fetch it live if absent. Makes the
     pipeline a single command rather than requiring a manual metadata step."""
+    requested = {str(table_id) for table_id in table_ids}
+    existing: SIDRAMetadata | None = None
     if metadata_dir.exists():
         try:
-            metadata = read_normalized_metadata_tables(metadata_dir)
-            if SIDRA_POPULATION_TABLE in metadata.tables:
-                return metadata
+            existing = read_normalized_metadata_tables(metadata_dir)
+            if requested <= set(existing.tables):
+                return existing
         except Exception:
-            pass
+            existing = None
     from pegasus.sidra.metadata import fetch_official_metadata, write_normalized_metadata_tables
 
-    metadata = fetch_official_metadata(
-        table_ids=[SIDRA_POPULATION_TABLE],
+    missing = sorted(requested - (set(existing.tables) if existing is not None else set()), key=lambda x: int(x) if x.isdigit() else x)
+    fetched = fetch_official_metadata(
+        table_ids=missing,
         client=client or SidraClient(),
         locality_level="N6",
         raw_dir=data_root / "metadata" / "sidra" / "raw",
     )
+    tables = {}
+    if existing is not None:
+        tables.update(existing.tables)
+    tables.update(fetched.tables)
+    metadata = SIDRAMetadata(tables=tables)
     write_normalized_metadata_tables(metadata, output_dir=metadata_dir)
     return metadata
+
+
+def _ensure_sidra_metadata(*, metadata_dir: Path, data_root: Path, client: SidraClient | None):
+    return _ensure_sidra_metadata_tables(
+        table_ids=[SIDRA_POPULATION_TABLE],
+        metadata_dir=metadata_dir,
+        data_root=data_root,
+        client=client,
+    )
 
 
 def _acquire_sidra_population(
@@ -290,6 +355,194 @@ def _acquire_sidra_population(
     )
 
 
+def _acquire_sidra_population_strata(
+    *,
+    intent: UserIntent,
+    uf: str,
+    data_root: Path,
+    metadata_dir: Path,
+    client: SidraClient | None,
+) -> dict[str, Any] | None:
+    if not _population_tensor_requested(intent):
+        return None
+    metadata = _ensure_sidra_metadata(metadata_dir=metadata_dir, data_root=data_root, client=client)
+    if SIDRA_POPULATION_TABLE not in metadata.tables:
+        raise LivePipelineError(f"SIDRA metadata is missing required population table {SIDRA_POPULATION_TABLE}")
+    locality_level, localities = _sidra_population_localities(metadata, uf)
+    period = _select_population_period(metadata, intent)
+    classifications = _sidra_population_demographic_strata_classifications(metadata)
+    request = SIDRARequest(
+        table_id=SIDRA_POPULATION_TABLE,
+        variables=[SIDRA_POPULATION_VARIABLE],
+        periods=[period],
+        locality_level=locality_level,
+        localities=localities,
+        classifications=classifications,
+    )
+    table_metadata = metadata.tables[SIDRA_POPULATION_TABLE]
+    metadata_hash = content_hash({
+        **table_metadata.model_dump(mode="json"),
+        "population_strata_basis": "sex_race_single_year_age_nonoverlapping",
+    })
+    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+    work_dir = data_root / "sidra" / f"population_strata_demographic_{uf}_{period}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    results = extract_chunk_plan(
+        chunks,
+        client=client or SidraClient(),
+        concurrency=4,
+        raw_dir=work_dir / "raw",
+        facts_root=work_dir / "facts",
+        metadata_hash=metadata_hash,
+        unit_by_variable=table_metadata.units_by_variable,
+    )
+    failures = [r for r in results if r.status != "success"]
+    if failures:
+        raise LivePipelineError(f"SIDRA population_strata extraction failed: {failures[0].status} ({len(failures)} chunk failures)")
+    facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
+    if not facts_paths:
+        raise LivePipelineError("SIDRA population_strata extraction produced no facts")
+    combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
+    combined_path = work_dir / "population_strata_facts.parquet"
+    combined.write_parquet(combined_path)
+    return inspect_source_artifact(
+        path=combined_path,
+        source_system="SIDRA",
+        artifact_role="population_strata",
+        provenance_mode="materialized_external",
+        source_manifest_hash=metadata_hash,
+    )
+
+
+def _compendium_enabled(intent: UserIntent) -> bool:
+    disabled = {"no_sidra_compendium", "disable_sidra_compendium"}
+    return not (set(intent.context_policy) & disabled)
+
+
+def _selected_compendium_tables() -> tuple[Any, ...]:
+    return select_compendium_tables(load_sidra_compendium(), tiers=("T1_CORE",))
+
+
+def _plan_sidra_compendium_from_metadata(
+    *,
+    intent: UserIntent,
+    uf: str,
+    metadata: SIDRAMetadata,
+) -> tuple[list[CompendiumRequestPlan], list[BlockedCompendiumTable]]:
+    from pegasus.geo.uf import resolve_uf_code
+
+    uf_cod2 = resolve_uf_code(uf).ibge_cod2
+    plans: list[CompendiumRequestPlan] = []
+    blocked: list[BlockedCompendiumTable] = []
+    for table in _selected_compendium_tables():
+        if table.table_id == SIDRA_POPULATION_TABLE:
+            continue
+        try:
+            plans.append(
+                plan_compendium_request(
+                    compendium=table,
+                    metadata=metadata,
+                    uf_cod2=str(uf_cod2),
+                    end_year=int(intent.time.end_year),
+                    max_periods=5,
+                )
+            )
+        except SIDRACompendiumError as exc:
+            blocked.append(BlockedCompendiumTable(table_id=table.table_id, reason=str(exc)))
+    return plans, blocked
+
+
+def _acquire_sidra_compendium_context(
+    *,
+    intent: UserIntent,
+    uf: str,
+    data_root: Path,
+    metadata_dir: Path,
+    client: SidraClient | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not _compendium_enabled(intent):
+        return [], {"status": "disabled_by_context_policy", "artifacts": [], "blocked": []}
+
+    selected = _selected_compendium_tables()
+    table_ids = sorted(
+        {table.table_id for table in selected if table.table_id != SIDRA_POPULATION_TABLE},
+        key=lambda x: int(x) if x.isdigit() else x,
+    )
+    if not table_ids:
+        return [], {"status": "no_selected_tables", "artifacts": [], "blocked": []}
+    metadata = _ensure_sidra_metadata_tables(
+        table_ids=[SIDRA_POPULATION_TABLE, *table_ids],
+        metadata_dir=metadata_dir,
+        data_root=data_root,
+        client=client,
+    )
+    plans, blocked = _plan_sidra_compendium_from_metadata(intent=intent, uf=uf, metadata=metadata)
+    artifacts: list[dict[str, Any]] = []
+    acquired: list[dict[str, Any]] = []
+    sidra_client = client or SidraClient()
+    for plan in plans:
+        request = plan.request()
+        table_metadata = metadata.tables[plan.table_id]
+        metadata_hash = content_hash({
+            **table_metadata.model_dump(mode="json"),
+            "compendium_request": plan.as_manifest(),
+        })
+        chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+        work_dir = data_root / "sidra" / "context" / f"tier=T1_CORE" / f"uf={uf}" / f"table={plan.table_id}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        results = extract_chunk_plan(
+            chunks,
+            client=sidra_client,
+            concurrency=4,
+            raw_dir=work_dir / "raw",
+            facts_root=work_dir / "facts",
+            metadata_hash=metadata_hash,
+            unit_by_variable=table_metadata.units_by_variable,
+        )
+        write_extraction_log(results, output_path=work_dir / "extraction_log.json")
+        failures = [r for r in results if r.status != "success"]
+        if failures:
+            raise LivePipelineError(
+                f"SIDRA compendium extraction failed for table {plan.table_id}: "
+                f"{failures[0].status} ({len(failures)} chunk failures)"
+            )
+        facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
+        if not facts_paths:
+            blocked.append(BlockedCompendiumTable(table_id=plan.table_id, reason="extraction produced no facts"))
+            continue
+        combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
+        combined_path = work_dir / "context_facts.parquet"
+        combined.write_parquet(combined_path)
+        artifact = inspect_source_artifact(
+            path=combined_path,
+            source_system="SIDRA",
+            artifact_role="context_facts",
+            provenance_mode="materialized_external",
+            source_manifest_hash=metadata_hash,
+        )
+        artifacts.append(artifact)
+        acquired.append({
+            **plan.as_manifest(),
+            "row_count": artifact.get("row_count"),
+            "artifact_path": str(combined_path),
+            "metadata_hash": metadata_hash,
+        })
+    if plans and not artifacts:
+        raise LivePipelineError(
+            "SIDRA compendium acquisition produced no context_facts artifacts; "
+            f"blocked={ [b.as_manifest() for b in blocked[:10]] }"
+        )
+    return artifacts, {
+        "status": "success" if artifacts else "blocked",
+        "tier": "T1_CORE",
+        "selected_table_count": len(selected),
+        "planned_table_count": len(plans),
+        "artifact_count": len(artifacts),
+        "artifacts": acquired,
+        "blocked": [b.as_manifest() for b in blocked],
+    }
+
+
 def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
     """Offline resolution of acquisition parameters from intent — no network, no R.
 
@@ -297,6 +550,34 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
     _payload, intent = _load_intent(intent_path)
     uf = _resolve_uf(intent)
     from pegasus.geo.uf import resolve_uf_code
+    sidra_compendium_plan: dict[str, Any]
+    selected = _selected_compendium_tables()
+    try:
+        metadata = read_normalized_metadata_tables("data/metadata/sidra/normalized")
+        plans, blocked = _plan_sidra_compendium_from_metadata(intent=intent, uf=uf, metadata=metadata)
+        sidra_compendium_plan = {
+            "enabled": _compendium_enabled(intent),
+            "tier": "T1_CORE",
+            "selected_table_count": len(selected),
+            "planned_table_count": len(plans),
+            "planned_tables": [plan.as_manifest() for plan in plans],
+            "blocked": [item.as_manifest() for item in blocked],
+            "metadata_source": "cached_normalized_metadata",
+        }
+    except Exception as exc:
+        sidra_compendium_plan = {
+            "enabled": _compendium_enabled(intent),
+            "tier": "T1_CORE",
+            "selected_table_count": len(selected),
+            "planned_table_count": 0,
+            "planned_tables": [],
+            "blocked": [
+                {"table_id": table.table_id, "reason": f"official metadata not available in dry-run cache: {exc}"}
+                for table in selected
+                if table.table_id != SIDRA_POPULATION_TABLE
+            ],
+            "metadata_source": "dry_run_no_network",
+        }
 
     return {
         "intent_path": str(intent_path),
@@ -311,6 +592,32 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
             "classifications": SIDRA_POPULATION_TOTAL_CLASSIFICATIONS,
             "period_selection": f"latest census period <= {intent.time.end_year}",
             "locality_scope": f"all N6 municipalities of UF {uf}",
+        },
+        "sidra_population_strata": {
+            "requested": _population_tensor_requested(intent),
+            "basis": "sex_race_single_year_age_nonoverlapping" if _population_tensor_requested(intent) else None,
+            "artifact_role": "population_strata" if _population_tensor_requested(intent) else None,
+            "reason": (
+                "population tensor modes require live disaggregated SIDRA 9606 strata; "
+                "sex, SIDRA self-declared race, and non-overlapping single-year age are registry-projected"
+            ) if _population_tensor_requested(intent) else "not requested by population_mode",
+        },
+        "sidra_compendium": sidra_compendium_plan,
+        "sidra_projection": {
+            "boundary": "SHE context_facts admission",
+            "projection_matrix_id": "sidra_context_total_only_v1",
+            "total_policy": "total_only_view",
+            "hard_aborts": [
+                "unmapped_demographic_category",
+                "mixed_total_and_non_total_demographic_categories",
+                "direct_percentage_projection_without_denominator_recovery",
+                "unbounded_high_dimensional_context_request",
+            ],
+        },
+        "stdfm": {
+            "gate": "bounded_interpolate only when missing longitudinal support has >=3 temporal points",
+            "single_period_policy": "direct_or_cross_sectional_only",
+            "latent_context_policy": "dashboard_unsafe_by_default",
         },
         "municipality_filter_codes": list(intent.geography.codes),
     }
@@ -341,6 +648,7 @@ def run_live_pipeline(
             datasus_artifacts=[],
             sidra_artifact=None,
             compile_result=None,
+            sidra_compendium=None,
             reason=json.dumps(plan_live_pipeline(intent_path=intent_path), sort_keys=True),
         )
 
@@ -351,13 +659,26 @@ def run_live_pipeline(
         intent=intent, uf=uf, data_root=data_root,
         metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
     )
+    sidra_strata_artifact = _acquire_sidra_population_strata(
+        intent=intent, uf=uf, data_root=data_root,
+        metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
+    )
+    context_artifacts, sidra_compendium = _acquire_sidra_compendium_context(
+        intent=intent, uf=uf, data_root=data_root,
+        metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
+    )
+    sidra_artifacts = [
+        sidra_artifact,
+        *([sidra_strata_artifact] if sidra_strata_artifact is not None else []),
+        *context_artifacts,
+    ]
 
     intent_hash = sha256_file(Path(intent_path))
     manifest_dir = data_root / "manifests" / "runs"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     combined_manifest_path = manifest_dir / f"live_{Path(intent_path).stem}_{intent_hash[:8]}.source_manifest.json"
     write_source_artifact_manifest(
-        artifacts=[*datasus_artifacts, sidra_artifact],
+        artifacts=[*datasus_artifacts, *sidra_artifacts],
         output=combined_manifest_path,
     )
 
@@ -376,6 +697,8 @@ def run_live_pipeline(
         source_manifest=str(combined_manifest_path),
         datasus_artifacts=datasus_artifacts,
         sidra_artifact=sidra_artifact,
+        sidra_artifacts=sidra_artifacts,
+        sidra_compendium=sidra_compendium,
         compile_result=compile_result,
         reason=None if ok else "output bundle validation failed",
     )

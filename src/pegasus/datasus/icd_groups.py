@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -88,3 +90,42 @@ def block_for_icd(code: str | None) -> ICDGroup | None:
         if _in_range(code3, group.start, group.end):
             return group
     return None
+
+
+@lru_cache(maxsize=8)
+def _curated_groups(registry_root: str) -> tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]:
+    """Load curated cause groups (MSD §3.11 G_curated) as (id, label, ranges) tuples."""
+    import yaml
+
+    path = Path(registry_root) / "icd_curated_groups.yaml"
+    if not path.exists():
+        return ()
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    out: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
+    for entry in payload.get("entries", []) or []:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        ranges = tuple(
+            (str(r[0]).upper(), str(r[1]).upper())
+            for r in (entry.get("ranges") or [])
+            if isinstance(r, (list, tuple)) and len(r) >= 2
+        )
+        if ranges:
+            out.append((str(entry["id"]), str(entry.get("label") or entry["id"]), ranges))
+    return tuple(out)
+
+
+def curated_group_for_icd(code: str | None, *, registry_root: str | Path = "config/registries") -> ICDGroup | None:
+    """Map an ICD-10 code to its curated cause group (registry-driven, §3.11 V_M04).
+
+    Returns the matching group, or an explicit ``OTHER`` residual for well-formed codes that
+    fall outside every curated group (so the σ_C partition stays exact). Unparseable codes
+    return ``None`` (handled as UNCLASSIFIED upstream)."""
+    code3 = _base_code(code)
+    if code3 is None:
+        return None
+    for group_id, label, ranges in _curated_groups(str(registry_root)):
+        for start, end in ranges:
+            if _in_range(code3, start, end):
+                return ICDGroup(group_id, label, start, end, "curated")
+    return ICDGroup("OTHER", "Other curated cause", code3, code3, "curated")

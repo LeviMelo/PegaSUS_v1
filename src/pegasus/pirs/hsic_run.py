@@ -19,12 +19,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pegasus.output.bundle_manager import OutputBundleManager
 
-from pegasus.pirs.hsic import numpy_kernel_hsic_permutation_test, permutation_p_value
+from pegasus.compute.glm import bootstrap_deviance_residual_replicates
+from pegasus.pirs.hsic import bootstrap_adjusted_hsic, numpy_kernel_hsic_permutation_test, permutation_p_value
 
 
 DEFAULT_MODEL_MANIFEST = Path("Tables") / "pirs_model_execution_manifest.json"
 DEFAULT_DESIGN_MANIFEST = Path("Tables") / "pirs_design_matrix_manifest.json"
 DEFAULT_RESIDUAL_VALUES = Path("Tables") / "pirs_residual_values.parquet"
+DEFAULT_FITTED_VALUES = Path("Tables") / "pirs_fitted_values.parquet"
 DEFAULT_DESIGN_MATRIX = Path("Tables") / "pirs_design_matrix.parquet"
 DEFAULT_HSIC_MANIFEST = Path("Tables") / "hsic_residual_scan_manifest.json"
 DEFAULT_HSIC_SCORES = Path("Tables") / "hsic_residual_scan_scores.parquet"
@@ -215,7 +217,7 @@ def _cyclic_shift_permutations(block_labels: Sequence[str], time_labels: Sequenc
     return perms
 
 
-def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_id: str, covariate_column: str, residuals: Sequence[float], covariate: Sequence[float], budget: str, permutations: int, min_support: int, seed: int, permutation_indices: list[list[int]] | None = None, null_strategy_label: str = "unrestricted_iid_permutation") -> dict[str, Any]:
+def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_id: str, covariate_column: str, residuals: Sequence[float], covariate: Sequence[float], budget: str, permutations: int, min_support: int, seed: int, permutation_indices: list[list[int]] | None = None, null_strategy_label: str = "unrestricted_iid_permutation", bootstrap_replicates: Any = None) -> dict[str, Any]:
     n_eff = int(min(len(residuals), len(covariate)))
     warnings: list[str] = []
     statistic: float | None = None
@@ -223,6 +225,7 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
     mode = "exact_rbf_kernel"
     null_used = "disabled"
     state = "verified"
+    bootstrap_adjustment: dict[str, Any] | None = None
     if n_eff < min_support:
         mode = "disabled"
         state = "blocked"
@@ -263,6 +266,20 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
         if n_eff < 100:
             state = "fragile"
             warnings.append("hsic_descriptive_small_support")
+        # Deep-budget bootstrap-adjusted nonlinear score (MSD §6.6.2): D* = E_b[D_b]/(SD_b+ε)
+        # over parametric residual replicates, aligned to this scan's support slice.
+        if budget == "deep" and bootstrap_replicates is not None:
+            import numpy as _np
+
+            reps = _np.asarray(bootstrap_replicates, dtype=float)
+            if reps.ndim == 2 and reps.shape[1] >= n_eff:
+                bootstrap_adjustment = bootstrap_adjusted_hsic(
+                    covariate=covariate_values,
+                    residual_replicates=reps[:, :n_eff],
+                    seed=seed,
+                    budget=budget,
+                )
+                warnings.append("hsic_bootstrap_adjusted_deep_budget")
     hypothesis_id = f"hsic__{residual_field_id}__{covariate_field_id}"
     return {
         "hypothesis_id": hypothesis_id,
@@ -282,6 +299,10 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
         "seed": int(seed),
         "kernel": "rbf_centered",
         "null_strategy": null_used,
+        "residual_mode": "cross_fitted_parametric_bootstrap" if bootstrap_adjustment else None,
+        "bootstrap_count": (bootstrap_adjustment or {}).get("bootstrap_count"),
+        "bootstrap_d_star": (bootstrap_adjustment or {}).get("d_star"),
+        "residual_uncertainty": (bootstrap_adjustment or {}).get("residual_uncertainty"),
         "created_at": _now(),
     }
 
@@ -406,6 +427,23 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
             structured_perms = _cyclic_shift_permutations(block_labels, time_labels, permutations, seed)
             null_label = "spatial_block_cyclic_time_shift"
 
+    # Deep-budget parametric-bootstrap replicates (MSD §6.6.2), built once per residual
+    # field from the fitted mean + family. None when the family has no parametric draw
+    # from μ̂ alone (hurdle/binomial) — the scan then keeps the cross-fitted result only.
+    bootstrap_replicates = None
+    if budget == "deep":
+        fam_fitted = str(model_manifest.get("family_fitted") or model_manifest.get("family") or "")
+        fitted_path = _resolve_path(root, model_manifest.get("fitted_values_path"), DEFAULT_FITTED_VALUES)
+        if fitted_path.exists():
+            mu_vec = _vector_from_rows(_read_rows(fitted_path), ("fitted", "value"))
+            if mu_vec is not None and len(mu_vec) == len(residual_vector):
+                import numpy as _np
+
+                dispersion = float((model_manifest.get("diagnostics") or {}).get("dispersion") or 1.0)
+                bootstrap_replicates = bootstrap_deviance_residual_replicates(
+                    family=fam_fitted, mu=_np.asarray(mu_vec, dtype=float), n_boot=200, dispersion=dispersion,
+                )
+
     scan_rows: list[dict[str, Any]] = []
     for spec in covariates:
         vector = _column_vector(matrix_rows, spec["column"])
@@ -427,10 +465,14 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
                 "permutations": int(permutations),
                 "seed": int(seed),
                 "kernel": "linear_centered",
+                "residual_mode": None,
+                "bootstrap_count": None,
+                "bootstrap_d_star": None,
+                "residual_uncertainty": None,
                 "created_at": _now(),
             })
             continue
-        scan_rows.append(_scan_row(residual_field_id=str(residual_field_id), model_id=model_manifest.get("model_id"), covariate_field_id=spec["field_id"], covariate_column=spec["column"], residuals=residual_vector, covariate=vector, budget=budget, permutations=permutations, min_support=min_support, seed=seed, permutation_indices=structured_perms, null_strategy_label=null_label))
+        scan_rows.append(_scan_row(residual_field_id=str(residual_field_id), model_id=model_manifest.get("model_id"), covariate_field_id=spec["field_id"], covariate_column=spec["column"], residuals=residual_vector, covariate=vector, budget=budget, permutations=permutations, min_support=min_support, seed=seed, permutation_indices=structured_perms, null_strategy_label=null_label, bootstrap_replicates=bootstrap_replicates))
 
     # MSD §6.8: cross-fitted panel regimes use Benjamini-Yekutieli (dependence-
     # robust); independent cross-sectional scans use Benjamini-Hochberg.

@@ -27,12 +27,15 @@ from typing import Any, Iterable
 _ICD_SEED_LEVELS: dict[str, str] = {
     "icd_chapter": "chapter",
     "icd_block": "block",
+    "icd_curated": "curated",
+    "curated_cause": "curated",
 }
 
 # stratification level -> declared support/axis name on the derived count.
 ICD_AXIS_BY_LEVEL: dict[str, str] = {
     "chapter": "icd_chapter",
     "block": "icd_block",
+    "curated": "curated_cause_group",
 }
 
 # Only *primary, single-valued* diagnostic positions are restrictable into a partition
@@ -60,11 +63,15 @@ def health_seeds(intent: Any) -> list[str]:
 def requested_icd_levels(intent: Any) -> list[tuple[str, str]]:
     """Return ``[(level, seed_token), ...]`` for each ICD stratification the intent requests."""
     seeds = set(health_seeds(intent))
-    return [
-        (_ICD_SEED_LEVELS[token], token)
-        for token in ("icd_chapter", "icd_block")
-        if token in seeds
-    ]
+    seen: set[str] = set()
+    levels: list[tuple[str, str]] = []
+    for token in ("icd_chapter", "icd_block", "icd_curated", "curated_cause"):
+        if token in seeds:
+            level = _ICD_SEED_LEVELS[token]
+            if level not in seen:
+                seen.add(level)
+                levels.append((level, token))
+    return levels
 
 
 def _field_attr(field: Any, name: str, default: Any = None) -> Any:
@@ -159,6 +166,8 @@ def seed_satisfaction(intent: Any, fields: Iterable[Any]) -> dict[str, bool]:
         "all_cause_mortality": lambda: _has_event_count(field_list, "Deaths"),
         "icd_chapter": lambda: _has_icd_stratum(field_list, "chapter"),
         "icd_block": lambda: _has_icd_stratum(field_list, "block"),
+        "icd_curated": lambda: _has_icd_stratum(field_list, "curated"),
+        "curated_cause": lambda: _has_icd_stratum(field_list, "curated"),
         "hospitalization": lambda: _has_event_count(field_list, "HospitalAdmissions"),
         "capacity": lambda: _has_capacity(field_list),
     }

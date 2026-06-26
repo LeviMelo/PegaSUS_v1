@@ -25,6 +25,8 @@ entries:
    match: {role: mortality_rate, requires_axis: icd_chapter}}
 - {id: V_M03, name: BlockMortality, aliases: [],
    match: {role: mortality_rate, requires_axis: icd_block}}
+- {id: V_M04, name: CuratedCauseMortality, aliases: [],
+   match: {role: mortality_rate, requires_axis: curated_cause_group}}
 # --- §3.10.2 Hospitalization ---
 - {id: V_H01, name: CrudeHospitalization, aliases: [],
    match: {role: hospitalization_rate, excludes_axes: [icd_chapter, icd_block]}}
@@ -48,9 +50,40 @@ entries:
    match: {role: birth_outcome_share, carrier: PrematurityBirths/LiveBirths}}
 - {id: V_C14, name: CongenitalAnomaly, aliases: [SINASCCongenitalAnomalyPrevalence],
    match: {role: birth_outcome_share, carrier: CongenitalAnomalyBirths/LiveBirths}}
+- {id: V_C09, name: CesareanShare, aliases: [],
+   match: {role: birth_outcome_share, carrier: CesareanBirths/LiveBirths}}
+- {id: V_C10, name: LowApgar1, aliases: [],
+   match: {role: birth_outcome_share, carrier: LowApgar1Births/LiveBirths}}
+- {id: V_C11, name: LowApgar5, aliases: [],
+   match: {role: birth_outcome_share, carrier: LowApgar5Births/LiveBirths}}
 # --- §3.10.5 Capacity ---
 - {id: V_K04, name: FacilityDensity, aliases: [],
    match: {role: facility_density}}
+# --- §3.10.5 Health-system statistical functionals (Ψ_mean) ---
+- {id: V_K05, name: MeanLengthOfStay, aliases: [], match: {role: mean_length_of_stay}}
+- {id: V_K06, name: ICUDaysPerHosp, aliases: [], match: {role: mean_icu_days}}
+- {id: V_K07A, name: MeanHospitalServiceCost, aliases: [], match: {role: mean_hospital_service_cost}}
+- {id: V_K07B, name: MeanProfessionalCost, aliases: [], match: {role: mean_professional_cost}}
+- {id: V_K07C, name: MeanICUCost, aliases: [], match: {role: mean_icu_cost}}
+- {id: V_K07D, name: MeanTotalBillingCost, aliases: [], match: {role: mean_total_billing_cost}}
+# --- §3.10.6 Observer-process functionals (Ψ_median) ---
+- {id: V_O01, name: ReportingDelaySIM, aliases: [], match: {role: median_reporting_delay}}
+# --- §3.10.6 Observer-process fields (data-quality shares; disambiguated by carrier) ---
+- {id: V_O04, name: InvestigationShare, aliases: [],
+   match: {role: observer_share, carrier: InvestigatedDeaths/Deaths}}
+- {id: V_O05, name: IllDefinedCauseShare, aliases: [],
+   match: {role: observer_share, carrier: IllDefinedDeaths/Deaths}}
+- {id: V_O06, name: InvalidICDShare, aliases: [],
+   match: {role: observer_share, carrier: InvalidICDDeaths/Deaths}}
+- {id: V_O07, name: MissingRaceShare, aliases: [],
+   match: {role: observer_share, carrier: MissingRaceDeaths/Deaths}}
+# --- §2.11 Cross-source divergence relationships (bridge surface) ---
+- {id: MorbidityMortalityDivergence, name: MorbidityMortalityDivergence, aliases: [],
+   match: {role: morbidity_mortality_divergence, excludes_axes: [icd_chapter, icd_block, curated_cause_group]}}
+- {id: CauseMorbidityMortalityDivergence, name: CauseMorbidityMortalityDivergence, aliases: [],
+   match: {role: morbidity_mortality_divergence, requires_axis: icd_chapter}}
+- {id: FertilityMortalityDivergence, name: FertilityMortalityDivergence, aliases: [],
+   match: {role: fertility_mortality_divergence}}
 # --- Count-level admission seeds (numerators / anchors an intent may mandate) ---
 - {id: SIMDeathsAll, name: SIMDeathsAll, aliases: [],
    match: {carrier: Deaths, role: source_event_count, excludes_axes: [icd_chapter, icd_block]}}

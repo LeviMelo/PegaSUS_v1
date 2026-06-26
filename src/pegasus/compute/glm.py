@@ -28,6 +28,9 @@ SUPPORTED_FAMILIES: frozenset[str] = frozenset(
         "ols",
         "poisson_count_with_log_offset",
         "negative_binomial",
+        "quasi_poisson",
+        "hurdle_poisson",
+        "hurdle_nb",
         "gamma",
         "sih_gamma_cost_component",
         "binomial_proportion",
@@ -40,10 +43,18 @@ RESIDUAL_TYPE_BY_FAMILY: dict[str, str] = {
     "ols": "standardized",
     "poisson_count_with_log_offset": "deviance",
     "negative_binomial": "deviance",
+    "quasi_poisson": "pearson",
+    "hurdle_poisson": "randomized_quantile",
+    "hurdle_nb": "randomized_quantile",
     "gamma": "deviance",
     "sih_gamma_cost_component": "deviance",
     "binomial_proportion": "deviance",
 }
+
+_COUNT_FAMILIES: frozenset[str] = frozenset(
+    {"poisson_count_with_log_offset", "negative_binomial", "quasi_poisson", "hurdle_poisson", "hurdle_nb"}
+)
+_HURDLE_FAMILIES: frozenset[str] = frozenset({"hurdle_poisson", "hurdle_nb"})
 
 _EPS = 1e-9
 _ETA_CLAMP = 30.0
@@ -145,8 +156,9 @@ def _binomial() -> _Family:
     def dev(y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         y = np.clip(y, 0.0, 1.0)
         mu = np.clip(mu, _EPS, 1.0 - _EPS)
-        t1 = np.where(y > 0, y * np.log(y / mu), 0.0)
-        t2 = np.where(y < 1, (1 - y) * np.log((1 - y) / (1 - mu)), 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t1 = np.where(y > 0, y * np.log(np.where(y > 0, y, 1.0) / mu), 0.0)
+            t2 = np.where(y < 1, (1 - y) * np.log(np.where(y < 1, 1 - y, 1.0) / (1 - mu)), 0.0)
         return 2.0 * (t1 + t2)
 
     def linkinv(eta: np.ndarray) -> np.ndarray:
@@ -166,7 +178,7 @@ def _binomial() -> _Family:
 def _resolve_family(family: str, *, y: np.ndarray, nb_theta: float | None) -> _Family:
     if family in {"gaussian_identity", "ols"}:
         return _gaussian()
-    if family == "poisson_count_with_log_offset":
+    if family in {"poisson_count_with_log_offset", "quasi_poisson"}:
         return _poisson()
     if family in {"gamma", "sih_gamma_cost_component"}:
         return _gamma()
@@ -203,14 +215,173 @@ class GLMResult:
     n_iter: int
     converged: bool
     warnings: list[str] = field(default_factory=list)
+    aux: dict = field(default_factory=dict)
+    randomized_quantile_residuals: np.ndarray | None = None
 
     @property
     def primary_residual(self) -> np.ndarray:
+        if self.residual_type == "randomized_quantile" and self.randomized_quantile_residuals is not None:
+            return self.randomized_quantile_residuals
         if self.residual_type == "standardized":
             return self.standardized_residuals
         if self.residual_type == "pearson":
             return self.pearson_residuals
         return self.deviance_residuals
+
+
+def _poisson_log_pmf(k: int, lam: float) -> float:
+    lam = max(float(lam), _EPS)
+    return -lam + k * math.log(lam) - math.lgamma(k + 1)
+
+
+def _nb_log_pmf(k: int, mu: float, theta: float) -> float:
+    mu = max(float(mu), _EPS)
+    theta = max(float(theta), _EPS)
+    return (
+        math.lgamma(k + theta) - math.lgamma(theta) - math.lgamma(k + 1)
+        + theta * math.log(theta / (theta + mu)) + k * math.log(mu / (theta + mu))
+    )
+
+
+def _count_p0(lam: float, theta: float | None) -> float:
+    if theta is None:
+        return math.exp(-max(float(lam), _EPS))
+    return math.exp(_nb_log_pmf(0, lam, theta))
+
+
+def _untruncated_cdf_pair(y_i: int, lam: float, theta: float | None) -> tuple[float, float]:
+    """Untruncated count CDF at y and y-1 (Poisson if theta is None, else NB)."""
+    cap = min(int(y_i), 5000)
+    cdf_y = 0.0
+    cdf_ym1 = 0.0
+    for k in range(0, cap + 1):
+        pk = math.exp(_nb_log_pmf(k, lam, theta) if theta is not None else _poisson_log_pmf(k, lam))
+        cdf_y += pk
+        if k <= y_i - 1:
+            cdf_ym1 += pk
+    return min(cdf_y, 1.0), min(cdf_ym1, 1.0)
+
+
+def _hurdle_cdf_bounds(y: np.ndarray, pi: np.ndarray, lam: np.ndarray, theta: float | None) -> tuple[np.ndarray, np.ndarray]:
+    """Lower/upper hurdle CDF per row for randomized-quantile residuals (Dunn–Smyth)."""
+    n = len(y)
+    lower = np.empty(n)
+    upper = np.empty(n)
+    for i in range(n):
+        yi = int(round(float(y[i])))
+        pi_i = float(min(max(pi[i], _EPS), 1.0 - _EPS))
+        if yi <= 0:
+            lower[i] = 0.0
+            upper[i] = 1.0 - pi_i
+            continue
+        p0 = _count_p0(float(lam[i]), theta)
+        denom = max(1.0 - p0, _EPS)
+        cdf_y, cdf_ym1 = _untruncated_cdf_pair(yi, float(lam[i]), theta)
+        trunc_y = min(max((cdf_y - p0) / denom, 0.0), 1.0)
+        trunc_ym1 = min(max((cdf_ym1 - p0) / denom, 0.0), 1.0)  # = 0 when yi == 1
+        lower[i] = (1.0 - pi_i) + pi_i * trunc_ym1
+        upper[i] = (1.0 - pi_i) + pi_i * trunc_y
+    return lower, upper
+
+
+def randomized_quantile_residuals(lower: np.ndarray, upper: np.ndarray, *, seed: int = 12345) -> np.ndarray:
+    """Dunn–Smyth randomized quantile residuals (MSD §6.5): r_i = Φ⁻¹(U(F(y-1), F(y)))."""
+    from statistics import NormalDist
+
+    rng = np.random.default_rng(seed)
+    u = rng.uniform(np.clip(lower, 0.0, 1.0), np.clip(upper, 0.0, 1.0))
+    u = np.clip(u, _EPS, 1.0 - _EPS)
+    nd = NormalDist()
+    return np.array([nd.inv_cdf(float(v)) for v in u], dtype=float)
+
+
+def select_count_family(y: np.ndarray, *, base_family: str = "poisson_count_with_log_offset") -> str:
+    """Data-aware count-family routing (MSD §6.2): zero-inflated → hurdle; overdispersed → NB."""
+    y = np.asarray(y, dtype=float).ravel()
+    if y.size == 0:
+        return base_family
+    mean = float(np.mean(y))
+    if mean <= _EPS:
+        return base_family
+    var = float(np.var(y, ddof=1)) if y.size > 1 else mean
+    dispersion = var / mean if mean > 0 else 1.0
+    zero_frac = float(np.mean(y == 0))
+    poisson_zero = math.exp(-mean)
+    overdispersed = dispersion > 1.5
+    # Excess zeros beyond the Poisson expectation, with material zero mass.
+    zero_inflated = zero_frac >= 0.30 and zero_frac > poisson_zero * 1.25
+    if zero_inflated:
+        return "hurdle_nb" if overdispersed else "hurdle_poisson"
+    if overdispersed:
+        return "negative_binomial"
+    return base_family
+
+
+def _fit_hurdle(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    family: str,
+    offset: np.ndarray | None,
+    prior_weights: np.ndarray | None,
+    term_names: Sequence[str] | None,
+    max_iter: int,
+    tol: float,
+    nb_theta: float | None,
+    seed: int = 12345,
+) -> GLMResult:
+    """Two-part hurdle: logistic P(Y>0) × (zero-truncated) Poisson/NB count (MSD §6.2)."""
+    y = np.asarray(y, dtype=float).ravel()
+    X = np.asarray(X, dtype=float)
+    n, p = X.shape
+    offset_vec = np.zeros(n) if offset is None else np.asarray(offset, dtype=float).ravel()
+    z = (y > 0).astype(float)
+    zero_fit = fit_glm(y=z, X=X, family="binomial_proportion", prior_weights=prior_weights,
+                       term_names=term_names, max_iter=max_iter, tol=tol)
+    pos = y > 0
+    if int(pos.sum()) <= p:
+        raise GLMError("hurdle_insufficient_positive_support")
+    count_family = "negative_binomial" if family == "hurdle_nb" else "poisson_count_with_log_offset"
+    theta = (nb_theta if nb_theta is not None else _estimate_nb_theta(y[pos])) if family == "hurdle_nb" else None
+    count_fit = fit_glm(
+        y=y[pos], X=X[pos], family=count_family,
+        offset=offset_vec[pos], prior_weights=None if prior_weights is None else np.asarray(prior_weights).ravel()[pos],
+        term_names=term_names, max_iter=max_iter, tol=tol, nb_theta=theta,
+    )
+    pi = 1.0 / (1.0 + np.exp(-_clamp_eta(X @ zero_fit.coefficients)))
+    lam = np.exp(_clamp_eta(X @ count_fit.coefficients + offset_vec))
+    p0 = np.array([_count_p0(float(li), theta) for li in lam])
+    trunc_mean = lam / np.maximum(1.0 - p0, _EPS)
+    mu = pi * trunc_mean
+    lower, upper = _hurdle_cdf_bounds(y, pi, lam, theta)
+    rq = randomized_quantile_residuals(lower, upper, seed=seed)
+    var = np.maximum(mu, _EPS)
+    pearson = (y - mu) / np.sqrt(var)
+    term_list = list(term_names) if term_names is not None else [f"x{i}" for i in range(p)]
+    return GLMResult(
+        family=family,
+        residual_type="randomized_quantile",
+        terms=term_list,
+        coefficients=count_fit.coefficients,
+        fitted=mu,
+        linear_predictor=X @ count_fit.coefficients + offset_vec,
+        deviance_residuals=rq,
+        pearson_residuals=pearson,
+        standardized_residuals=rq,
+        deviance=float(np.sum(rq ** 2)),
+        dispersion=1.0,
+        n_iter=count_fit.n_iter,
+        converged=zero_fit.converged and count_fit.converged,
+        warnings=["hurdle_two_part_model"],
+        aux={
+            "zero_coef": zero_fit.coefficients.tolist(),
+            "count_coef": count_fit.coefficients.tolist(),
+            "nb_theta": theta,
+            "count_family": count_family,
+            "seed": seed,
+        },
+        randomized_quantile_residuals=rq,
+    )
 
 
 def fit_glm(
@@ -226,6 +397,11 @@ def fit_glm(
     nb_theta: float | None = None,
 ) -> GLMResult:
     """Fit a GLM by IRLS. NumPy-only, no silent family downgrades."""
+    if family in _HURDLE_FAMILIES:
+        return _fit_hurdle(
+            y=y, X=X, family=family, offset=offset, prior_weights=prior_weights,
+            term_names=term_names, max_iter=max_iter, tol=tol, nb_theta=nb_theta,
+        )
     y = np.asarray(y, dtype=float).ravel()
     X = np.asarray(X, dtype=float)
     if X.ndim != 2 or X.shape[0] != y.shape[0]:
@@ -305,6 +481,54 @@ def fit_glm(
         n_iter=iteration,
         converged=converged,
     )
+
+
+_BOOTSTRAP_FAMILIES: frozenset[str] = frozenset(
+    {"poisson_count_with_log_offset", "quasi_poisson", "negative_binomial", "gaussian_identity", "ols", "gamma", "sih_gamma_cost_component"}
+)
+
+
+def bootstrap_deviance_residual_replicates(
+    *,
+    family: str,
+    mu: np.ndarray,
+    n_boot: int,
+    seed: int = 20260627,
+    theta: float | None = None,
+    dispersion: float = 1.0,
+) -> np.ndarray | None:
+    """Parametric bootstrap residual replicates (MSD §6.6.2).
+
+    Draw ``Y^(b) ~ M̂(μ̂)`` and return the deviance residual of each replicate against the
+    fitted mean. Shape ``(n_boot, n)``. Returns ``None`` for families where a parametric
+    draw from μ̂ alone is ill-defined (hurdle/binomial proportion) so the deep path falls
+    back honestly to cross-fitting rather than fabricating a draw.
+    """
+    if family not in _BOOTSTRAP_FAMILIES:
+        return None
+    mu = np.asarray(mu, dtype=float).ravel()
+    n = mu.size
+    if n == 0:
+        return None
+    rng = np.random.default_rng(seed)
+    fam = _resolve_family(family, y=mu, nb_theta=theta)
+    out = np.empty((max(int(n_boot), 1), n), dtype=float)
+    mu_safe = np.maximum(mu, _EPS)
+    for b in range(out.shape[0]):
+        if family in {"poisson_count_with_log_offset", "quasi_poisson"}:
+            y_b = rng.poisson(mu_safe).astype(float)
+        elif family == "negative_binomial":
+            th = max(float(theta if theta is not None else _estimate_nb_theta(mu_safe)), _EPS)
+            p = th / (th + mu_safe)
+            y_b = rng.negative_binomial(th, np.clip(p, _EPS, 1 - _EPS)).astype(float)
+        elif family in {"gamma", "sih_gamma_cost_component"}:
+            shape = 1.0 / max(dispersion, _EPS)
+            y_b = rng.gamma(shape=shape, scale=mu_safe / shape)
+        else:  # gaussian / ols
+            y_b = mu + rng.normal(0.0, math.sqrt(max(dispersion, _EPS)), size=n)
+        unit_dev = np.maximum(fam.unit_deviance(y_b, mu_safe), 0.0)
+        out[b] = np.sign(y_b - mu_safe) * np.sqrt(unit_dev)
+    return out
 
 
 def make_blocked_folds(
@@ -405,8 +629,16 @@ def _predict_residuals(
     family: str,
     residual_type: str,
 ) -> np.ndarray:
-    fam = _resolve_family(family, y=y, nb_theta=None)
     offset_vec = np.zeros(len(y)) if offset is None else np.asarray(offset, dtype=float).ravel()
+    if family in _HURDLE_FAMILIES:
+        zero_coef = np.asarray(fit.aux.get("zero_coef", []), dtype=float)
+        count_coef = np.asarray(fit.aux.get("count_coef", []), dtype=float)
+        theta = fit.aux.get("nb_theta")
+        pi = 1.0 / (1.0 + np.exp(-_clamp_eta(X @ zero_coef)))
+        lam = np.exp(_clamp_eta(X @ count_coef + offset_vec))
+        lower, upper = _hurdle_cdf_bounds(np.asarray(y, dtype=float).ravel(), pi, lam, theta)
+        return randomized_quantile_residuals(lower, upper, seed=int(fit.aux.get("seed", 12345)))
+    fam = _resolve_family(family, y=y, nb_theta=None)
     weights = np.ones(len(y)) if prior_weights is None else np.asarray(prior_weights, dtype=float).ravel()
     eta = X @ fit.coefficients
     mu = fam.linkinv(eta + offset_vec)

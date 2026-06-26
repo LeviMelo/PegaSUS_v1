@@ -21,7 +21,11 @@ from pegasus.core.io_utils import _compact, _hash_payload, _load_json, _safe_id,
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pegasus.compute.glm import GLMError, crossfit_residuals, fit_glm
+from pegasus.compute.glm import GLMError, crossfit_residuals, fit_glm, select_count_family
+
+# Count families eligible for §6.2 data-aware routing and log-exposure offsets.
+_COUNT_FAMILIES = {"poisson_count_with_log_offset", "negative_binomial", "quasi_poisson", "hurdle_poisson", "hurdle_nb"}
+_LOG_OFFSET_FAMILIES = _COUNT_FAMILIES
 from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.pirs.design_matrix import _read_rows, _write_rows
 
@@ -203,19 +207,27 @@ def _fit_model(
     y, X, term_names, missing_warnings, missing_shares = _build_design(
         rows=rows, response_column=response_column, covariate_columns=covariate_columns
     )
+    requested_family = family
+    # Data-aware family routing (MSD §6.2): refine count families to hurdle/NB by the
+    # observed zero-mass and dispersion. The actually-fitted family is recorded honestly.
+    if family in _COUNT_FAMILIES and y.size and np.all(y >= 0):
+        family = select_count_family(y, base_family="poisson_count_with_log_offset")
+        if family != requested_family:
+            missing_warnings.append(f"family_refined_by_data:{requested_family}->{family}")
+    log_offset = family in _LOG_OFFSET_FAMILIES
     offset_vec: np.ndarray | None = None
     if offset_column is not None and rows and offset_column in rows[0]:
         raw = np.asarray([max(_to_float(row.get(offset_column)) or 1e-12, 1e-12) for row in rows], dtype=float)
-        offset_vec = np.log(raw) if family in {"poisson_count_with_log_offset", "negative_binomial"} else raw
-    if family == "poisson_count_with_log_offset" and np.any(y < 0):
-        raise PIRSModelExecutionError("Poisson PIRS response contains negative counts")
+        offset_vec = np.log(raw) if log_offset else raw
+    if family in _COUNT_FAMILIES and np.any(y < 0):
+        raise PIRSModelExecutionError(f"count PIRS response contains negative values for family {family}")
 
     try:
         fit = fit_glm(
             y=y,
             X=X,
             family=family,
-            offset=offset_vec if family in {"poisson_count_with_log_offset", "negative_binomial"} else None,
+            offset=offset_vec if log_offset else None,
             term_names=term_names,
         )
     except GLMError as exc:
@@ -230,7 +242,7 @@ def _fit_model(
             y=y,
             X=X,
             family=family,
-            offset=offset_vec if family in {"poisson_count_with_log_offset", "negative_binomial"} else None,
+            offset=offset_vec if log_offset else None,
             n_folds=5,
             block_index=_block_index(rows),
         )
@@ -266,6 +278,8 @@ def _fit_model(
         "mean_residual": float(np.mean(residual)) if len(residual) else None,
         "sigma": float(np.std(residual, ddof=1)) if len(residual) > 1 else 0.0,
         "solver": f"glm_irls:{family}",
+        "family_requested": requested_family,
+        "family_fitted": fit.family,
         "residual_type": fit.residual_type,
         "residual_mode_requested": residual_mode,
         "residual_mode_actual": actual_mode,
@@ -350,6 +364,7 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
         "covariate_field_ids": covariate_field_ids,
         "offset_field_id": offset_field_id,
         "family": family,
+        "family_fitted": fit.get("family_fitted", family),
         "row_count": len(rows),
         "coefficient_count": len(coefficients),
         "coefficients_path": str(coefficients_path),

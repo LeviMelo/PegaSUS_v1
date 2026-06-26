@@ -21,7 +21,7 @@ def test_slice4a_attach_race_bridge_to_compile_run(tmp_path: Path):
     result = run_attach_race_bridge(
         run_dir=run_dir,
         sim_events_path=sim_events,
-        bridge_prior_path="tests/fixtures/race_bridge/fixedC_valid.json",
+        bridge_prior_path="config/priors/race_bridge/fixedC_sim_admin_to_ibge_selfdeclared_v1.json",
         municipality_cod6="270430",
     )
     assert result["validation"].ok, result["validation"].errors

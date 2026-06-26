@@ -251,9 +251,9 @@ def _add_icd_stratum(df: pl.DataFrame, icd_column: str, level: str, axis_name: s
     routed to an explicit ``UNCLASSIFIED`` stratum rather than silently dropped, so the
     cause-specific counts partition the event population exactly.
     """
-    from pegasus.datasus.icd_groups import block_for_icd, chapter_for_icd
+    from pegasus.datasus.icd_groups import block_for_icd, chapter_for_icd, curated_group_for_icd
 
-    classify = chapter_for_icd if level == "chapter" else block_for_icd
+    classify = {"chapter": chapter_for_icd, "block": block_for_icd, "curated": curated_group_for_icd}.get(level, chapter_for_icd)
     if icd_column not in df.columns:
         return df.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
     codes = df.get_column(icd_column).cast(pl.Utf8, strict=False).drop_nulls().unique().to_list()
@@ -328,11 +328,12 @@ def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.D
 
 def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
     df = _support_frame(pl.read_parquet(source))
+    base_keys = _support_keys(df)
     support = _as_dict(field.support)
     conditions = support.get("restrict_conditions")
     if conditions:
         df = _apply_restrict_conditions(df, list(conditions))
-    keys = _support_keys(df)
+    keys = list(base_keys)
     stratify_icd = support.get("stratify_icd")
     if stratify_icd:
         axis_name = str(support.get("icd_axis") or ("icd_chapter" if stratify_icd == "chapter" else "icd_block"))
@@ -374,6 +375,31 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
         pl.lit(field.id).alias("field_id"),
         pl.lit(field.name).alias("field_name"),
         pl.lit(field.operator or "count_measure").alias("operator"),
+    ])
+    return out
+
+
+def _functional_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
+    """Materialize a statistical functional (mean/median) of a per-record mark over each
+    support cell (MSD §3.10.4-6 Ψ operators)."""
+    df = _support_frame(pl.read_parquet(source))
+    support = _as_dict(field.support)
+    mark = str(support.get("mark_column") or "")
+    functional = str(support.get("functional") or "mean")
+    if mark not in df.columns:
+        raise ValueError(f"functional field {field.id} mark column {mark!r} absent from source")
+    df = df.with_columns(pl.col(mark).cast(pl.Float64, strict=False).alias("__mark__"))
+    agg = pl.col("__mark__").median() if functional == "median" else pl.col("__mark__").mean()
+    keys = _support_keys(df)
+    if keys:
+        out = df.group_by(keys).agg(agg.cast(pl.Float64).alias(VALUE_COLUMN)).sort(keys)
+    else:
+        scalar = df.get_column("__mark__").median() if functional == "median" else df.get_column("__mark__").mean()
+        out = pl.DataFrame({VALUE_COLUMN: [float(scalar) if scalar is not None else None]})
+    out = out.with_columns([
+        pl.lit(field.id).alias("field_id"),
+        pl.lit(field.name).alias("field_name"),
+        pl.lit(f"psi_{functional}").alias("operator"),
     ])
     return out
 
@@ -814,6 +840,36 @@ def _sidra_demographic_population_tensor(field: FieldNode, output_dir: Path) -> 
     return _write(output_dir / f"{field.id}.parquet", out)
 
 
+def _population_solver_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int]:
+    """Materialize a solver-produced population tensor as an EFG denominator panel."""
+    support = _as_dict(field.support)
+    tensor_path = support.get("population_tensor_path") or support.get("artifact_path")
+    if not tensor_path:
+        raise ValueError("population solver field has no population_tensor_path")
+    df = pl.read_parquet(tensor_path)
+    required = {"year", "municipality_cod6", VALUE_COLUMN}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"population solver tensor missing columns: {sorted(missing)}")
+    keep_axes = []
+    for axis in ("age_group", "sex", "race"):
+        if axis not in df.columns:
+            continue
+        values = set(str(v) for v in df.get_column(axis).drop_nulls().unique().to_list())
+        if values and values != {"__total__"}:
+            keep_axes.append(axis)
+    out = df.select([
+        pl.col("year").cast(pl.Int64, strict=False),
+        pl.col("municipality_cod6").cast(pl.Utf8),
+        *[pl.col(axis).cast(pl.Utf8) for axis in keep_axes],
+        pl.col(VALUE_COLUMN).cast(pl.Float64, strict=False).alias(VALUE_COLUMN),
+        pl.lit(field.id).alias("field_id"),
+        pl.lit(field.name).alias("field_name"),
+        pl.lit("population_tensor_solver").alias("operator"),
+    ])
+    return _write(output_dir / f"{field.id}.parquet", out)
+
+
 def _execute_non_rn(field: FieldNode, output_dir: Path, intent: Any = None) -> tuple[Path, int]:
     op = str(field.operator or "").lower()
     source = _source_path(field)
@@ -896,6 +952,15 @@ def execute_efg_result(
                 elif op == "sidra_demographic_population":
                     path, rows = _sidra_demographic_population_tensor(field, out_dir)
                     support_update = None
+                elif op == "psi_functional":
+                    functional_source = _source_path(field)
+                    if functional_source is None:
+                        raise ValueError(f"functional field {field.id} has no source artifact")
+                    path, rows = _write(out_dir / f"{field.id}.parquet", _functional_tensor(field, functional_source))
+                    support_update = None
+                elif op == "population_tensor_solver":
+                    path, rows = _population_solver_tensor(field, out_dir)
+                    support_update = None
                 elif op.startswith("Bridge") or "bridge" in op.lower() or field.kind in {"bridge_module", "bridge_divergence"}:
                     path, rows, support_update = _compute_bridge_tensor(field, fields_by_id, out_dir)
                 else:
@@ -916,7 +981,14 @@ def execute_efg_result(
                 # but remember the real error so a permanently-blocked field reports WHY
                 # instead of a generic "parents_not_materialized".
                 last_error[field_id] = f"{type(exc).__name__}: {exc}"
-                if op.upper() == "RN" or field.kind == "intensive_density":
+                # RN and cross-source bridges/divergences depend on parent tensors that may
+                # not be materialized yet; keep them pending across fixed-point passes.
+                if (
+                    op.upper() == "RN"
+                    or field.kind in {"intensive_density", "bridge_divergence", "bridge_module"}
+                    or op.startswith("Bridge")
+                    or op == "divergence_log_ratio"
+                ):
                     continue
                 executed.append(ExecutedField(field, "blocked", None, 0, last_error[field_id]))
                 pending.remove(field_id)

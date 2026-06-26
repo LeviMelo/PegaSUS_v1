@@ -16,7 +16,7 @@ def test_race_bridge_attach_is_idempotent_on_compile_run(tmp_path):
         attach = run_attach_race_bridge(
             run_dir=tmp_path / "run",
             sim_events_path=sim_events,
-            bridge_prior_path="tests/fixtures/race_bridge/fixedC_valid.json",
+            bridge_prior_path="config/priors/race_bridge/fixedC_sim_admin_to_ibge_selfdeclared_v1.json",
             municipality_cod6="270430",
         )
         assert attach["validation"].ok, attach["validation"].errors

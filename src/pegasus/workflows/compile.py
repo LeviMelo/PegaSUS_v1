@@ -43,6 +43,8 @@ def _registry_hashes() -> dict[str, str]:
         Path("config/registries/quality_permissions.yaml"),
         Path("config/registries/race_axis_registry.yaml"),
         Path("config/registries/race_bridge_priors.yaml"),
+        Path("config/registries/sidra_compendium.json"),
+        Path("config/registries/demographic_axis_maps.yaml"),
     ]
     return {str(path): sha256_file(path) for path in candidates if path.exists()}
 
@@ -175,8 +177,69 @@ def _validate_compile_manifest_artifacts(
             raise FileNotFoundError(f"Production source artifact is missing: {artifact.path}")
     for system, role in sorted(required):
         matches = available.get((system, role), [])
-        if len(matches) != 1:
-            raise ValueError(f"Production compile requires exactly one {system}:{role} artifact; found {len(matches)}.")
+        if system == "SIDRA" and role == "normalized_facts":
+            if len(matches) != 1:
+                raise ValueError(f"Production compile requires exactly one {system}:{role} artifact; found {len(matches)}.")
+            continue
+        if len(matches) < 1:
+            raise ValueError(f"Production compile requires at least one {system}:{role} artifact; found {len(matches)}.")
+
+
+def _population_tensor_mode_to_solver_mode(population_mode: str) -> str | None:
+    if population_mode == "independent_population_tensor":
+        return "independent_denominator"
+    if population_mode == "sim_informed_population_tensor":
+        return "sim_informed_denominator"
+    return None
+
+
+def _build_population_tensor_artifact(
+    *,
+    artifacts: tuple[SourceArtifactRef, ...],
+    run_dir: Path,
+    population_mode: str,
+) -> tuple[SourceArtifactRef | None, dict[str, Any] | None]:
+    solver_mode = _population_tensor_mode_to_solver_mode(population_mode)
+    if solver_mode is None:
+        return None, None
+    total_anchor = next(
+        (artifact for artifact in artifacts if artifact.source_system == "SIDRA" and artifact.artifact_role == "normalized_facts"),
+        None,
+    )
+    strata = next(
+        (artifact for artifact in artifacts if artifact.source_system == "SIDRA" and artifact.artifact_role == "population_strata"),
+        None,
+    )
+    if total_anchor is None:
+        raise ValueError("Population tensor mode requires the SIDRA normalized_facts total-anchor artifact.")
+    if strata is None:
+        raise ValueError(
+            "Population tensor mode requires a real SIDRA population_strata artifact "
+            "(disaggregated 9606 facts projected through demographic_axis_maps.yaml)."
+        )
+    sim_events = next(
+        (artifact for artifact in artifacts if artifact.source_system == "SIM-DO" and artifact.artifact_role == "processed_events"),
+        None,
+    )
+    output_path = run_dir / "Intermediate" / "population_tensor" / f"{solver_mode}.parquet"
+    from pegasus.workflows.population import run_population_tensor_plan
+
+    manifest = run_population_tensor_plan(
+        sidra_facts_path=total_anchor.path,
+        population_strata_path=strata.path,
+        output_path=output_path,
+        sim_events_path=None if sim_events is None else sim_events.path,
+        mode=solver_mode,
+    )
+    artifact = SourceArtifactRef(
+        path=str(output_path),
+        source_system="SIDRA",
+        artifact_role="population_tensor",
+        provenance_mode="materialized_external",
+        source_manifest_hash=strata.source_manifest_hash,
+        artifact_hash=sha256_file(output_path),
+    )
+    return artifact, manifest
 
 
 def _run_compile_impl(
@@ -258,10 +321,11 @@ def _run_compile_impl(
         source_hashes["compile_manifest"] = sha256_file(compile_manifest_path)
 
     with telemetry.stage("datasus_acquire"):
-        source_hashes.update({
-            f"source_artifact_{artifact.source_system}_{artifact.artifact_role}": artifact.artifact_hash or sha256_file(Path(artifact.path))
-            for artifact in autonomous_artifacts
-        })
+        for idx, artifact in enumerate(autonomous_artifacts):
+            digest = artifact.artifact_hash or sha256_file(Path(artifact.path))
+            key_base = f"source_artifact_{artifact.source_system}_{artifact.artifact_role}"
+            key = key_base if key_base not in source_hashes else f"{key_base}_{idx}_{digest[:8]}"
+            source_hashes[key] = digest
 
     with telemetry.stage("datasus_decode"):
         source_hashes["source_manifest"] = sha256_file(Path(source_manifest))
@@ -277,6 +341,19 @@ def _run_compile_impl(
             for artifact in autonomous_artifacts
             if artifact.source_system == "SIDRA" and artifact.artifact_role == "normalized_facts"
         )
+
+    population_solver_manifest: dict[str, Any] | None = None
+    with telemetry.stage("population_solver"):
+        population_tensor_artifact, population_solver_manifest = _build_population_tensor_artifact(
+            artifacts=autonomous_artifacts,
+            run_dir=run_dir,
+            population_mode=intent.population_mode,
+        )
+        if population_tensor_artifact is None:
+            telemetry.set_stage("population_solver", "skipped", 0.0)
+        else:
+            autonomous_artifacts = (*autonomous_artifacts, population_tensor_artifact)
+            source_hashes["population_tensor_solver"] = population_tensor_artifact.artifact_hash or sha256_file(Path(population_tensor_artifact.path))
 
     autonomous_efg_metadata: dict[str, Any] | None = None
     with telemetry.stage("she_build"):
@@ -329,6 +406,8 @@ def _run_compile_impl(
     }
     if population_tensor_metadata is None:
         skipped_reasons["population_solver"] = "official SIDRA anchor selected by intent"
+    elif population_solver_manifest is not None:
+        telemetry.resource_summary["population_solver"] = population_solver_manifest
 
     pirs_hsic_metadata = run_msd_inference_pipeline(
         run_dir=run_dir,

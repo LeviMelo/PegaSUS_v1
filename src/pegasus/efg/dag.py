@@ -377,19 +377,24 @@ def _field_domain_summaries(fields: Iterable[FieldNode], constraints: dict[str, 
         }
     population_fields = [field for field in field_list if str(field.id).startswith("population_tensor_")]
     if population_fields:
-        first = population_fields[0]
+        solver_fields = [field for field in population_fields if field.operator == "population_tensor_solver"]
+        first = solver_fields[0] if solver_fields else population_fields[0]
+        support = dict(first.support or {})
+        mode = str(support.get("PopulationTensorMode") or "official_sidra_anchor")
+        solver_id = str(support.get("SolverID") or "sidra_9606_total_anchor")
+        solver_backend = "population_tensor_solver" if first.operator == "population_tensor_solver" else "official_sidra_anchor"
         summaries["population_tensor"] = {
             "schema_version": "1.0",
             "source_systems": ["SIDRA"],
-            "attach_stage": "standalone_population_tensor",
+            "attach_stage": "population_solver" if first.operator == "population_tensor_solver" else "standalone_population_tensor",
             "field_id": first.id,
             "tensor_id": first.id,
-            "mode": "official_sidra_anchor",
-            "solver_id": "sidra_9606_total_anchor",
-            "solver_backend": "official_sidra_anchor",
-            "denominator_feedback_warning": None,
-            "independent_denominator_mode": True,
-            "sim_feedback_warning": None,
+            "mode": mode,
+            "solver_id": solver_id,
+            "solver_backend": solver_backend,
+            "denominator_feedback_warning": bool("sim_informed_population_feedback_risk" in set(first.warnings or [])) or None,
+            "independent_denominator_mode": mode in {"official_sidra_anchor", "independent_denominator"},
+            "sim_feedback_warning": "sim_informed_population_feedback_risk" if mode == "sim_informed_denominator" else None,
             "source_hashes": list(first.lineage.source_manifest_hashes),
         }
     cnes_fields = [field for field in field_list if "CNES-ST" in set(field.source or [])]
@@ -664,6 +669,32 @@ def _build_efg_base(
         if restrict_child is not None:
             count_nodes.append(restrict_child)
 
+    # Statistical-functional fields (MSD §3.10.4-6 Ψ_mean/Ψ_median): mean length of stay,
+    # mean cost components, median reporting delay. Registry-driven (functional_fields.yaml);
+    # these are intensive marked_functional covariates, not counts (not RN-divided).
+    from pegasus.registries.functional import functional_field_specs
+
+    for fspec in functional_field_specs(registry_root=root):
+        context = primary_event_context.get(fspec.carrier)
+        if context is None:
+            continue
+        artifact, functional_parents = context
+        functional_operator = OperatorSpec(
+            name=EFGOperator.PSI_FUNCTIONAL.value,
+            role=fspec.role,
+            output_kind="marked_functional",
+            params={
+                "artifact_path": artifact,
+                "carrier": fspec.carrier,
+                "mark_column": fspec.mark_column,
+                "functional": fspec.functional,
+                "unit": fspec.unit,
+                "functional_id": fspec.field_id,
+                "name": f"{functional_parents[0].source[0]}.{Path(artifact).stem}.{fspec.functional}.{fspec.mark_column}",
+            },
+        )
+        expand(functional_operator, functional_parents)
+
     # Radon–Nikodym ratios, driven by the clinical event registry's declared
     # (numerator_carrier, denominator_carrier, role) pairings. The denominator pool is
     # population anchors plus event counts, so cross-source/cross-event ratios
@@ -699,6 +730,50 @@ def _build_efg_base(
                         registries=registry_arg,
                     )
                     expand(operator, [numerator, denominator], alignment)
+
+    # Cross-source divergence bridges (§2.11 / relationship surface): registry-declared
+    # carrier pairs (e.g. SIH admissions vs SIM deaths) formed into a log-ratio divergence
+    # on shared support, at every shared stratifier signature (all-cause and cause-specific).
+    # The engine holds no hardcoded divergence pairs — they come from bridge_grammars.yaml.
+    if operator_mode != "raw_only":
+        from pegasus.registries.bridge import bridge_grammar_entries
+
+        _STRATIFIERS = ("icd_chapter", "icd_block", "curated_cause_group", "sex", "age_group", "race")
+
+        def _signature(node: FieldNode) -> frozenset[str]:
+            return frozenset(axis for axis in _STRATIFIERS if axis in node.axes)
+
+        def _event_counts(carrier: str) -> list[FieldNode]:
+            return [
+                node for node in count_nodes
+                if node.carrier == carrier and "source_event_count" in set(node.role or [])
+            ]
+
+        for grammar in bridge_grammar_entries(registry_root=root):
+            if not str(grammar.get("bridge_type", "")).endswith("divergence"):
+                continue
+            if "divergence_log_ratio" not in set(grammar.get("operators", []) or []):
+                continue
+            left_carrier = grammar.get("left_carrier")
+            right_carrier = grammar.get("right_carrier")
+            if not left_carrier or not right_carrier:
+                continue
+            bridge_type = str(grammar.get("bridge_type"))
+            rights_by_sig: dict[frozenset[str], list[FieldNode]] = {}
+            for right in _event_counts(str(right_carrier)):
+                rights_by_sig.setdefault(_signature(right), []).append(right)
+            for left in _event_counts(str(left_carrier)):
+                for right in rights_by_sig.get(_signature(left), []):
+                    operator = OperatorSpec(
+                        name=EFGOperator.DIVERGENCE.value,
+                        role=bridge_type,
+                        output_kind="bridge_divergence",
+                        params={"name": f"{left_carrier}_vs_{right_carrier}.{bridge_type}", "bridge_type": bridge_type},
+                    )
+                    alignment = align_fields(
+                        left=left, right=right, operator=operator, intent=intent, registries=registry_arg,
+                    )
+                    expand(operator, [left, right], alignment)
 
     bridge_plan = None
     if operator_mode != "raw_only":

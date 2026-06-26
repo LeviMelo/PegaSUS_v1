@@ -15,7 +15,7 @@ entries:
     source_axis: "SIM_ADMIN_RACACOR"
     target_axis: "IBGE_SELF_DECLARED_RACE"
     mode: "fixedC_dynamic_weight"
-    prior_path: "tests/fixtures/race_bridge/fixedC_valid.json"
+    prior_path: "config/priors/race_bridge/fixedC_sim_admin_to_ibge_selfdeclared_v1.json"
     enabled_for_compile: true
     region_scope:
       - "AL"

@@ -32,4 +32,22 @@ axes:
       SIM-DO:   {'1': male, '2': female, '0': __unknown__, '9': __unknown__}
       SINASC:   {'1': male, '2': female, '0': __unknown__, '9': __unknown__}
       SIH-RD:   {'1': male, '2': female, '0': __unknown__, '3': __unknown__}
-      SIDRA:    {'4': male, '5': female, '6794': __total__}
+      SIDRA:    {'4': male, '5': female, '0': __total__, '6794': __total__}
+  race:
+    canonical_categories: [branca, preta, amarela, parda, indigena]
+    source_columns:
+      SIM-DO: race_color_admin
+      SINASC: race_color_admin
+      SIH-RD: race_color_admin
+    source_maps:
+      SIDRA: {'2776': branca, '2777': preta, '2778': amarela, '2779': parda, '2780': indigena, '0': __total__, '95251': __total__}
+  age_group:
+    # Non-overlapping SIDRA 9606 census basis: single-year categories plus 100+.
+    # Overlapping 5-year parent categories remain unmapped unless an allocation kernel is declared.
+    canonical_categories: [age_0, age_1, age_2, age_3, age_4, age_5, age_6, age_7, age_8, age_9, age_10, age_11, age_12, age_13, age_14, age_15, age_16, age_17, age_18, age_19, age_20, age_21, age_22, age_23, age_24, age_25, age_26, age_27, age_28, age_29, age_30, age_31, age_32, age_33, age_34, age_35, age_36, age_37, age_38, age_39, age_40, age_41, age_42, age_43, age_44, age_45, age_46, age_47, age_48, age_49, age_50, age_51, age_52, age_53, age_54, age_55, age_56, age_57, age_58, age_59, age_60, age_61, age_62, age_63, age_64, age_65, age_66, age_67, age_68, age_69, age_70, age_71, age_72, age_73, age_74, age_75, age_76, age_77, age_78, age_79, age_80, age_81, age_82, age_83, age_84, age_85, age_86, age_87, age_88, age_89, age_90, age_91, age_92, age_93, age_94, age_95, age_96, age_97, age_98, age_99, age_100_plus]
+    source_columns:
+      SIM-DO: age_years
+      SINASC: maternal_age_years
+      SIH-RD: age_years
+    source_maps:
+      SIDRA: {'6557': age_0, '6558': age_1, '6559': age_2, '6560': age_3, '6561': age_4, '6562': age_5, '6563': age_6, '6564': age_7, '6565': age_8, '6566': age_9, '6567': age_10, '6568': age_11, '6569': age_12, '6570': age_13, '6571': age_14, '6572': age_15, '6573': age_16, '6574': age_17, '6575': age_18, '6576': age_19, '6577': age_20, '6578': age_21, '6579': age_22, '6580': age_23, '6581': age_24, '6582': age_25, '6656': age_26, '6657': age_27, '6658': age_28, '6659': age_29, '6583': age_30, '6584': age_31, '6585': age_32, '6586': age_33, '6587': age_34, '6588': age_35, '6589': age_36, '6590': age_37, '6591': age_38, '6592': age_39, '6593': age_40, '6594': age_41, '6595': age_42, '6596': age_43, '6597': age_44, '6598': age_45, '6599': age_46, '6600': age_47, '6601': age_48, '6602': age_49, '6603': age_50, '6604': age_51, '6605': age_52, '6606': age_53, '6607': age_54, '6608': age_55, '6609': age_56, '6610': age_57, '6611': age_58, '6612': age_59, '6613': age_60, '6614': age_61, '6615': age_62, '6616': age_63, '6617': age_64, '6618': age_65, '6619': age_66, '6620': age_67, '6621': age_68, '6622': age_69, '6623': age_70, '6624': age_71, '6625': age_72, '6626': age_73, '6627': age_74, '6628': age_75, '6629': age_76, '6630': age_77, '6631': age_78, '6632': age_79, '6633': age_80, '6634': age_81, '6635': age_82, '6636': age_83, '6637': age_84, '6638': age_85, '6639': age_86, '6640': age_87, '6641': age_88, '6642': age_89, '6643': age_90, '6644': age_91, '6645': age_92, '6646': age_93, '6647': age_94, '6648': age_95, '6649': age_96, '6650': age_97, '6651': age_98, '6652': age_99, '6653': age_100_plus, '0': __total__, '100362': __total__}

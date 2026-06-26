@@ -17,29 +17,55 @@ registry-driven carrier/ratio engine; §3.11 ICD cause-specific mortality; §2.6
 σ-restricted clinical events (maternal-child + birth outcomes, correct denominators);
 §3.10 named Core Seed Registry + `mandatory_fields` enforcement; ruthless parallel SIDRA
 acquisition client; §3.10.7 SIDRA V_X context ingestion with §2.9 regime routing;
-§2.8 demographic population tensor (sex) + demographic-aware stratified rates.
+§2.8 demographic population tensor (sex) + demographic-aware stratified rates;
+§2.8.3+ population solver orchestration wired into compile tensor modes; live SIDRA
+9606 sex-strata `population_strata` acquisition for tensor-mode runs.
+
+### Independent code review of the population-solver patch (2026-06-27)
+Reviewed the §2.8 solver-orchestration + SIDRA compendium/projection patch (separate dev
+session) for conformity/fraud, **not** its run outputs. Verdict: **substantively real, MSD-conformant** —
+- All schema fields/signatures it calls exist (`PopulationTensorProblem.{death_rates,sim_deaths,
+  closure_totals,...}`, `PopulationObjectiveWeights.{anchor,aging,...}`, `build_stdfm_input_schema`,
+  `select_population_solver`, `extract_chunk_plan(concurrency=...)`); compiles clean.
+- `she/population/loss.py` is genuine §2.8.3–2.8.10 math (anchor/aging-with-survival/births/SIM-death/
+  ILR-race/migration & age second-differences + analytic gradients); `projected_gradient.py` enforces
+  closure (simplex projection), nonnegativity, hard anchors, migration bounds. `validate_population_problem`
+  enforces the mode↔death-weight contract. Orchestrator weight-gating matches. Not theater.
+- Boundaries fail loud, not fake: `sidra_projection.py` (unmapped category / mixed total±non-total /
+  direct percentage projection → raise) and `compendium.py` (total-only, refuses unbounded high-dim).
+- **Fix applied this review:** in tensor modes both the raw `population_strata` (demographic path) and
+  the solver `population_tensor` output were being admitted as competing demographic Population
+  denominators. Per §2.8.2 the solver output is authoritative; `materialize._sidra_demographic_population_materialized_fields`
+  now skips raw-strata admission when a solver tensor is present. Official-anchor path unaffected.
+- **Flagged, NOT fraud, needs verification:** `demographic_axis_maps.yaml` hand-maps ~100 SIDRA
+  classification-287 (age) + 5 race category IDs. Unverified against live 9606 metadata; the age
+  sequence has non-contiguous IDs (e.g. 6582→25, 6656→26..6659→29, 6583→30) — plausible but
+  must be confirmed. Risk is bounded: `plan_sidra_chunks` validates categories against official
+  metadata → hallucinated IDs fail loud at planning, they cannot silently fabricate data. Verify
+  age/race IDs before trusting any age/race-stratified rate. (Doc note "race/age map Total only"
+  is now stale vs the populated yaml maps.)
 
 **Next tasks (priority order). Do NOT dumb down or fake — wire the real modules.**
 
-1. **§2.8 demographic-tensor solver orchestration** (the real reconstruction, not the
-   degenerate anchor). Entry: `she/population/solvers.py::solve_population_tensor_problem`
-   (real projected-gradient/sparse-ADMM backends exist) + `she/population/schema.py`
-   (`PopulationTensorProblem` shape=(munis,years,age,sex,race), anchors, closure_totals,
-   migration_bounds, `PopulationObjectiveWeights`). Build an orchestrator that constructs a
-   real multi-strata problem from disaggregated SIDRA (acquire age×sex×race 9606) + SIM death
-   priors + §2.8.10 closure constraints, runs the solver, and admits the result for
-   `population_mode ∈ {independent_population_tensor, sim_informed_population_tensor}`. Wire
-   into `compile.py` (currently hardcodes `population_solver`→skipped at line ~324). The
-   current `solve_population_tensor_from_sidra_anchor` builds a 1×1×1×1×1 problem — replace
-   with the multi-strata construction. Respect §2.8.12 dense-national abort (`dense_national_abort_check`).
+1. **§2.8 demographic-tensor breadth completion.** Orchestration is now live:
+   `she/population/orchestrator.py::solve_population_tensor_from_sidra_strata` constructs a
+   `PopulationTensorProblem`, calls `solve_population_tensor_problem`, writes a
+   `population_tensor` parquet, and compile appends it into SHE/EFG for tensor modes.
+   `workflows/pipeline.py` now acquires real SIDRA 9606 sex strata for tensor-mode live
+   runs (`sex ∈ {male,female}`, race/age held at Total). The next work is projection
+   breadth: add canonical SIDRA→axis maps for race and a non-overlapping age basis. Do not
+   request all 9606 age categories naively: the official classification mixes intervals
+   (e.g. 0–4, 5–9) with single-year rows, which would double-count without an allocation
+   kernel.
 2. **§2.10 ST-DFM execution.** Entry: `she/stdfm/pipeline.py::run_stdfm_pipeline` (real).
    Wire for context fields whose §2.9 regime is `bounded_interpolate` (gate needs ≥3 temporal
    points). Requires multi-year context data — acquire via `sidra/acquire.py` across periods.
    Latent output carries §3.6 quarantine (already modeled in `she/sidra_context.py`).
 3. **§2.12.2 classification projection wiring.** Entry: `sidra/projection.py` (real loader).
    Use the demographic axis maps to project SIDRA classifications onto canonical axes during
-   context/demographic ingestion (we already do sex; generalize to age_group/race via
-   `registries/demographic_axis.py`).
+   context/demographic ingestion. Sex is mapped; race/age currently map SIDRA Total only
+   (`95251`, `100362`) to prevent false unknown exclusion, but category-level maps remain to
+   build before full age/race rates.
 4. **§3.10.7 V_X breadth.** Ingest the curated compendium (`config/registries/sidra_compendium.json`,
    96 tables) by tier/default-keep through `sidra/acquire.py` → `context_facts` artifacts →
    `she/sidra_context.py`. Client is ready; this is bounded loops + persistence.

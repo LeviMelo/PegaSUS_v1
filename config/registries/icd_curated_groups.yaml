@@ -1,0 +1,48 @@
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-27'
+provenance: >-
+  Curated ICD-10 cause groups (MSD §3.11 G_curated) for cause-specific mortality
+  (V_M04 CuratedCauseMortality). These are epidemiologically meaningful underlying-cause
+  groups (major NCDs, infections, external causes, maternal/perinatal), each a union of
+  3-char ICD-10 intervals. Codes outside every group fall to the explicit OTHER residual
+  so the σ_C restriction still partitions the death population exactly. Registry-driven:
+  curating the cause list is a registry edit, not engine code.
+#
+# entry: {id, label, ranges: [[start3, end3], ...]} on 3-char ICD-10 codes (inclusive).
+#
+entries:
+- {id: intestinal_infectious, label: Intestinal infectious diseases, ranges: [[A00, A09]]}
+- {id: tuberculosis, label: Tuberculosis, ranges: [[A15, A19]]}
+- {id: hiv_aids, label: HIV disease, ranges: [[B20, B24]]}
+- {id: other_infectious, label: Other infectious and parasitic, ranges: [[A20, A99], [B00, B19], [B25, B99]]}
+- {id: neoplasm_stomach, label: Malignant neoplasm of stomach, ranges: [[C16, C16]]}
+- {id: neoplasm_colorectal, label: Colorectal cancer, ranges: [[C18, C21]]}
+- {id: neoplasm_trachea_lung, label: Trachea/bronchus/lung cancer, ranges: [[C33, C34]]}
+- {id: neoplasm_breast, label: Breast cancer, ranges: [[C50, C50]]}
+- {id: neoplasm_cervix, label: Cervix uteri cancer, ranges: [[C53, C53]]}
+- {id: neoplasm_prostate, label: Prostate cancer, ranges: [[C61, C61]]}
+- {id: neoplasm_other, label: Other neoplasms, ranges: [[C00, C15], [C17, C17], [C22, C32], [C35, C49], [C51, C52], [C54, C60], [C62, D48]]}
+- {id: diabetes, label: Diabetes mellitus, ranges: [[E10, E14]]}
+- {id: nutritional_endocrine_other, label: Other endocrine/nutritional/metabolic, ranges: [[E00, E07], [E15, E90]]}
+- {id: mental_behavioural, label: Mental and behavioural disorders, ranges: [[F00, F99]]}
+- {id: alzheimer_dementia, label: Alzheimer and other dementias, ranges: [[G30, G31]]}
+- {id: nervous_other, label: Other nervous-system diseases, ranges: [[G00, G29], [G32, G99]]}
+- {id: hypertensive_disease, label: Hypertensive diseases, ranges: [[I10, I15]]}
+- {id: ischemic_heart_disease, label: Ischemic heart disease, ranges: [[I20, I25]]}
+- {id: cerebrovascular, label: Cerebrovascular disease, ranges: [[I60, I69]]}
+- {id: circulatory_other, label: Other circulatory diseases, ranges: [[I00, I09], [I26, I59], [I70, I99]]}
+- {id: influenza_pneumonia, label: Influenza and pneumonia, ranges: [[J09, J18]]}
+- {id: chronic_lower_respiratory, label: Chronic lower respiratory diseases, ranges: [[J40, J47]]}
+- {id: respiratory_other, label: Other respiratory diseases, ranges: [[J00, J08], [J19, J39], [J60, J99]]}
+- {id: digestive, label: Digestive-system diseases, ranges: [[K00, K93]]}
+- {id: genitourinary, label: Genitourinary-system diseases, ranges: [[N00, N99]]}
+- {id: perinatal, label: Perinatal conditions, ranges: [[P00, P96]]}
+- {id: congenital, label: Congenital malformations, ranges: [[Q00, Q99]]}
+- {id: maternal, label: Pregnancy/childbirth/puerperium, ranges: [[O00, O99]]}
+- {id: ill_defined, label: Ill-defined and unknown causes, ranges: [[R00, R99]]}
+- {id: transport_accidents, label: Transport accidents, ranges: [[V01, V99]]}
+- {id: other_external_unintentional, label: Other unintentional injuries, ranges: [[W00, X59]]}
+- {id: suicide, label: Intentional self-harm, ranges: [[X60, X84]]}
+- {id: homicide, label: Assault (homicide), ranges: [[X85, Y09]]}
+- {id: external_other, label: Other external causes, ranges: [[Y10, Y98]]}

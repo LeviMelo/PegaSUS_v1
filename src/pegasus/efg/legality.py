@@ -215,6 +215,18 @@ def evaluate_delta(
             deltas["carrier"] = 0
             _append(failed, "carrier")
 
+    if operator.name == EFGOperator.PSI_FUNCTIONAL.value and parents:
+        from pegasus.registries.events import primary_event_carriers
+
+        carriers = {parent.carrier for parent in parents}
+        artifacts = {parent.support.get("artifact_path") for parent in parents}
+        if len(carriers) != 1 or len(artifacts) != 1:
+            deltas["support"] = 0
+            _append(failed, "support")
+        if next(iter(carriers)) not in primary_event_carriers(root=registry_root):
+            deltas["carrier"] = 0
+            _append(failed, "carrier")
+
     if operator.name in {EFGOperator.PROJECT.value, EFGOperator.BOUNDED_PROJECT.value}:
         if len(parents) != 1 or parents[0].aggregation != "additive":
             deltas["aggregation"] = 0

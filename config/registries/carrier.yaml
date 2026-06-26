@@ -36,6 +36,28 @@ carriers:
     - person_years
     - persons
     default_aggregation: additive
+  # Observer-process carriers (MSD §3.10.6). σ-restrictions of Deaths by a data-quality /
+  # measurement-process property; divided by all-cause Deaths to form observer shares.
+  IllDefinedDeaths:
+    label: Ill-defined-cause deaths
+    description: Deaths with ill-defined underlying cause (R-codes); restriction of Deaths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  InvalidICDDeaths:
+    label: Invalid/unparseable ICD deaths
+    description: Deaths with invalid or unparseable underlying ICD; restriction of Deaths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  MissingRaceDeaths:
+    label: Missing-race deaths
+    description: Deaths with missing/unknown administrative race; restriction of Deaths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  InvestigatedDeaths:
+    label: Investigated deaths
+    description: Deaths flagged as investigated; restriction of Deaths.
+    allowed_units: [counts]
+    default_aggregation: additive
   # Restricted clinical-event carriers (MSD §2.6, §3.10.4). Derived by σ restriction
   # of a parent carrier; declared here so the engine's carrier knowledge is fully
   # registry-driven (see clinical_event_definitions.yaml).
@@ -72,6 +94,21 @@ carriers:
   CongenitalAnomalyBirths:
     label: Congenital anomaly births
     description: Live births with congenital anomaly (§3.10.4); restriction of LiveBirths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  CesareanBirths:
+    label: Cesarean births
+    description: Cesarean-delivery live births (§3.10.4 V_C09); restriction of LiveBirths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  LowApgar1Births:
+    label: Low 1-minute Apgar births
+    description: Live births with Apgar1 < 7 (§3.10.4 V_C10); restriction of LiveBirths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  LowApgar5Births:
+    label: Low 5-minute Apgar births
+    description: Live births with Apgar5 < 7 (§3.10.4 V_C11); restriction of LiveBirths.
     allowed_units: [counts]
     default_aggregation: additive
   FacilityCapacityVector:

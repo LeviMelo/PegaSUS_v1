@@ -23,7 +23,7 @@ The pipeline is `D → SHE → EFG → PIRS → O_run`. Cost by stage at nationa
 | EFG executor | per-field tensors grouped to (year, muni) | RAM | Streaming groupby; output is tiny (≤5,570×T rows per field). |
 | PIRS GLM | design matrix = support cells × covariates | trivial (≤5,570×T × ~30) | In-core NumPy. Not a constraint. |
 | **PIRS HSIC** | residual×covariate kernel, **O(N²)** for N=cells | **RAM/VRAM** | **N≈5,570×T can be 5×10⁴–10⁵ → exact O(N²) is 10–40 GB. MUST use Nyström/RFF (O(N·m)).** |
-| Population solver | Ω = munis×years×age×sex×race | **VRAM if dense** | Dense forbidden >10⁷ cells (MSD §2.8.12). Use SIDRA anchor (default) or sparse/block-coordinate/ADMM. |
+| Population solver | Ω = munis×years×age×sex×race | **VRAM if dense** | Compile tensor modes now call the solver through `she/population/orchestrator.py`; dense forbidden >10⁷ cells (MSD §2.8.12), sparse/block-coordinate for larger runs. |
 | ST-DFM | latent factors × cells | VRAM | Gated; blocked by region; float32. |
 
 **Key insight:** for the *default operational path* (SIDRA-anchored population, no
@@ -89,8 +89,12 @@ V_X context fields the EFG never built. Plan:
    gzip transport, `sidra/plan.py::plan_sidra_chunks_unchecked` 95k chunks,
    `sidra/acquire.py`). 6.5× parallel speedup verified live. Remaining: national driver loop.
 10. 🟡 **Demographic population tensor (§2.8)** — observed-census disaggregation BUILT
-    (`she/demographic_tensor.py`, sex axis, stratified rates). Remaining: solver
-    orchestration for independent/sim-informed modes (REMEDIATION_PLAN §A.1).
+    (`she/demographic_tensor.py`, sex axis, stratified rates). Solver orchestration for
+    independent/sim-informed modes is now WIRED (`she/population/orchestrator.py` →
+    `workflows/compile.py` → EFG `population_tensor` admission/execution). Live pipeline
+    tensor-mode acquisition now emits real SIDRA 9606 sex `population_strata` artifacts.
+    Remaining: race and age breadth. Age requires a non-overlapping category basis/allocation
+    kernel because 9606 exposes both interval and single-year categories.
 
 ## 6. Verified results so far (by execution on real data)
 - Smoke (Maceió 2022): 21 fields, valid bundle, crude mortality ≈ 24/1000 (city).
@@ -104,6 +108,9 @@ V_X context fields the EFG never built. Plan:
   GLM (ModelAssociations=1) → cross-fitted residuals → real RBF-kernel HSIC →
   2 hypotheses with real statistic/p-value/BH-BY q-value. The full
   `SHE→EFG→PIRS→HSIC→O_run` contract executes on real data.
+- **Live SIDRA 9606 sex-strata acquisition for tensor modes**: 204 AL rows
+  (102 municipalities × male/female) acquired as `population_strata`; solver tensor
+  shape 102×1×1×2×1; EFG produced sex-specific mortality RN with zero blocked fields.
 
 ### Convergence bugs fixed this turn (MSD §3.13 / §6)
 PIRS was dead because three gates conflated **dashboard safety with model

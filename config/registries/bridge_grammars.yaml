@@ -63,3 +63,33 @@ entries:
   - facility_capacity_not_case_denominator
   description: Macro-Slice 27A canonical registry entry facility_admission_support_bridge
     from bridge_grammars.yaml.
+- id: morbidity_mortality_divergence_bridge
+  status: active
+  bridge_type: morbidity_mortality_divergence
+  left_carrier: HospitalAdmissions
+  right_carrier: Deaths
+  operators:
+  - divergence_log_ratio
+  required_metadata:
+  - support_intersection
+  warnings:
+  - administrative_morbidity_not_incidence
+  - divergence_is_observational_not_causal
+  description: >-
+    Cross-source divergence log(SIH admissions / SIM deaths) on shared (year, municipality)
+    support, all-cause and cause-specific (shared ICD stratum). High = treatable/non-fatal
+    burden; low = lethal/under-hospitalized burden.
+- id: fertility_mortality_divergence_bridge
+  status: active
+  bridge_type: fertility_mortality_divergence
+  left_carrier: LiveBirths
+  right_carrier: Deaths
+  operators:
+  - divergence_log_ratio
+  required_metadata:
+  - support_intersection
+  warnings:
+  - divergence_is_observational_not_causal
+  description: >-
+    Natural-balance divergence log(SINASC live births / SIM deaths) on shared
+    (year, municipality) support — a demographic vitality gradient.

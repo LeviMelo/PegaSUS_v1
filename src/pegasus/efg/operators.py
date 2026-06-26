@@ -23,8 +23,10 @@ class EFGOperator(str, Enum):
     OBSERVER_FIELD = "observer_field"
     DIAGNOSTIC_TOPOLOGY = "diagnostic_topology"
     COUNT_MEASURE = "count_measure"
+    PSI_FUNCTIONAL = "psi_functional"
     DENOMINATOR_LINK = "denominator_link"
     RN = "RN"
+    DIVERGENCE = "divergence_log_ratio"
     PROJECT = "pi_*"
     CLASSIFICATION_PROJECT = "Pi_Clsf_to_Axis"
     BOUNDED_PROJECT = "pi_bound_*"
@@ -66,6 +68,10 @@ OPERATOR_REGISTRY: dict[str, OperatorDefinition] = {
         EFGOperator.COUNT_MEASURE.value, None, "extensive_measure", "additive", False,
         "Create a planned source-event count over the common source artifact support.",
     ),
+    EFGOperator.PSI_FUNCTIONAL.value: OperatorDefinition(
+        EFGOperator.PSI_FUNCTIONAL.value, None, "marked_functional", "statistical_functional", False,
+        "Statistical functional (mean/median) of a per-record mark over a support cell (§3.10.4-6).",
+    ),
     EFGOperator.DENOMINATOR_LINK.value: OperatorDefinition(
         EFGOperator.DENOMINATOR_LINK.value, 2, "observer_proxy", "non_aggregable", True,
         "Record a legal numerator/denominator relation before RN materialization.",
@@ -73,6 +79,10 @@ OPERATOR_REGISTRY: dict[str, OperatorDefinition] = {
     EFGOperator.RN.value: OperatorDefinition(
         EFGOperator.RN.value, 2, "intensive_density", "weighted_mean", True,
         "Finite-cell Radon-Nikodym ratio after alignment and Delta legality.",
+    ),
+    EFGOperator.DIVERGENCE.value: OperatorDefinition(
+        EFGOperator.DIVERGENCE.value, 2, "bridge_divergence", "non_aggregable", True,
+        "Cross-source divergence: log-ratio of two count measures on shared support (§2.11).",
     ),
     EFGOperator.PROJECT.value: OperatorDefinition(
         EFGOperator.PROJECT.value, 1, "extensive_measure", "additive", False,
@@ -283,6 +293,42 @@ def apply_operator(
         unit = "counts"
         aggregation = "additive"
         kind = "extensive_measure"
+    elif operator.name == EFGOperator.DIVERGENCE.value:
+        left, right = parents
+        support = dict((alignment.support_after_alignment if alignment else None) or left.support)
+        support.update({"support_kind": "cross_source_divergence", "divergence_left_carrier": left.carrier,
+                        "divergence_right_carrier": right.carrier, "epsilon": 1e-9})
+        axes = {key: value for key, value in left.axes.items() if key in right.axes and right.axes[key] == value}
+        # Preserve shared stratifier axes (cause-specific / demographic divergence).
+        for axis_name in ("icd_chapter", "icd_block", "curated_cause_group", "sex", "age_group", "race"):
+            if axis_name in left.axes and axis_name in right.axes:
+                axes[axis_name] = left.axes[axis_name]
+        carrier = f"{left.carrier}_vs_{right.carrier}"
+        name = str(operator.params.get("name", f"{left.name}.divergence"))
+        unit = "log_ratio"
+        aggregation = "non_aggregable"
+        kind = "bridge_divergence"
+        role = [operator.role or "cross_source_divergence", "cross_source_relationship", "covariate"]
+    elif operator.name == EFGOperator.PSI_FUNCTIONAL.value:
+        parent = parents[0]
+        artifact = Path(str(parent.support.get("artifact_path", "source"))).stem
+        functional = str(operator.params.get("functional", "mean"))
+        mark_column = str(operator.params.get("mark_column", ""))
+        support = dict(parent.support)
+        support.update({
+            "support_kind": "source_artifact_statistical_functional",
+            "functional": functional,
+            "mark_column": mark_column,
+        })
+        axes = {}
+        for item in parents:
+            axes.update(item.axes)
+        carrier = str(operator.params.get("carrier", parent.carrier))
+        name = str(operator.params.get("name", f"{parent.source[0]}.{artifact}.{functional}.{mark_column}"))
+        unit = str(operator.params.get("unit", "value"))
+        aggregation = "statistical_functional"
+        kind = "marked_functional"
+        role = ["statistical_functional", "covariate", operator.role]
     elif operator.name in {EFGOperator.PROJECT.value, EFGOperator.BOUNDED_PROJECT.value}:
         parent = parents[0]
         drop_axes = {str(axis) for axis in operator.params.get("drop_axes", [])}
@@ -308,7 +354,7 @@ def apply_operator(
         # Preserve the numerator's diagnostic-restriction stratifier axes: the population
         # denominator is unstratified, so the intersection above would drop them, yet the
         # physical cause-specific rate tensor carries them and they define the estimand.
-        for axis_name in ("icd_chapter", "icd_block", "sex", "age_group", "race"):
+        for axis_name in ("icd_chapter", "icd_block", "curated_cause_group", "sex", "age_group", "race"):
             if axis_name in numerator.axes:
                 axes[axis_name] = numerator.axes[axis_name]
         if numerator.support.get("stratify_icd"):

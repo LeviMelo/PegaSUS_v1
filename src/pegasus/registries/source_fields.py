@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +154,16 @@ def _validate_entry(entry: SourceFieldRegistryEntry, *, registry_root: str | Pat
 
 
 def load_source_field_registry(registry_root: str | Path = "config/registries") -> SourceFieldRegistry:
+    # Cache the fully-built registry object keyed by (root, mtime). Previously this
+    # re-parsed and rebuilt the entire registry on every resolve_source_field call
+    # — i.e. once per column per record — making SHE normalization unusably slow.
+    path = Path(registry_root) / "source_fields.yaml"
+    mtime = path.stat().st_mtime if path.exists() else 0.0
+    return _load_source_field_registry_cached(str(Path(registry_root)), mtime)
+
+
+@lru_cache(maxsize=16)
+def _load_source_field_registry_cached(registry_root: str, mtime: float) -> SourceFieldRegistry:
     path = Path(registry_root) / "source_fields.yaml"
     payload = load_yaml(path)
     registry_hash = content_hash(payload)
@@ -198,8 +209,16 @@ def load_source_field_registry(registry_root: str | Path = "config/registries") 
     )
 
 
-def resolve_source_field_entry(*, source_system: str, column_name: str, registry_root: str | Path = "config/registries") -> SourceFieldRegistryEntry:
+@lru_cache(maxsize=8192)
+def _resolve_source_field_entry_cached(source_system: str, column_name: str, registry_root: str) -> SourceFieldRegistryEntry:
     return load_source_field_registry(registry_root).resolve(source_system=source_system, column_name=column_name)
+
+
+def resolve_source_field_entry(*, source_system: str, column_name: str, registry_root: str | Path = "config/registries") -> SourceFieldRegistryEntry:
+    # Per (system, column) resolution is deterministic for a static registry and
+    # is called once per column per record during normalization; memoize it so a
+    # whole-state normalize does O(distinct_columns) registry lookups, not O(cells).
+    return _resolve_source_field_entry_cached(source_system, column_name, str(registry_root))
 
 
 def source_field_registry_summary(registry_root: str | Path = "config/registries") -> dict[str, Any]:

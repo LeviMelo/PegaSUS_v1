@@ -21,10 +21,7 @@ from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
 from pegasus.workflows.sidra import (
     run_sidra_extract,
     run_sidra_metadata,
-    run_sidra_metadata_development,
-    run_sidra_normalize_development,
     run_sidra_plan,
-    run_sidra_plan_development,
     sidra_runtime_config,
 )
 
@@ -37,6 +34,7 @@ population_app = typer.Typer(no_args_is_help=True)
 pirs_app = typer.Typer(no_args_is_help=True)
 acceptance_app = typer.Typer(no_args_is_help=True)
 source_artifacts_app = typer.Typer(no_args_is_help=True)
+dashboard_app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(registries_app, name="registries")
 app.add_typer(sidra_app, name="sidra")
@@ -46,6 +44,7 @@ app.add_typer(population_app, name="population")
 app.add_typer(pirs_app, name="pirs")
 app.add_typer(acceptance_app, name="acceptance")
 app.add_typer(source_artifacts_app, name="source-artifacts")
+app.add_typer(dashboard_app, name="dashboard")
 
 
 def _fail(errors: list[str]) -> None:
@@ -202,33 +201,7 @@ def datasus_normalize_sinasc(
     print(f"[green]sinasc normalized[/green] rows={result['row_count']} output={result['output_path']}")
 
 
-@efg_app.command("build-sim-development")
-def efg_build_sim_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def efg_build_sinasc_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-@sidra_app.command("metadata-development")
-def sidra_metadata_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def sidra_plan_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def sidra_normalize_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
+@sidra_app.command("metadata")
 def sidra_metadata(
     tables: Path = typer.Option(..., "--tables"),
     level: str = typer.Option("N6", "--level"),
@@ -305,6 +278,49 @@ def compile(
     print(f"[green]compile complete[/green] run={result['run_dir']}")
 
 
+@app.command("run")
+def run_live(
+    intent: Path = typer.Option(..., "--intent"),
+    data_root: Path = typer.Option(Path("data"), "--data-root"),
+    run_dir: Path | None = typer.Option(None, "--run-dir"),
+    sidra_metadata_dir: Path = typer.Option(Path("data/metadata/sidra/normalized"), "--sidra-metadata-dir"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Resolve acquisition params from intent without touching R/network."),
+) -> None:
+    """End-to-end live run: acquire DATASUS + SIDRA from intent, merge one source
+    manifest, and compile to an immutable run bundle. No fixtures."""
+    import json as _json
+
+    from pegasus.workflows.pipeline import LivePipelineError, plan_live_pipeline, run_live_pipeline
+
+    if dry_run:
+        try:
+            plan = plan_live_pipeline(intent_path=intent)
+        except (LivePipelineError, ValueError) as exc:
+            print(f"[red]ERROR[/red] {exc}")
+            raise typer.Exit(1) from exc
+        print(_json.dumps(plan, indent=2, sort_keys=True))
+        return
+
+    try:
+        result = run_live_pipeline(
+            intent_path=intent,
+            data_root=data_root,
+            run_dir=run_dir,
+            sidra_metadata_dir=sidra_metadata_dir,
+        )
+    except (LivePipelineError, ValueError) as exc:
+        print(f"[red]ERROR[/red] {exc}")
+        raise typer.Exit(1) from exc
+    for artifact in result.datasus_artifacts:
+        print(f"[cyan]datasus[/cyan] {artifact.get('source_system')} rows={artifact.get('row_count')} {artifact.get('path')}")
+    if result.sidra_artifact:
+        print(f"[cyan]sidra[/cyan] population rows={result.sidra_artifact.get('row_count')} {result.sidra_artifact.get('path')}")
+    if result.status != "success":
+        print(f"[red]pipeline {result.status}[/red] {result.reason}")
+        raise typer.Exit(1)
+    print(f"[green]live pipeline complete[/green] run={result.run_dir} manifest={result.source_manifest}")
+
+
 def efg_validate_race_bridge_prior(
     bridge_prior: Path = typer.Option(..., "--bridge-prior"),
 ) -> None:
@@ -354,52 +370,6 @@ def datasus_normalize_sih(
     from pegasus.workflows.cnes_sih import run_datasus_normalize_sih
     result = run_datasus_normalize_sih(input_path=input_path, output_path=output_path, source_manifest_hash=source_manifest_hash)
     print(f"[green]sih normalized[/green] rows={result['row_count']} output={result['output_path']}")
-
-
-@efg_app.command("build-cnes-sih-development")
-def efg_build_cnes_sih_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def population_build_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def population_plan_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def sidra_context_plan_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def sidra_context_build_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def pirs_plan_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def pirs_build_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def pirs_hsic_plan_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
-
-
-def pirs_hsic_build_development(*args, **kwargs) -> None:
-    print("[red]ERROR[/red] retired development/manual command is not available in the production CLI.")
-    raise typer.Exit(2)
 
 
 def dashboard_assert_read_only() -> None:

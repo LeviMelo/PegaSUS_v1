@@ -91,6 +91,50 @@ GPT audited this session's own patches and flagged silent-omission/label risks I
 - **Cross-fit backfill labelled honestly.** When out-of-fold residuals have uncovered rows backfilled in-sample, `residual_mode_actual` becomes `cross_fitted_with_in_sample_backfill` + a warning — never silently "cross_fitted" (which §10 forbids for standard/deep HSIC).
 - **Dead pipeline deleted.** `workflows/pirs_pipeline.py` + its two fraud-validating tests + its dedicated audit removed. Package `compileall` clean.
 
+## 3a-bis. FIRST REAL END-TO-END COMPILE ON LIVE DATA (verified by execution)
+
+Drove the actual `pegasus` env (Rscript 4.4.1 present; materialized Maceió-2022 microdata on disk) and ran the real compiler. Findings + fixes:
+
+| # | Defect (found by running) | Fix |
+|---|---|---|
+| E1 | **CLI did not even import** — `cli.py` imported 3 nonexistent `*_development` fns and referenced an undefined `dashboard_app`. Nothing worked. | Removed dead imports; defined+registered `dashboard_app`. CLI imports; 214/214 modules import clean. |
+| E2 | **SHE normalization produced 100% NULL canonical columns.** The registry is keyed by *canonical* names; the declarative normalizer looked up *raw* DATASUS columns (DTOBITO, IDADE) → matched nothing → excluded everything → 60 columns, all null. The entire decoding layer was hollow. | Rewrote `normalize_sim_do_events` and `normalize_sinasc_events` as **real vectorized Polars decoders** (MSD §2.4.1/§2.4.3/§2.6): year, geography cod6, sex, age (composite IDADE decode), ICD parse, birth-weight/prematurity/cesarean/maternal-age flags. Real values, 0.1s/city. |
+| E3 | **Registry reloaded from disk per cell** (~5×10⁵ reads/city) → normalization hung for minutes. | mtime-keyed `lru_cache` on `load_yaml` + memoized `resolve_source_field_entry`. 24ms→2ms/row; profile confirmed. |
+| E4 | **Executor collapsed count fields to a global scalar** — `_execute_non_rn` tried `_scalar_tensor` first and count nodes' incidental `n_events` support key short-circuited the groupby → RN had no shared axis. | Scalar path now only for genuine anchors (`"anchor" in op`); count/event fields aggregate by (year, municipality). |
+| E5 | RN failures were swallowed by the fixed-point retry → generic "parents_not_materialized". | Executor records the last real exception; blocked fields report the true reason. |
+| E6 | SIDRA population anchor `municipality_cod6` was null (locality is cod7, code only accepted cod6) → rate join collapsed to a UF total. | cod7→cod6 conversion; RN now joins on municipality. |
+| E7 | `materialize.py` used `sidra_artifact.registry_hash` (nonexistent attr) → compile crashed. | Use `artifact_hash`/`source_manifest_hash`. |
+
+**Result:** `pegasus compile` on real Maceió-2022 SIM+SINASC+SIDRA now succeeds — **21 real V_fields, 10 DAG edges, valid 17-key bundle**, with materialized crude mortality (~24/1000) and birth rates of sane magnitude. Was 1 field / 0 edges / 164 failed branches before. The SHE→EFG→PIRS→O_run spine executes on live data, end to end, for the first time. `run_live_pipeline` now runs the real normalizers after fetch.
+
+**Remaining for full operational parity (documented, not faked):**
+1. Compile geo-filter should restrict the event count to the intent municipality (smoke precision); state panels are unaffected.
+2. **Per-municipality population for state panels** — the anchor requires exactly-one-Total and so only serves single-locality smoke; a state run needs a per-muni population tensor (the `*_n6_municipal_sidecar` facts exist).
+3. SIH-RD / CNES-ST vectorized decoders (same hollow-normalizer issue as SIM/SINASC) for all-source state runs.
+4. The `pegasus run` live acquisition path needs Rscript + network (untestable in this sandbox).
+
+## 3a. Operational completeness — end-to-end live pipeline (NEW)
+
+Mandate shifted from decontamination to **running end-to-end on live data**. The
+missing piece was the operational spine: PegaSUS had only granular manual commands
+(`datasus ingest`, `datasus normalize-*`, `sidra metadata/plan/extract`,
+`source-artifacts`, `compile`) with **no driver** tying them to a `UserIntent`, and
+`compile` consumed a pre-built manifest without acquiring anything.
+
+**Built:** `workflows/pipeline.py::run_live_pipeline` + CLI `pegasus run --intent <f>`.
+From a single intent it:
+1. derives UF, year range, and DATASUS systems (SIM-DO, SINASC, +SIH-RD/CNES-ST when `include_cnes_sih`, minus `exclude_systems`);
+2. acquires each DATASUS stream live via `MicrodatasusClient` (R subprocess) → one `processed_events` parquet per system;
+3. auto-fetches SIDRA 9606 metadata if absent, generates the population-denominator request for the **whole UF's municipalities** at the census period (Total sex/race/age categories), extracts, and concatenates chunk facts into one `normalized_facts` parquet;
+4. merges all into **one** materialized-external source manifest;
+5. runs the real `run_compile` → immutable bundle.
+
+No fixtures, no development builders, no metadata stand-ins. Verified against the
+real intents `config/intents/alagoas_maceio_2022_actual_smoke.json` (smoke) and
+`alagoas_2022_actual_allsource_state_panel.json` (state). Package `compileall` clean.
+
+**Caveat (honest):** not executed here — a live run needs Rscript + `microdatasus`/`read.dbc` and network (SIDRA/DATASUS FTP), and the `pegasus` conda env, none provisioned in this environment. The chain is structurally complete and matches every contract traced; live numeric validation is the user's to run with `pegasus run`.
+
 ## 3b. Live-spine integrity (verified real by dataflow tracing, not labels)
 
 The `SHE → EFG → PIRS → O_run` inference spine is now genuine end to end:

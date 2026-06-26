@@ -353,7 +353,7 @@ def _validate_population_tensor_contract(*, root: Path, v, q, run_config: dict[s
                 errors.append(f"SIM-informed population tensor field missing feedback-risk warning: {fid}")
 
 
-def _validate_inference_invariants(*, hypotheses, model_assoc, budget: str, errors: list[str], warnings: list[str]) -> None:
+def _validate_inference_invariants(*, hypotheses, model_assoc, residual_assoc, budget: str, errors: list[str], warnings: list[str]) -> None:
     """Computation invariants — not just shape. A bundle is invalid if it claims
     inference happened without the computation behind the claim (the failure mode
     that let fake-green survive: 17 keys present, math hollow)."""
@@ -374,9 +374,11 @@ def _validate_inference_invariants(*, hypotheses, model_assoc, budget: str, erro
             warnings.append(
                 f"standard/deep HSIC residual mode includes in-sample backfill rows: {row.get('hypothesis_id')}"
             )
-    for row in model_assoc.to_pylist():
-        if str(row.get("status")) == "fitted" and not row.get("residual_field_id"):
-            errors.append(f"ModelAssociations fitted model missing residual_field_id: {row.get('model_id')}")
+    # A fitted model must have materialized residuals (the residual linkage lives
+    # in ResidualAssociations, not in the ModelAssociations canonical schema).
+    fitted = [row for row in model_assoc.to_pylist() if str(row.get("status")) == "fitted"]
+    if fitted and residual_assoc.num_rows == 0:
+        errors.append("ModelAssociations has fitted models but ResidualAssociations is empty (no residuals materialized)")
 
 
 def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], budget: str, errors: list[str], warnings: list[str]) -> None:
@@ -450,7 +452,7 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
     _validate_cnes_sih_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_population_tensor_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_race_bridge_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
-    _validate_inference_invariants(hypotheses=hypotheses, model_assoc=model_assoc, budget=budget, errors=errors, warnings=warnings)
+    _validate_inference_invariants(hypotheses=hypotheses, model_assoc=model_assoc, residual_assoc=residual_assoc, budget=budget, errors=errors, warnings=warnings)
     _validate_materialized_external_semantics(
         root=root,
         tables={

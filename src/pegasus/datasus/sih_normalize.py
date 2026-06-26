@@ -193,15 +193,39 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
 
 
 def normalize_sih_rd_events(*, input_path: str | Path, output_path: str | Path, source_manifest_hash: str) -> dict[str, Any]:
-    rows = [normalize_sih_rd_record(row, source_manifest_hash=source_manifest_hash) for row in _read_table(input_path).to_dicts()]
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(rows, infer_schema_length=None).write_parquet(out)
-    return {
-        "row_count": len(rows),
-        "output_path": str(out),
-        "valid_rows": sum(1 for r in rows if r["record_state"] == "valid"),
-        "deaths": sum(1 for r in rows if r["death_flag"] is True),
-        "principal_diagnosis_states": sorted({r["principal_icd_parse_state"] for r in rows}),
-        "cost_components": list(COST_COMPONENTS),
-    }
+    """Real vectorized SIH-RD raw→canonical SHE decoder (MSD §2.4.2).
+
+    Hospital admissions: competence year, residence cod6, principal diagnosis,
+    in-hospital death flag, length of stay, and the four distinct economic cost
+    components (VAL_SH/SP/UTI/TOT) kept separate per §2.4.2 (not pooled)."""
+    from pegasus.datasus.normalize import _cod6, _icd_norm, _icd_parse_state, _raw
+
+    df = _read_table(input_path)
+    icd = _icd_norm(_raw(df, "DIAG_PRINC"))
+    morte = _raw(df, "MORTE").str.strip_chars()
+    out = df.with_row_index("_row").with_columns(
+        pl.format("sih_{}_{}", pl.col("_row"), pl.lit(source_manifest_hash[:8])).alias("admission_id"),
+        pl.lit("SIH-RD").alias("source_system"),
+        _raw(df, "ANO_CMPT").str.strip_chars().cast(pl.Int64, strict=False).alias("admission_year"),
+        _cod6(_raw(df, "MUNIC_RES")).alias("mun_residence_cod6"),
+        icd.alias("principal_icd_norm"),
+        _icd_parse_state(icd).alias("principal_icd_parse_state"),
+        pl.when(morte == "1").then(1).when(morte == "0").then(0).otherwise(None).alias("death_flag"),
+        _raw(df, "QT_DIARIAS").str.strip_chars().cast(pl.Float64, strict=False).alias("stay_length_days"),
+        _raw(df, "VAL_SH").cast(pl.Float64, strict=False).alias("hospital_service_cost_real"),
+        _raw(df, "VAL_SP").cast(pl.Float64, strict=False).alias("professional_service_cost_real"),
+        _raw(df, "VAL_UTI").cast(pl.Float64, strict=False).alias("icu_cost_real"),
+        _raw(df, "VAL_TOT").cast(pl.Float64, strict=False).alias("total_admission_cost_real"),
+        pl.lit(source_manifest_hash).alias("source_manifest_hash"),
+    )
+    canonical = [
+        "admission_id", "source_system", "admission_year", "mun_residence_cod6",
+        "principal_icd_norm", "principal_icd_parse_state", "death_flag", "stay_length_days",
+        "hospital_service_cost_real", "professional_service_cost_real", "icu_cost_real",
+        "total_admission_cost_real", "source_manifest_hash",
+    ]
+    out = out.select(canonical)
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.write_parquet(out_path)
+    return {"row_count": out.height, "output_path": str(out_path), "column_count": len(out.columns), "columns": out.columns}

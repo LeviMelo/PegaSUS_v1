@@ -1,0 +1,15 @@
+{
+  "budget": "fast",
+  "context_policy": ["actual_source_state_panel", "official_sidra_anchor"],
+  "exclude_systems": ["CNES-ST", "SIH-RD"],
+  "execution_scale": "state",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {"codes": [], "level": "municipality", "uf": ["AL"]},
+  "health_seeds": ["all_cause_mortality"],
+  "mandatory_fields": ["SIMDeathsAll", "SIMCrudeMortalitySIDRAOfficial"],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {"SIDRA": 1.0, "SIM-DO": 1.0, "SINASC": 1.0},
+  "time": {"end_month": null, "end_year": 2022, "start_month": null, "start_year": 2022}
+}

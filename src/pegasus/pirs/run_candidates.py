@@ -115,9 +115,14 @@ def _role_for_field(field: dict[str, Any]) -> Literal["outcome", "covariate", "o
     name = str(field.get("name") or field.get("field_id") or "").lower()
     unit = str(field.get("unit") or "").lower()
     kind = str(field.get("kind") or "")
-    if "offset" in roles or "denominator" in roles or "population" in name or unit in {"person", "persons", "population"}:
+    carrier = str(field.get("carrier") or "").lower()
+    if "offset" in roles or "denominator" in roles or carrier == "population" or "population" in name or unit in {"person", "persons", "population"}:
         return "offset"
-    if kind in {"extensive_measure", "intensive_density", "marked_functional"}:
+    # Rates/densities are the modelled outcomes; explicit outcome-roled fields too.
+    # Counts, capacity, costs, context and observer measures serve as covariates —
+    # otherwise every measure becomes an "outcome" and PIRS has nothing to regress
+    # against (0 covariates → blocked design).
+    if kind == "intensive_density" or "outcome" in roles:
         return "outcome"
     return "covariate"
 
@@ -136,20 +141,23 @@ def pirs_candidate_rejection_reason(field: dict[str, Any], q: dict[str, Any] | N
     field_id = str(field.get("field_id") or "")
     state = str(field.get("state") or "")
     materialization_state = str(field.get("materialization_state") or "")
-    dashboard_safe = field.get("dashboard_safe")
     warnings = {str(value) for value in _as_list(field.get("warnings"))}
     if not field_id:
         return "missing_field_id"
     if materialization_state == "metadata_only":
         return "metadata_only_field_not_model_eligible"
-    if state in {"illegal_excluded", "blocked", "quarantined_descriptive"}:
+    # MSD §3.13: model eligibility is governed by the Q-state class, NOT by
+    # dashboard safety. verified/fragile/forced_fragile fields are model-eligible
+    # even when dashboard_safe is False/"warning"; only illegal/blocked/no-children
+    # classes are excluded. (The previous dashboard_safe rejection wrongly killed
+    # every real epidemiological field, leaving PIRS with no outcome.)
+    model_ineligible = {"illegal_excluded", "blocked", "quarantined_nochildren"}
+    if state in model_ineligible:
         return f"q_state_{state}_not_model_eligible"
-    if _truthy_false(dashboard_safe):
-        return "dashboard_unsafe_not_model_eligible"
     if q is None:
         return "missing_q_tensor_row"
     q_state = str(q.get("state") or state)
-    if q_state in {"illegal_excluded", "blocked", "quarantined_descriptive"}:
+    if q_state in model_ineligible:
         return f"q_state_{q_state}_not_model_eligible"
     q_warnings = {str(value) for value in _as_list(q.get("warnings"))}
     if "q_tensor_unmaterialized_candidate_no_numerical_tensor" in q_warnings or "efg_promotion_metadata_only" in q_warnings:

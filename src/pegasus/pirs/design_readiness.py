@@ -19,10 +19,13 @@ except Exception:  # pragma: no cover
     pq = None  # type: ignore[assignment]
 
 
+# MSD §3.13: only these classes are model-ineligible. quarantined_descriptive is
+# covariate-eligible and must NOT block; dashboard safety is a display gate, not a
+# model gate, so it is excluded from readiness entirely.
 BLOCKING_FIELD_STATES: frozenset[str] = frozenset({
     "blocked",
     "illegal_excluded",
-    "quarantined_descriptive",
+    "quarantined_nochildren",
 })
 BLOCKING_MATERIALIZATION_STATES: frozenset[str] = frozenset({
     "metadata_only",
@@ -240,9 +243,8 @@ def design_readiness_rejection_reasons(*, field: dict[str, Any] | None, q_state:
     materialization_state = _materialization_state(field)
     if materialization_state in BLOCKING_MATERIALIZATION_STATES:
         reasons.append(f"materialization_state_not_tensor_backed:{materialization_state}")
-    dashboard_safe = _as_bool(field.get("dashboard_safe"))
-    if dashboard_safe is False:
-        reasons.append("field_not_dashboard_safe")
+    # dashboard_safe is intentionally NOT a readiness criterion (MSD §3.13:
+    # model eligibility is governed by Q-state, not display safety).
     if q_state:
         q_status = _state(q_state)
         if q_status in BLOCKING_FIELD_STATES:

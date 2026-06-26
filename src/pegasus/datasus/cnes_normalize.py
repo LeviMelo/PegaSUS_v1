@@ -143,15 +143,49 @@ def normalize_cnes_st_record(row: dict[str, Any], *, source_manifest_hash: str) 
 
 
 def normalize_cnes_st_events(*, input_path: str | Path, output_path: str | Path, source_manifest_hash: str) -> dict[str, Any]:
-    rows = [normalize_cnes_st_record(row, source_manifest_hash=source_manifest_hash) for row in _read_table(input_path).to_dicts()]
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(rows, infer_schema_length=None).write_parquet(out)
-    return {
-        "row_count": len(rows),
-        "output_path": str(out),
-        "valid_rows": sum(1 for r in rows if r["record_state"] == "valid"),
-        "zero_facility_cnpj_rows": sum(1 for r in rows if r["facility_cnpj_state"] == "NullifiedZeroCNPJ"),
-        "invalid_flag_rows": sum(1 for r in rows if r["invalid_flag_count"] > 0),
-        "capacity_components": sorted({k for r in rows for k in json.loads(r["capacity_vector_json"]).keys()}),
-    }
+    """Real vectorized CNES-ST raw→canonical SHE decoder (MSD §2.4.4, §2.4.0.4).
+
+    Facility stock: facility id, facility municipality, competence year, the full
+    bed/infrastructure capacity vector (QTLEIT*/QTINST* as a JSON map plus the
+    summed observed total), the boolean service-flag vector, and the invalid-flag
+    count (values > 1 are InvalidFlagState, never coerced to true)."""
+    from pegasus.datasus.normalize import _cod6, _raw
+
+    df = _read_table(input_path)
+    cols = df.columns
+    capacity_cols = [c for c in cols if c.startswith(("QTLEIT", "QTINST"))]
+    flag_cols = [
+        c for c in cols
+        if c.startswith(("GESPRG", "NIVATE", "SERAP"))
+        or c in {"ATENDAMB", "ATENDHOS", "URGEMERG", "CENTRCIR", "CENTROBS", "LEITHOSP"}
+    ]
+    cap_int = [pl.col(c).cast(pl.Int64, strict=False).fill_null(0) for c in capacity_cols]
+    capacity_total = pl.sum_horizontal(cap_int) if cap_int else pl.lit(0)
+    # §2.4.0.4 boolean clamp: a flag value > 1 is an InvalidFlagState outlier.
+    inv = [(pl.col(c).cast(pl.Int64, strict=False) > 1).cast(pl.Int64).fill_null(0) for c in flag_cols]
+    invalid_count = pl.sum_horizontal(inv) if inv else pl.lit(0)
+
+    columns: list[pl.Expr] = [
+        _raw(df, "CNES").str.strip_chars().alias("facility_id"),
+        _cod6(_raw(df, "CODUFMUN")).alias("mun_facility_cod6"),
+        _raw(df, "COMPETEN").str.slice(0, 4).cast(pl.Int64, strict=False).alias("year"),
+        capacity_total.cast(pl.Int64).alias("capacity_total_observed"),
+        invalid_count.cast(pl.Int64).alias("invalid_flag_count"),
+        pl.lit(source_manifest_hash).alias("source_manifest_hash"),
+    ]
+    columns.append(
+        pl.struct(capacity_cols).struct.json_encode().alias("capacity_vector_json")
+        if capacity_cols else pl.lit("{}").alias("capacity_vector_json")
+    )
+    columns.append(
+        pl.struct(flag_cols).struct.json_encode().alias("flag_vector_json")
+        if flag_cols else pl.lit("{}").alias("flag_vector_json")
+    )
+    out = df.with_columns(columns).select(
+        ["facility_id", "mun_facility_cod6", "year", "capacity_total_observed",
+         "capacity_vector_json", "flag_vector_json", "invalid_flag_count", "source_manifest_hash"]
+    )
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.write_parquet(out_path)
+    return {"row_count": out.height, "output_path": str(out_path), "column_count": len(out.columns), "columns": out.columns}

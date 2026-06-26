@@ -582,17 +582,47 @@ def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode]
     return path, rows, None
 
 
-def _execute_non_rn(field: FieldNode, output_dir: Path, intent: Any = None) -> tuple[Path, int]:
-    scalar = _scalar_tensor(field, output_dir)
-    if scalar is not None:
-        return scalar
+def _sidra_population_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int]:
+    """Materialize the SIDRA population denominator as a per-municipality panel
+    (municipality_cod6, year, value) so the Radon-Nikodym rate join matches each
+    municipality's deaths/births to its own population — the national grid."""
+    support = _as_dict(field.support)
+    facts_path = support.get("sidra_facts_path") or support.get("artifact_path")
+    if not facts_path:
+        raise ValueError("SIDRA population anchor field has no sidra_facts_path")
+    from pegasus.she.population.sidra_anchor import load_sidra_population_totals_frame
 
+    frame = load_sidra_population_totals_frame(facts_path)
+    if frame.height == 0:
+        raise ValueError("SIDRA population facts contain no total-category population rows")
+    out = frame.with_columns(
+        pl.col("value").cast(pl.Float64).alias(VALUE_COLUMN),
+        pl.lit(field.id).alias("field_id"),
+        pl.lit(field.name).alias("field_name"),
+        pl.lit("sidra_population_total_anchor").alias("operator"),
+    )
+    return _write(output_dir / f"{field.id}.parquet", out)
+
+
+def _execute_non_rn(field: FieldNode, output_dir: Path, intent: Any = None) -> tuple[Path, int]:
+    op = str(field.operator or "").lower()
     source = _source_path(field)
+
+    # Only genuine pre-computed scalar anchors (e.g. the SIDRA population total)
+    # use the scalar path. Count/aggregation fields carry incidental scalar keys
+    # (n_events, count) in their support and MUST NOT short-circuit to a single
+    # global value — they have to group by (year, municipality) over the source,
+    # otherwise the Radon-Nikodym rate join finds no shared support axis.
+    use_scalar = "anchor" in op or source is None
+    if use_scalar:
+        scalar = _scalar_tensor(field, output_dir)
+        if scalar is not None:
+            return scalar
+
     if source is None:
         raise ValueError("no source parquet path and no scalar support value")
     head = pl.read_parquet(source, n_rows=25)
     column = _source_column(field, head)
-    op = str(field.operator or "").lower()
 
     if op in {"count_measure", "count", "event_count"} or field.unit in {"counts", "count"}:
         out = _count_tensor(field, source)
@@ -638,6 +668,7 @@ def execute_efg_result(
 
     # Fixed-point execution: source/scalar fields first, then RN and bridges.
     pending = set(fields_by_id)
+    last_error: dict[str, str] = {}
     for _ in range(max(2, len(fields_by_id) + 1)):
         progressed = False
         for field_id in list(pending):
@@ -646,6 +677,9 @@ def execute_efg_result(
             try:
                 if op.upper() == "RN" or field.kind == "intensive_density":
                     path, rows, support_update = _compute_rn_ratio(field, fields_by_id, out_dir)
+                elif op == "sidra_population_total_anchor":
+                    path, rows = _sidra_population_tensor(field, out_dir)
+                    support_update = None
                 elif op.startswith("Bridge") or "bridge" in op.lower() or field.kind in {"bridge_module", "bridge_divergence"}:
                     path, rows, support_update = _compute_bridge_tensor(field, fields_by_id, out_dir)
                 else:
@@ -662,10 +696,13 @@ def execute_efg_result(
                 pending.remove(field_id)
                 progressed = True
             except Exception as exc:
-                # RN may be waiting for parent tensors. Keep it pending until the next pass.
+                # RN may be waiting for parent tensors. Keep it pending until the next pass,
+                # but remember the real error so a permanently-blocked field reports WHY
+                # instead of a generic "parents_not_materialized".
+                last_error[field_id] = f"{type(exc).__name__}: {exc}"
                 if op.upper() == "RN" or field.kind == "intensive_density":
                     continue
-                executed.append(ExecutedField(field, "blocked", None, 0, f"{type(exc).__name__}: {exc}"))
+                executed.append(ExecutedField(field, "blocked", None, 0, last_error[field_id]))
                 pending.remove(field_id)
                 progressed = True
         if not pending or not progressed:
@@ -673,7 +710,8 @@ def execute_efg_result(
 
     for field_id in sorted(pending):
         field = fields_by_id[field_id]
-        executed.append(ExecutedField(field, "blocked", None, 0, "parents_not_materialized_or_operator_not_executable"))
+        reason = last_error.get(field_id, "parents_not_materialized_or_operator_not_executable")
+        executed.append(ExecutedField(field, "blocked", None, 0, reason))
 
     blocked = [item for item in executed if item.status != "success"]
     if require_materialized and blocked:

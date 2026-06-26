@@ -55,6 +55,32 @@ def _is_total_9606(row: dict[str, Any]) -> bool:
 
 
 
+def load_sidra_population_totals_frame(facts_path: str | Path) -> pl.DataFrame:
+    """Per-municipality resident-population totals from SIDRA 9606 (var 93).
+
+    Returns one row per (municipality_cod6, year) carrying the Total
+    sex/race/age population — the denominator panel a state or national run
+    needs. The single-locality ``load_sidra_population_total_anchor`` only ever
+    served single-city smoke; this is its multi-locality generalization."""
+    df = pl.from_arrow(read_table(Path(facts_path)))
+    total_ids = sorted({cat for _clsf, cat in TOTAL_CATEGORY_SET_9606})  # 100362, 6794, 95251
+    cat = pl.col("category_tuple").cast(pl.Utf8)
+    is_total = pl.all_horizontal([cat.str.contains(tid, literal=True) for tid in total_ids])
+    filtered = df.filter(
+        (pl.col("table_id").cast(pl.Utf8) == "9606")
+        & (pl.col("variable_id").cast(pl.Utf8) == "93")
+        & (pl.col("value_status").cast(pl.Utf8) == "numeric")
+        & pl.col("value_numeric").is_not_null()
+        & is_total
+    )
+    out = filtered.with_columns(
+        pl.col("locality_id").cast(pl.Utf8).str.slice(0, 6).alias("municipality_cod6"),
+        pl.col("period").cast(pl.Utf8).str.slice(0, 4).cast(pl.Int64, strict=False).alias("year"),
+        pl.col("value_numeric").cast(pl.Float64).alias("value"),
+    ).select(["municipality_cod6", "year", "value"]).unique(subset=["municipality_cod6", "year"])
+    return out
+
+
 def load_sidra_population_total_anchor(facts_path: str | Path) -> SidraPopulationAnchor:
     facts_path = Path(facts_path)
     df = pl.from_arrow(read_table(facts_path))

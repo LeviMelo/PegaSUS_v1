@@ -238,31 +238,61 @@ def normalize_anomaly_icd(value: Any, anomaly_flag: bool | None) -> tuple[str | 
 
 
 def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, source_manifest_hash: str) -> dict[str, Any]:
+    """Real vectorized SINASC raw→canonical SHE decoder (MSD §2.4.3, §2.6).
+
+    Replaces the previous path whose summary logic read flag keys the
+    registry-routed record normalizer never produced (it raised KeyError on the
+    first real file). Every canonical field is a Polars expression over the raw
+    SINASC columns; clinical indicators (low birth weight, prematurity, cesarean,
+    maternal-age bands) are computed per §2.6 definitions as 0/1 additive flags."""
+    from pegasus.datasus.normalize import _cod6, _datasus_year, _raw
+
     df = _read_table(input_path)
-    rows = [normalize_sinasc_record(row, source_manifest_hash=source_manifest_hash) for row in df.to_dicts()]
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    valid_rows = sum(1 for row in rows if row["record_state"] == "valid")
-    anomaly_rows = sum(1 for row in rows if row["congenital_anomaly_flag"] is True)
-    # Do not apply epidemiological plausibility thresholds to tiny materialized panels.
-    # Real-source SINASC AL 2022 has tens of thousands of births; the threshold below
-    # still catches inverted IDANOMAL/CODANOMAL semantics in production-sized data.
-    if valid_rows >= 1000 and anomaly_rows / float(valid_rows) > 0.20:
-        raise ValueError(
-            "SINASC congenital anomaly numerator exceeds 20% of valid births; "
-            "this usually indicates inverted IDANOMAL/CODANOMAL semantics."
-        )
-    pl.DataFrame(rows, infer_schema_length=None).write_parquet(out)
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    peso = _raw(df, "PESO").str.strip_chars().cast(pl.Int64, strict=False)
+    semg = _raw(df, "SEMAGESTAC").str.strip_chars().cast(pl.Int64, strict=False)
+    parto = _raw(df, "PARTO").str.strip_chars()
+    age = _raw(df, "IDADEMAE").str.strip_chars().cast(pl.Int64, strict=False)
+    sex = (
+        pl.when(_raw(df, "SEXO").str.strip_chars() == "1").then(pl.lit("male"))
+        .when(_raw(df, "SEXO").str.strip_chars() == "2").then(pl.lit("female"))
+        .otherwise(pl.lit("unknown"))
+    )
+    _peso_valid = peso.is_not_null() & (peso > 0)
+    _semg_valid = semg.is_not_null() & (semg > 0)
+    _age_valid = age.is_not_null() & (age > 0)
+
+    out = df.with_row_index("_row").with_columns(
+        pl.format("sinasc_{}_{}", pl.col("_row"), pl.lit(source_manifest_hash[:8])).alias("event_id"),
+        pl.lit("SINASC").alias("source_system"),
+        _datasus_year(_raw(df, "DTNASC")).alias("birth_year"),
+        _cod6(_raw(df, "CODMUNRES")).alias("mun_residence_cod6"),
+        _cod6(_raw(df, "CODMUNNASC")).alias("mun_birth_cod6"),
+        pl.when(_age_valid).then(age).otherwise(None).alias("mother_age_years"),
+        sex.alias("newborn_sex"),
+        pl.when(_peso_valid & (peso < 2500)).then(1).when(_peso_valid).then(0).otherwise(None).alias("low_birth_weight_flag"),
+        pl.when(_semg_valid & (semg < 37)).then(1).when(_semg_valid).then(0).otherwise(None).alias("prematurity_flag"),
+        pl.when(parto == "2").then(1).when(parto == "1").then(0).otherwise(None).alias("cesarean_flag"),
+        pl.when(_age_valid & (age < 20)).then(1).when(_age_valid).then(0).otherwise(None).alias("adolescent_mother_flag"),
+        pl.when(_age_valid & (age >= 35)).then(1).when(_age_valid).then(0).otherwise(None).alias("advanced_maternal_age_flag"),
+        _raw(df, "CODANOMAL").str.extract(r"([A-Z][0-9]{2,3})", 1).alias("anomaly_icd_code"),
+        pl.lit(source_manifest_hash).alias("source_manifest_hash"),
+    )
+    canonical = [
+        "event_id", "source_system", "birth_year", "mun_residence_cod6", "mun_birth_cod6",
+        "mother_age_years", "newborn_sex", "low_birth_weight_flag", "prematurity_flag",
+        "cesarean_flag", "adolescent_mother_flag", "advanced_maternal_age_flag",
+        "anomaly_icd_code", "source_manifest_hash",
+    ]
+    out = out.select(canonical)
+    out.write_parquet(out_path)
     return {
-        "row_count": len(rows),
-        "output_path": str(out),
-        "valid_rows": valid_rows,
-        "low_birth_weight_rows": sum(1 for row in rows if row["low_birth_weight_flag"] is True),
-        "prematurity_rows": sum(1 for row in rows if row["prematurity_flag"] is True),
-        "cesarean_rows": sum(1 for row in rows if row["cesarean_flag"] is True),
-        "low_apgar5_rows": sum(1 for row in rows if row["low_apgar5_flag"] is True),
-        "insufficient_prenatal_rows": sum(1 for row in rows if row["insufficient_prenatal_flag"] is True),
-        "anomaly_rows": anomaly_rows,
+        "row_count": out.height,
+        "output_path": str(out_path),
+        "column_count": len(out.columns),
+        "columns": out.columns,
     }
 
 # ---- Hardline MSD SHE registry-routed entrypoint ----

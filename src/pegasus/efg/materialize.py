@@ -17,7 +17,10 @@ from pegasus.core.hashing import content_hash
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.lineage import make_lineage, lineage_hash
 from pegasus.efg.node import make_field_node
-from pegasus.she.population.sidra_anchor import load_sidra_population_total_anchor
+from pegasus.she.population.sidra_anchor import (
+    load_sidra_population_total_anchor,
+    load_sidra_population_totals_frame,
+)
 from pegasus.she.substrate import SubstrateBundle, SubstrateFieldCandidate, SubstrateFieldExclusion
 
 
@@ -268,16 +271,19 @@ def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterial
     if sidra_artifact is None:
         return None
 
-    anchor = load_sidra_population_total_anchor(sidra_artifact.path)
-    try:
-        period_year = int(str(anchor.period)[:4])
-    except Exception:
-        period_year = None
-    municipality_cod6 = (
-        str(anchor.locality_id)
-        if anchor.locality_level.upper() in {"N6", "MUNICIPIO", "MUNICIPALITY"} and len(str(anchor.locality_id)) == 6
-        else None
-    )
+    # Per-municipality population panel (one row per muni/year). Generalizes the
+    # old single-locality anchor so state and national grids get a real
+    # denominator panel instead of crashing on "expected exactly one total".
+    frame = load_sidra_population_totals_frame(sidra_artifact.path)
+    if frame.height == 0:
+        return None
+    years = sorted({int(y) for y in frame["year"].drop_nulls().to_list()})
+    period_year = years[0] if len(years) == 1 else None
+    single = frame.height == 1
+    municipality_cod6 = str(frame["municipality_cod6"][0]) if single else None
+    value = float(frame["value"][0]) if single else None
+    name_locality = municipality_cod6 if single else "panel"
+    period_label = str(period_year) if period_year is not None else "multi"
     support = {
         "support_kind": "sidra_population_total_anchor",
         "source_system": "SIDRA",
@@ -285,18 +291,14 @@ def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterial
         "sidra_facts_path": str(sidra_artifact.path),
         "table_id": "9606",
         "variable_id": "93",
-        "classification_tuple": list(anchor.classification_tuple),
-        "category_tuple": list(anchor.category_tuple),
-        "period": anchor.period,
+        "period": period_label,
         "year": period_year,
-        "locality_level": anchor.locality_level,
-        "locality_id": anchor.locality_id,
+        "locality_level": "N6",
         "municipality_cod6": municipality_cod6,
-        "value": anchor.value,
-        "n_denom": anchor.value,
-        "unit_raw": anchor.unit,
-        "request_hash": anchor.request_hash,
-        "metadata_hash": anchor.metadata_hash,
+        "n_localities": int(frame.height),
+        "value": value,
+        "n_denom": value,
+        "unit_raw": "Pessoas",
         "population_tensor_diagnostics": "official_sidra_9606_total_anchor",
         "PopulationTensorMode": "official_sidra_anchor",
         "SolverBackend": "official_sidra_anchor",
@@ -305,7 +307,7 @@ def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterial
         "DenominatorFeedbackWarning": None,
     }
     axes = {
-        "geography_axis": anchor.locality_level,
+        "geography_axis": "N6",
         "time_axis": "period",
         "population_strata_axis": "total",
         "population_tensor_mode": "official_sidra_anchor",
@@ -314,12 +316,12 @@ def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterial
         parent_ids=[],
         operator_type="sidra_population_total_anchor",
         operator_params=support,
-        registry_versions={"SIDRA": sidra_artifact.registry_hash, "sidra_population_anchor": "sidra_9606_total_v1"},
+        registry_versions={"SIDRA": (sidra_artifact.artifact_hash or sidra_artifact.source_manifest_hash or "unknown"), "sidra_population_anchor": "sidra_9606_total_v1"},
         source_manifest_hashes=_unique([sidra_artifact.source_manifest_hash, sidra_artifact.artifact_hash]),
         code_version="slice28y_sidra_anchor",
     )
     field = make_field_node(
-        name=f"population_tensor_sidra_9606_total_{anchor.locality_id}_{anchor.period}",
+        name=f"population_tensor_sidra_9606_total_{name_locality}_{period_label}",
         kind="extensive_measure",
         carrier="Population",
         unit="persons",
@@ -338,7 +340,7 @@ def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterial
         dashboard_safe=False,
     ).model_copy(update={"id": f"population_tensor_{lineage_hash(lineage)[:24]}"})
     return SubstrateMaterializedField(
-        candidate_id=anchor.field_id,
+        candidate_id=field.id,
         field=field,
         lineage_hash=lineage_hash(lineage),
         materialization_reason="sidra_population_total_anchor",

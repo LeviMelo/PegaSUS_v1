@@ -103,20 +103,15 @@ class RatioRule:
     output_unit: str
 
 
-RATIO_RULES: tuple[RatioRule, ...] = (
-    RatioRule("Deaths", "Population", "counts", ("person_years", "persons"),
-              "mortality_rate", "rate"),
-    RatioRule("HospitalAdmissions", "Population", "counts", ("person_years", "persons"),
-              "hospitalization_rate", "rate"),
-    RatioRule("LiveBirths", "Population", "counts", ("person_years", "persons"),
-              "birth_rate", "rate"),
-    RatioRule("HospitalDeaths", "HospitalAdmissions", "counts", ("counts",),
-              "inpatient_mortality", "proportion"),
-    RatioRule("InfantDeaths", "LiveBirths", "counts", ("counts",),
-              "infant_mortality", "proportion"),
-    RatioRule("LowBirthWeightBirths", "LiveBirths", "counts", ("counts",),
-              "birth_outcome_share", "proportion"),
-)
+def _registry_root_str(registries: Any) -> str:
+    if isinstance(registries, (str, Path)):
+        return str(registries)
+    if isinstance(registries, dict) and registries.get("registry_root"):
+        return str(registries["registry_root"])
+    root = getattr(registries, "root", None)
+    if root is not None:
+        return str(root)
+    return "config/registries"
 
 
 def get_operator(name: str) -> OperatorDefinition:
@@ -126,16 +121,37 @@ def get_operator(name: str) -> OperatorDefinition:
         raise ValueError(f"unsupported EFG operator: {name}") from exc
 
 
-def ratio_rule(numerator: FieldNode, denominator: FieldNode, role: str | None = None) -> RatioRule | None:
-    for rule in RATIO_RULES:
+def ratio_rule(
+    numerator: FieldNode,
+    denominator: FieldNode,
+    role: str | None = None,
+    *,
+    registry_root: str | Path = "config/registries",
+) -> RatioRule | None:
+    """Resolve a legal RN ratio from the clinical event registry (MSD §2.6).
+
+    Carrier/role pairings come from ``clinical_event_definitions.yaml``; the engine
+    holds no hardcoded ratio table.  Units are validated against the registry-declared
+    numerator unit and the general person-time/proportion denominator policy.
+    """
+    from pegasus.registries.events import clinical_ratio_specs
+
+    for spec in clinical_ratio_specs(root=registry_root):
         if (
-            rule.numerator_carrier == numerator.carrier
-            and rule.denominator_carrier == denominator.carrier
-            and rule.numerator_unit == numerator.unit
-            and denominator.unit in rule.denominator_units
-            and (role is None or role == rule.role)
+            spec.numerator_carrier == numerator.carrier
+            and spec.denominator_carrier == denominator.carrier
+            and spec.numerator_unit == numerator.unit
+            and denominator.unit in spec.denominator_units
+            and (role is None or role == spec.role)
         ):
-            return rule
+            return RatioRule(
+                numerator_carrier=spec.numerator_carrier,
+                denominator_carrier=spec.denominator_carrier,
+                numerator_unit=spec.numerator_unit,
+                denominator_units=spec.denominator_units,
+                role=spec.role,
+                output_unit=spec.output_unit,
+            )
     return None
 
 
@@ -179,7 +195,7 @@ def apply_operator(
 ) -> tuple[OperatorResult, FieldNode | None]:
     """Apply one legal operator at the graph metadata boundary."""
 
-    del registries
+    registry_root = _registry_root_str(registries)
     if not delta.legal:
         return (
             OperatorResult(
@@ -220,12 +236,53 @@ def apply_operator(
         axes: dict[str, Any] = {}
         for item in parents:
             axes.update(item.axes)
+        # σ_C restriction (MSD §3.11): declare the ICD chapter/block stratification so
+        # the physical executor groups counts within diagnostic strata rather than over
+        # the whole event population. The restriction is what makes the diagnostic
+        # observer legally countable.
+        stratify_icd = operator.params.get("stratify_icd")
+        role = ["source_event_count", operator.role]
+        # σ restriction (MSD §2.6/§3.10.4): a declarative predicate over the parent's
+        # source records yields a derived event carrier (e.g. InfantDeaths from Deaths).
+        # The role carries "restricted_count" so the downstream RN ratio is legal.
+        restrict_predicate = operator.params.get("restrict_predicate")
+        if restrict_predicate:
+            support.update({
+                "support_kind": "source_artifact_event_count_restricted",
+                "restrict_predicate": str(restrict_predicate),
+                "restrict_conditions": list(operator.params.get("restrict_conditions") or []),
+                "restrict_of_carrier": operator.params.get("restrict_of_carrier"),
+                "restrict_event_id": operator.params.get("restrict_event_id"),
+            })
+            role.append("restricted_count")
+        if stratify_icd:
+            icd_axis = str(operator.params.get("icd_axis") or f"icd_{stratify_icd}")
+            support.update({
+                "support_kind": "source_artifact_event_count_icd_restricted",
+                "stratify_icd": str(stratify_icd),
+                "icd_column": str(operator.params.get("icd_column")),
+                "icd_axis": icd_axis,
+                "icd_source_field": operator.params.get("icd_source_field"),
+            })
+            axes[icd_axis] = "diagnostic_restriction"
+            role.append("restricted_count")
+        # General demographic stratification (sex/age/race) by a canonical-mapped column.
+        stratify_column = operator.params.get("stratify_column")
+        if stratify_column:
+            strat_axis = str(operator.params.get("stratify_axis") or stratify_column)
+            support.update({
+                "support_kind": "source_artifact_event_count_demographic_stratified",
+                "stratify_column": str(stratify_column),
+                "stratify_axis": strat_axis,
+                "stratify_source": operator.params.get("stratify_source"),
+            })
+            axes[strat_axis] = "demographic_stratifier"
+            role.append("demographic_stratified_count")
         carrier = str(operator.params.get("carrier", parent.carrier))
         name = str(operator.params.get("name", f"{parent.source[0]}.{artifact}.count"))
         unit = "counts"
         aggregation = "additive"
         kind = "extensive_measure"
-        role = ["source_event_count", operator.role]
     elif operator.name in {EFGOperator.PROJECT.value, EFGOperator.BOUNDED_PROJECT.value}:
         parent = parents[0]
         drop_axes = {str(axis) for axis in operator.params.get("drop_axes", [])}
@@ -239,7 +296,7 @@ def apply_operator(
         role = _unique([*parent.role, "projected"])
     elif operator.name == EFGOperator.RN.value:
         numerator, denominator = parents
-        rule = ratio_rule(numerator, denominator, operator.role)
+        rule = ratio_rule(numerator, denominator, operator.role, registry_root=registry_root)
         if rule is None:
             raise ValueError("legal RN operator has no matching ratio rule")
         support = dict((alignment.support_after_alignment if alignment else None) or numerator.support)
@@ -248,6 +305,17 @@ def apply_operator(
             for key, value in numerator.axes.items()
             if key in denominator.axes and denominator.axes[key] == value
         }
+        # Preserve the numerator's diagnostic-restriction stratifier axes: the population
+        # denominator is unstratified, so the intersection above would drop them, yet the
+        # physical cause-specific rate tensor carries them and they define the estimand.
+        for axis_name in ("icd_chapter", "icd_block", "sex", "age_group", "race"):
+            if axis_name in numerator.axes:
+                axes[axis_name] = numerator.axes[axis_name]
+        if numerator.support.get("stratify_icd"):
+            support.update({
+                "stratify_icd": numerator.support.get("stratify_icd"),
+                "icd_axis": numerator.support.get("icd_axis"),
+            })
         carrier = f"{numerator.carrier}/{denominator.carrier}"
         name = str(operator.params.get("name", f"{numerator.name}.{rule.role}"))
         unit = rule.output_unit

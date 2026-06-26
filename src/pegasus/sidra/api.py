@@ -59,18 +59,46 @@ class SidraResponse:
     sidecar: dict[str, Any] | None = None
 
 
+def _decode_body(raw_bytes: bytes, content_encoding: str | None) -> str:
+    """Decode a possibly gzip/deflate-compressed SIDRA response body.
+
+    SIDRA intermittently returns gzip-compressed payloads (and we request gzip to make
+    large national transfers smaller/faster). urllib does not auto-decompress, so we
+    handle Content-Encoding explicitly, with a magic-byte fallback (0x1f 0x8b = gzip).
+    """
+    import gzip
+    import zlib
+
+    encoding = (content_encoding or "").lower()
+    if encoding == "gzip" or raw_bytes[:2] == b"\x1f\x8b":
+        raw_bytes = gzip.decompress(raw_bytes)
+    elif encoding == "deflate":
+        try:
+            raw_bytes = zlib.decompress(raw_bytes)
+        except zlib.error:
+            raw_bytes = zlib.decompress(raw_bytes, -zlib.MAX_WBITS)
+    return raw_bytes.decode("utf-8", errors="replace")
+
+
 def _default_transport(url: str, params: dict[str, Any], timeout_seconds: int) -> tuple[int, Any]:
     query = urllib.parse.urlencode(params, doseq=False)
     full_url = f"{url}?{query}" if query else url
-    request = urllib.request.Request(full_url, headers={"User-Agent": "PegaSUS/0.1 SIDRA client"})
+    request = urllib.request.Request(
+        full_url,
+        headers={
+            "User-Agent": "PegaSUS/0.1 SIDRA client",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept": "application/json",
+        },
+    )
 
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             status = int(response.status)
-            raw = response.read().decode("utf-8")
+            raw = _decode_body(response.read(), response.headers.get("Content-Encoding"))
             return status, json.loads(raw)
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+        raw = _decode_body(exc.read(), exc.headers.get("Content-Encoding") if exc.headers else None)
         try:
             payload: Any = json.loads(raw)
         except json.JSONDecodeError:
@@ -166,6 +194,50 @@ class SidraClient:
             classifications=chunk.classifications,
             view=view,
         )
+
+    def fetch_chunks_parallel(
+        self,
+        chunks: list[SIDRAChunk],
+        *,
+        max_workers: int = 12,
+        view: str | None = None,
+    ) -> dict[str, SidraResponse]:
+        """Fetch many cell-budgeted chunks concurrently (MSD national-scale acquisition).
+
+        SIDRA throttles by *cells per request*, not by request rate, so the optimal
+        strategy is wide concurrency over chunks already sized just under the cell
+        ceiling. There is deliberately NO inter-request sleep — only per-request
+        exponential backoff on transient 429/5xx (handled in get_json). Distinct chunks
+        write distinct cache keys, so the file cache is safe under concurrency.
+
+        Returns ``{chunk_id: SidraResponse}``; callers inspect ``status_code`` per chunk.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if not chunks:
+            return {}
+        workers = max(1, min(int(max_workers), len(chunks)))
+        results: dict[str, SidraResponse] = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_chunk = {
+                executor.submit(self.values_from_chunk, chunk, view=view): chunk
+                for chunk in chunks
+            }
+            for future in as_completed(future_to_chunk):
+                chunk = future_to_chunk[future]
+                try:
+                    results[chunk.chunk_id] = future.result()
+                except Exception as exc:  # pragma: no cover - defensive; transport already guards
+                    results[chunk.chunk_id] = SidraResponse(
+                        url=chunk.request_url,
+                        params=dict(chunk.request_params),
+                        payload={"error": str(exc)},
+                        status_code=599,
+                        from_cache=False,
+                        attempt=0,
+                        seconds=0.0,
+                    )
+        return results
 
     def ping(self) -> SidraResponse:
         return self.catalog(nivel="N1")

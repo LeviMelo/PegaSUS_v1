@@ -6,6 +6,12 @@ constraint), 32 GB DDR5, i7-13700H. This extends the MSD/TDD with concrete
 memory-budgeted execution. Authority order: MSD > this plan > TDD (TDD built the
 dysfunctional codebase — treat as hints, not truth).
 
+> Current overall state: `MSD_CONVERGENCE_AUDIT.md`. Next feature tasks + entry points:
+> `MSD_REMEDIATION_PLAN.md` §A. Near-term strategy (per user): prove the **full Alagoas
+> (UF) scope** end to end with national-scale optimizations baked in, *before* the big
+> upscale. The SIDRA acquisition client is now ruthless (parallel + gzip + cell-budget
+> chunks) — national acquisition is feasible but time-bound by SIDRA's cell limits.
+
 ## 1. Where compute actually binds (measured reasoning, not assumption)
 
 The pipeline is `D → SHE → EFG → PIRS → O_run`. Cost by stage at national scale:
@@ -74,8 +80,17 @@ V_X context fields the EFG never built. Plan:
    systems now decode to real canonical values.
 5. ⬜ **GPU HSIC under VRAM budget** — torch float32, tiled Nyström, admission gate.
 6. ⬜ **National orchestration** — loop UFs, accumulate, compile once; `execution_scale="national"`.
-7. ⬜ **SIDRA context-field (V_X) construction in EFG** from the compendium registry.
+7. 🟡 **SIDRA V_X context-field construction in EFG** — ingestion path BUILT and verified
+   (`she/sidra_context.py`, §2.9 regime-routed, one real GDP table proven). Remaining:
+   ingest the compendium by tier/default-keep at breadth; §2.10 ST-DFM for multi-year
+   `bounded_interpolate` regimes.
 8. ⬜ **Streaming SHE/EFG** (`scan_parquet`/DuckDB) — memory-bounded national concat.
+9. 🟡 **Ruthless SIDRA acquisition client** — BUILT (`sidra/api.py::fetch_chunks_parallel`,
+   gzip transport, `sidra/plan.py::plan_sidra_chunks_unchecked` 95k chunks,
+   `sidra/acquire.py`). 6.5× parallel speedup verified live. Remaining: national driver loop.
+10. 🟡 **Demographic population tensor (§2.8)** — observed-census disaggregation BUILT
+    (`she/demographic_tensor.py`, sex axis, stratified rates). Remaining: solver
+    orchestration for independent/sim-informed modes (REMEDIATION_PLAN §A.1).
 
 ## 6. Verified results so far (by execution on real data)
 - Smoke (Maceió 2022): 21 fields, valid bundle, crude mortality ≈ 24/1000 (city).

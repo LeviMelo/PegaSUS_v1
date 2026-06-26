@@ -106,7 +106,10 @@ def test_slice27a_critical_registries_are_not_scaffold_only() -> None:
         path = root / name
         assert path.exists(), name
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        assert payload["registry_version"] == "v2.0", name
+        # Past-scaffold version pin. clinical_event_definitions.yaml advanced to v3.0
+        # when it became the source-agnostic single source of truth for event carriers
+        # and RN ratios (MSD §2.6/§3.10.4); other critical registries remain at v2.0.
+        assert payload["registry_version"] in {"v2.0", "v3.0"}, name
         assert not registry_is_scaffold_only(name), name
         entries = payload.get("entries") or []
         assert len(entries) >= 1, name

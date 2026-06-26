@@ -348,6 +348,62 @@ def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterial
     )
 
 
+def _sidra_context_materialized_fields(bundle: SubstrateBundle) -> list[SubstrateMaterializedField]:
+    """Admit SIDRA context facts (curated socioeconomic compendium) as context_gradient
+    fields (MSD §3.10.7 V_X), regime-classified at the §2.9 boundary."""
+    from pegasus.she.sidra_context import build_sidra_context_fields
+
+    out: list[SubstrateMaterializedField] = []
+    for artifact in bundle.source_artifacts:
+        if artifact.source_system != "SIDRA" or artifact.artifact_role != "context_facts":
+            continue
+        try:
+            context_fields = build_sidra_context_fields(
+                artifact.path,
+                artifact_hash=artifact.artifact_hash,
+                source_manifest_hash=artifact.source_manifest_hash,
+            )
+        except Exception:  # pragma: no cover - defensive; malformed context artifact
+            continue
+        for field in context_fields:
+            out.append(SubstrateMaterializedField(
+                candidate_id=field.id,
+                field=field,
+                lineage_hash=lineage_hash(field.lineage),
+                materialization_reason="sidra_context_field",
+                warnings=tuple(field.warnings),
+            ))
+    return out
+
+
+def _sidra_demographic_population_materialized_fields(bundle: SubstrateBundle) -> list[SubstrateMaterializedField]:
+    """Admit disaggregated SIDRA population (by sex/race/age) as a demographic-stratified
+    Population field (MSD §2.8), for SIDRA artifacts with role 'population_strata'."""
+    from pegasus.she.demographic_tensor import build_sidra_demographic_population_fields
+
+    out: list[SubstrateMaterializedField] = []
+    for artifact in bundle.source_artifacts:
+        if artifact.source_system != "SIDRA" or artifact.artifact_role != "population_strata":
+            continue
+        try:
+            fields = build_sidra_demographic_population_fields(
+                artifact.path,
+                artifact_hash=artifact.artifact_hash,
+                source_manifest_hash=artifact.source_manifest_hash,
+            )
+        except Exception:  # pragma: no cover - defensive; malformed strata artifact
+            continue
+        for field in fields:
+            out.append(SubstrateMaterializedField(
+                candidate_id=field.id,
+                field=field,
+                lineage_hash=lineage_hash(field.lineage),
+                materialization_reason="sidra_demographic_population",
+                warnings=tuple(field.warnings),
+            ))
+    return out
+
+
 def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializationResult:
     """Convert SHE-admissible substrate candidates into metadata-only FieldNodes.
 
@@ -359,6 +415,8 @@ def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializ
     sidra_anchor = _sidra_population_anchor_field(bundle)
     if sidra_anchor is not None:
         fields_list.append(sidra_anchor)
+    fields_list.extend(_sidra_context_materialized_fields(bundle))
+    fields_list.extend(_sidra_demographic_population_materialized_fields(bundle))
     fields = tuple(fields_list)
     excluded = tuple(_exclusion_manifest(exclusion) for exclusion in bundle.exclusions)
     payload = {

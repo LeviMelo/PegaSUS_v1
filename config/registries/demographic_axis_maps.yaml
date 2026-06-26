@@ -1,0 +1,35 @@
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-26'
+provenance: >-
+  Canonical demographic-axis category maps (MSD §2.12.2 classification projection,
+  §3.7.4 sex/race alignment). Aligns source-specific category codes (DATASUS, SIDRA)
+  onto shared canonical axis categories so stratified numerators (deaths by sex) and
+  denominators (population by sex) join on the same axis. Registry-driven: adding a
+  source or axis is a registry edit, not engine code.
+#
+# Special canonical targets:
+#   __total__    aggregate category (e.g. SIDRA "Total") — excluded from a stratified
+#                axis (it is the marginal, not a stratum)
+#   __unknown__  missing/ignored category — excluded from stratified rates, counted as
+#                missingness
+#
+# SIDRA classification id -> canonical demographic axis name (§2.12.2 projection target).
+classification_axis:
+  '2': sex
+  '86': race
+  '287': age_group
+
+axes:
+  sex:
+    canonical_categories: [male, female]
+    # Normalized event column carrying this axis, per source (for stratifying event counts).
+    source_columns:
+      SIM-DO: sex
+      SINASC: sex
+      SIH-RD: sex
+    source_maps:
+      SIM-DO:   {'1': male, '2': female, '0': __unknown__, '9': __unknown__}
+      SINASC:   {'1': male, '2': female, '0': __unknown__, '9': __unknown__}
+      SIH-RD:   {'1': male, '2': female, '0': __unknown__, '3': __unknown__}
+      SIDRA:    {'4': male, '5': female, '6794': __total__}

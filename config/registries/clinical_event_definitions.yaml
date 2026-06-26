@@ -1,14 +1,37 @@
-schema_version: '1.0'
-registry_version: v2.0
+schema_version: '1.1'
+registry_version: v3.0
 created_at: '2026-06-06'
-updated_at: '2026-06-13'
-provenance: Macro-Slice 27A clinical event definitions for source-agnostic EFG event
-  carriers.
+updated_at: '2026-06-26'
+provenance: >-
+  Source-agnostic clinical event definitions for the EFG (MSD §2.6, §3.10.4).
+  This registry is the SINGLE SOURCE OF TRUTH for which event carriers exist,
+  which denominators they may be divided by, and what the resulting rate is
+  named. The EFG engine (efg/operators.py, efg/dag.py, efg/legality.py) is
+  driven by this registry and MUST NOT hardcode carrier or ratio knowledge.
+#
+# Field contract per entry:
+#   event_carrier        canonical carrier produced by the event (§3.3 carrier ontology)
+#   event_kind           "primary"    -> directly countable from a source artifact
+#                        "restricted" -> derived by σ restriction of a parent carrier (§2.6/§3.11)
+#   numerator_unit       unit of the extensive count (always "counts" for events)
+#   restriction          (restricted only) {of_carrier, predicate, conditions}:
+#                          of_carrier   primary carrier this event restricts
+#                          predicate    §2.6 definition name (documentation)
+#                          conditions   declarative AND-list applied by the σ operator:
+#                                       [{column, op, value}]; ops: lt|le|gt|ge|eq|ne|in|
+#                                       not_in|is_true|is_false|is_not_null (general DSL,
+#                                       no per-source code in the engine/executor)
+#   ratios               authoritative list of legal RN ratios:
+#                          - denominator_carrier  carrier of the denominator
+#                            role                 estimand label of the resulting intensive density
+#                            output_unit          "rate" (person-time denominator) | "proportion" (event denominator)
+#
 entries:
 - id: sim_all_cause_death_event
   status: active
   source_system: SIM-DO
   event_carrier: Deaths
+  event_kind: primary
   numerator_unit: counts
   denominator_carriers:
   - Population
@@ -16,30 +39,32 @@ entries:
   default_aggregation: additive
   allowed_rates:
   - mortality_rate
-  - infant_mortality_rate
-  - neonatal_mortality_rate
+  ratios:
+  - {denominator_carrier: Population, role: mortality_rate, output_unit: rate}
   warnings: []
-  description: Macro-Slice 27A canonical registry entry sim_all_cause_death_event
-    from clinical_event_definitions.yaml.
+  description: All-cause death event (SIM-DO). Source-countable primary event carrier.
+
 - id: sinasc_live_birth_event
   status: active
   source_system: SINASC
   event_carrier: LiveBirths
+  event_kind: primary
   numerator_unit: counts
   denominator_carriers:
   - Population
   default_aggregation: additive
   allowed_rates:
-  - crude_birth_rate
-  - anomaly_prevalence
-  - low_birth_weight_prevalence
+  - birth_rate
+  ratios:
+  - {denominator_carrier: Population, role: birth_rate, output_unit: rate}
   warnings: []
-  description: Macro-Slice 27A canonical registry entry sinasc_live_birth_event from
-    clinical_event_definitions.yaml.
+  description: Live-birth event (SINASC). Source-countable primary event carrier.
+
 - id: sih_hospital_admission_event
   status: active
   source_system: SIH-RD
   event_carrier: HospitalAdmissions
+  event_kind: primary
   numerator_unit: counts
   denominator_carriers:
   - Population
@@ -47,23 +72,183 @@ entries:
   default_aggregation: additive
   allowed_rates:
   - hospitalization_rate
-  - admission_per_bed_ratio
+  ratios:
+  - {denominator_carrier: Population, role: hospitalization_rate, output_unit: rate}
   warnings:
   - administrative_admission_not_incidence
-  description: Macro-Slice 27A canonical registry entry sih_hospital_admission_event
-    from clinical_event_definitions.yaml.
+  description: Hospital admission event (SIH-RD). Source-countable primary event carrier.
+
 - id: cnes_facility_capacity_event
   status: active
   source_system: CNES-ST
   event_carrier: Facilities
+  event_kind: primary
   numerator_unit: counts
   denominator_carriers:
   - Population
   default_aggregation: additive
   allowed_rates:
   - facility_density
-  - bed_density
+  ratios:
+  - {denominator_carrier: Population, role: facility_density, output_unit: rate}
   warnings:
   - capacity_snapshot_period_semantics
-  description: Macro-Slice 27A canonical registry entry cnes_facility_capacity_event
-    from clinical_event_definitions.yaml.
+  description: Facility capacity event (CNES-ST). Source-countable primary event carrier.
+
+# --- Restricted clinical events (MSD §2.6, §3.10.4) ---------------------------
+# Derived by σ restriction of a parent carrier. They are NOT directly countable
+# from a raw artifact; a restriction operator produces the carrier, after which
+# the RN ratios below apply with the correct (live-birth / admission) denominator.
+
+- id: infant_death_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: InfantDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: Deaths
+    predicate: infant_death
+    conditions:
+    - {column: age_days, op: ge, value: 0}
+    - {column: age_days, op: lt, value: 365.25}
+    - {column: death_type, op: not_in, value: ["1", "fetal", "obito_fetal", "óbito fetal"]}
+  denominator_carriers:
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - infant_mortality
+  ratios:
+  - {denominator_carrier: LiveBirths, role: infant_mortality, output_unit: proportion}
+  warnings: []
+  description: Infant death (AgeDays < 365.25, liveborn). Denominator is live births (§2.6.2).
+
+- id: neonatal_death_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: NeonatalDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: Deaths
+    predicate: neonatal_death
+    conditions:
+    - {column: age_days, op: ge, value: 0}
+    - {column: age_days, op: lt, value: 28}
+    - {column: death_type, op: not_in, value: ["1", "fetal", "obito_fetal", "óbito fetal"]}
+  denominator_carriers:
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - neonatal_mortality
+  ratios:
+  - {denominator_carrier: LiveBirths, role: neonatal_mortality, output_unit: proportion}
+  warnings: []
+  description: Neonatal death (AgeDays < 28, liveborn). Denominator is live births (§2.6.3).
+
+- id: postneonatal_death_event
+  status: active
+  source_system: SIM-DO
+  event_carrier: PostNeonatalDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: Deaths
+    predicate: postneonatal_death
+    conditions:
+    - {column: age_days, op: ge, value: 28}
+    - {column: age_days, op: lt, value: 365.25}
+    - {column: death_type, op: not_in, value: ["1", "fetal", "obito_fetal", "óbito fetal"]}
+  denominator_carriers:
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - postneonatal_mortality
+  ratios:
+  - {denominator_carrier: LiveBirths, role: postneonatal_mortality, output_unit: proportion}
+  warnings: []
+  description: Postneonatal death (28 <= AgeDays < 365.25). Denominator is live births (§2.6.4).
+
+- id: inpatient_death_event
+  status: active
+  source_system: SIH-RD
+  event_carrier: HospitalDeaths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: HospitalAdmissions
+    predicate: inpatient_death
+    conditions:
+    - {column: death_flag, op: is_true}
+  denominator_carriers:
+  - HospitalAdmissions
+  default_aggregation: additive
+  allowed_rates:
+  - inpatient_mortality
+  ratios:
+  - {denominator_carrier: HospitalAdmissions, role: inpatient_mortality, output_unit: proportion}
+  warnings: []
+  description: Inpatient death (SIH MORTE). Denominator is hospital admissions (case fatality).
+
+- id: low_birth_weight_event
+  status: active
+  source_system: SINASC
+  event_carrier: LowBirthWeightBirths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: LiveBirths
+    predicate: low_birth_weight
+    conditions:
+    - {column: low_birth_weight_flag, op: is_true}
+  denominator_carriers:
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - birth_outcome_share
+  ratios:
+  - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
+  warnings: []
+  description: Low-birth-weight birth (< 2500 g). Denominator is live births (§3.10.4).
+
+- id: prematurity_event
+  status: active
+  source_system: SINASC
+  event_carrier: PrematurityBirths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: LiveBirths
+    predicate: prematurity
+    conditions:
+    - {column: prematurity_flag, op: is_true}
+  denominator_carriers:
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - birth_outcome_share
+  ratios:
+  - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
+  warnings: []
+  description: Preterm birth (gestational age < 37 weeks). Denominator is live births (§3.10.4).
+
+- id: congenital_anomaly_event
+  status: active
+  source_system: SINASC
+  event_carrier: CongenitalAnomalyBirths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: LiveBirths
+    predicate: congenital_anomaly
+    conditions:
+    - {column: congenital_anomaly_flag, op: is_true}
+  denominator_carriers:
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - birth_outcome_share
+  ratios:
+  - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
+  warnings: []
+  description: Congenital anomaly birth. Denominator is live births (§3.10.4).

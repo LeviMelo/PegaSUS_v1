@@ -1,0 +1,66 @@
+schema_version: '1.0'
+registry_version: v1.0
+created_at: '2026-06-26'
+provenance: >-
+  MSD §3.10 Core Seed Registry. Binds the canonical core-seed IDs (V_M*/V_H*/V_B*/
+  V_C*/V_K*) and the count-level admission seeds an intent may contract for to the
+  EFG fields actually produced, via a declarative match predicate. This is what makes
+  intent `mandatory_fields` resolve and be enforced against real output — closing the
+  §3.10 contract without renaming content-addressed field ids. Registry-driven: adding
+  a seed is a registry edit, not engine code.
+#
+# match predicate keys (AND-combined), evaluated against a produced FieldNode:
+#   role             token that must appear in field.role (e.g. the RN ratio role)
+#   carrier          exact field.carrier
+#   requires_axis    axis key that must be present in field.axes
+#   excludes_axes    none of these axis keys may be present in field.axes
+#   restrict_predicate  field.support.restrict_predicate must equal this
+#   population       true -> field.role must contain "population_tensor"
+#
+entries:
+# --- §3.10.1 Mortality (rate estimands) ---
+- {id: V_M01, name: CrudeMortality, aliases: [SIMCrudeMortalitySIDRAOfficial],
+   match: {role: mortality_rate, excludes_axes: [icd_chapter, icd_block]}}
+- {id: V_M02, name: ChapterMortality, aliases: [],
+   match: {role: mortality_rate, requires_axis: icd_chapter}}
+- {id: V_M03, name: BlockMortality, aliases: [],
+   match: {role: mortality_rate, requires_axis: icd_block}}
+# --- §3.10.2 Hospitalization ---
+- {id: V_H01, name: CrudeHospitalization, aliases: [],
+   match: {role: hospitalization_rate, excludes_axes: [icd_chapter, icd_block]}}
+- {id: V_H02, name: DiagnosisHospitalization, aliases: [],
+   match: {role: hospitalization_rate, requires_axis: icd_chapter}}
+- {id: V_H03, name: InpatientFatality, aliases: [SIHInpatientFatality],
+   match: {role: inpatient_mortality}}
+# --- §3.10.3 Fertility and Birth ---
+- {id: V_B01, name: CrudeBirthRate, aliases: [SINASCCrudeBirthRateSIDRAOfficial],
+   match: {role: birth_rate}}
+# --- §3.10.4 Maternal-Child ---
+- {id: V_C01, name: InfantMortality, aliases: [SIMInfantMortalitySINASCBirths],
+   match: {role: infant_mortality}}
+- {id: V_C02, name: NeonatalMortality, aliases: [SIMNeonatalMortalitySINASCBirths],
+   match: {role: neonatal_mortality}}
+- {id: V_C03, name: PostNeonatalMortality, aliases: [SIMPostNeonatalMortalitySINASCBirths],
+   match: {role: postneonatal_mortality}}
+- {id: V_C06, name: LowBirthWeight, aliases: [SINASCLowBirthWeightPrevalence],
+   match: {role: birth_outcome_share, carrier: LowBirthWeightBirths/LiveBirths}}
+- {id: V_C08, name: PrematurityShare, aliases: [SINASCPrematurityPrevalence],
+   match: {role: birth_outcome_share, carrier: PrematurityBirths/LiveBirths}}
+- {id: V_C14, name: CongenitalAnomaly, aliases: [SINASCCongenitalAnomalyPrevalence],
+   match: {role: birth_outcome_share, carrier: CongenitalAnomalyBirths/LiveBirths}}
+# --- §3.10.5 Capacity ---
+- {id: V_K04, name: FacilityDensity, aliases: [],
+   match: {role: facility_density}}
+# --- Count-level admission seeds (numerators / anchors an intent may mandate) ---
+- {id: SIMDeathsAll, name: SIMDeathsAll, aliases: [],
+   match: {carrier: Deaths, role: source_event_count, excludes_axes: [icd_chapter, icd_block]}}
+- {id: SINASCLiveBirthsAll, name: SINASCLiveBirthsAll, aliases: [],
+   match: {carrier: LiveBirths, role: source_event_count, excludes_axes: [icd_chapter, icd_block]}}
+- {id: SIHHospitalAdmissionsAll, name: SIHHospitalAdmissionsAll, aliases: [],
+   match: {carrier: HospitalAdmissions, role: source_event_count, excludes_axes: [icd_chapter, icd_block]}}
+- {id: CNESFacilitiesAll, name: CNESFacilitiesAll, aliases: [],
+   match: {carrier: Facilities, role: source_event_count}}
+- {id: SIHInpatientDeaths, name: SIHInpatientDeaths, aliases: [],
+   match: {carrier: HospitalDeaths, role: source_event_count}}
+- {id: SIDRAPopulationTotalAnchor, name: SIDRAPopulationTotalAnchor, aliases: [],
+   match: {population: true}}

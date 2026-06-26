@@ -244,9 +244,128 @@ def _scalar_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int] | Non
     return None
 
 
+def _add_icd_stratum(df: pl.DataFrame, icd_column: str, level: str, axis_name: str) -> pl.DataFrame:
+    """Map each record's ICD code to its chapter/block id (MSD §3.11 σ_C restriction).
+
+    Codes that fall outside the registry-backed groups (or are missing/ill-formed) are
+    routed to an explicit ``UNCLASSIFIED`` stratum rather than silently dropped, so the
+    cause-specific counts partition the event population exactly.
+    """
+    from pegasus.datasus.icd_groups import block_for_icd, chapter_for_icd
+
+    classify = chapter_for_icd if level == "chapter" else block_for_icd
+    if icd_column not in df.columns:
+        return df.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
+    codes = df.get_column(icd_column).cast(pl.Utf8, strict=False).drop_nulls().unique().to_list()
+    mapping: dict[str, str] = {}
+    for code in codes:
+        group = classify(code)
+        mapping[str(code)] = group.id if group is not None else "UNCLASSIFIED"
+    if mapping:
+        map_df = pl.DataFrame(
+            {icd_column: list(mapping.keys()), axis_name: list(mapping.values())},
+            schema={icd_column: pl.Utf8, axis_name: pl.Utf8},
+        )
+        out = (
+            df.with_columns(pl.col(icd_column).cast(pl.Utf8, strict=False))
+            .join(map_df, on=icd_column, how="left")
+            .with_columns(pl.col(axis_name).fill_null("UNCLASSIFIED"))
+        )
+    else:
+        out = df.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
+    return out
+
+
+_TRUTHY = ("true", "1", "t", "yes", "y", "sim")
+_FALSY = ("false", "0", "f", "no", "n", "nao", "não")
+
+
+def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.DataFrame:
+    """Apply a declarative AND-list predicate (MSD §2.6/§3.10.4 σ restriction).
+
+    Conditions come from clinical_event_definitions.yaml; this interpreter is the only
+    place the predicate is realized, and it is fully general (no per-event/source code).
+    A referenced column that is absent means the predicate cannot be satisfied → empty.
+    """
+    expr: pl.Expr | None = None
+    for cond in conditions:
+        column = cond.get("column")
+        op = str(cond.get("op") or "")
+        value = cond.get("value")
+        if not column or str(column) not in df.columns:
+            return df.clear()
+        col = pl.col(str(column))
+        if op in {"lt", "le", "gt", "ge"}:
+            numeric = col.cast(pl.Float64, strict=False)
+            threshold = float(value)
+            term = {
+                "lt": numeric < threshold,
+                "le": numeric <= threshold,
+                "gt": numeric > threshold,
+                "ge": numeric >= threshold,
+            }[op]
+        elif op == "eq":
+            term = col.cast(pl.Utf8) == str(value)
+        elif op == "ne":
+            term = col.cast(pl.Utf8) != str(value)
+        elif op == "in":
+            term = col.cast(pl.Utf8).is_in([str(v) for v in (value or [])])
+        elif op == "not_in":
+            term = ~col.cast(pl.Utf8).is_in([str(v) for v in (value or [])])
+        elif op == "is_true":
+            term = col.cast(pl.Utf8).str.to_lowercase().is_in(list(_TRUTHY))
+        elif op == "is_false":
+            term = col.cast(pl.Utf8).str.to_lowercase().is_in(list(_FALSY))
+        elif op == "is_not_null":
+            term = col.is_not_null()
+        else:
+            continue
+        expr = term if expr is None else (expr & term)
+    if expr is not None:
+        df = df.filter(expr.fill_null(False))
+    return df
+
+
 def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
     df = _support_frame(pl.read_parquet(source))
+    support = _as_dict(field.support)
+    conditions = support.get("restrict_conditions")
+    if conditions:
+        df = _apply_restrict_conditions(df, list(conditions))
     keys = _support_keys(df)
+    stratify_icd = support.get("stratify_icd")
+    if stratify_icd:
+        axis_name = str(support.get("icd_axis") or ("icd_chapter" if stratify_icd == "chapter" else "icd_block"))
+        icd_column = str(support.get("icd_column") or "")
+        df = _add_icd_stratum(df, icd_column, str(stratify_icd), axis_name)
+        keys = [*keys, axis_name]
+    # General demographic stratification (MSD §3.7.4): group by a canonical axis derived
+    # from a source column, mapping raw codes -> canonical categories so the count joins a
+    # matching demographic population denominator. Unknown/total categories are dropped.
+    stratify_column = support.get("stratify_column")
+    if stratify_column:
+        from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, source_category_map
+
+        axis_name = str(support.get("stratify_axis") or stratify_column)
+        source_system = str(support.get("stratify_source") or "")
+        raw_column = str(stratify_column)
+        mapping = source_category_map(axis_name, source_system)
+        if raw_column in df.columns and mapping:
+            # Use a distinct temp column so axis_name == raw_column (e.g. both "sex") does
+            # not collide; the canonical values then become the axis column.
+            tmp = "__canonical_stratum__"
+            map_df = pl.DataFrame(
+                {raw_column: list(mapping.keys()), tmp: list(mapping.values())},
+                schema={raw_column: pl.Utf8, tmp: pl.Utf8},
+            )
+            df = (
+                df.with_columns(pl.col(raw_column).cast(pl.Utf8, strict=False))
+                .join(map_df, on=raw_column, how="left")
+                .with_columns(pl.col(tmp).fill_null(UNKNOWN).alias(axis_name))
+                .filter(~pl.col(axis_name).is_in([TOTAL, UNKNOWN]))
+                .drop(tmp)
+            )
+            keys = [*keys, axis_name]
     if keys:
         out = df.group_by(keys).agg(pl.len().cast(pl.Float64).alias(VALUE_COLUMN)).sort(keys)
     else:
@@ -330,6 +449,17 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
             "RN operator requires at least one intersecting support axis; "
             "cross-join is forbidden to prevent OOM and indicates failed Δ support alignment."
         )
+    # Stratifier columns present on the numerator but absent from the (unstratified)
+    # denominator — e.g. icd_chapter/icd_block from a σ_C restriction. They are NOT join
+    # keys (the denominator broadcasts across strata) but MUST survive into the output,
+    # otherwise cause-specific rates collapse to one ambiguous row per (year, municipality).
+    numerator_strata = [
+        column
+        for column in n.columns
+        if column not in keys
+        and column != "value_numerator"
+        and column not in METADATA_COLUMNS
+    ]
     joined = n.join(d, on=keys, how="left", suffix="_denominator")
 
     missing_denom_count = joined.filter(pl.col("value_denominator").is_null() | pl.col("value_denominator").is_nan()).height
@@ -347,7 +477,7 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
         .alias(VALUE_COLUMN)
     )
 
-    keep = [column for column in keys if column in out.columns]
+    keep = [column for column in [*keys, *numerator_strata] if column in out.columns]
     out = out.select([
         *[pl.col(column) for column in keep],
         pl.col(VALUE_COLUMN),
@@ -604,6 +734,86 @@ def _sidra_population_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, 
     return _write(output_dir / f"{field.id}.parquet", out)
 
 
+def _sidra_context_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int]:
+    """Materialize a SIDRA context gradient (§3.10.7 V_X) as a per-municipality panel
+    (year, municipality_cod6, value). locality_id is cod7; municipality_cod6 = cod7[:6],
+    matching the DATASUS event geography so PIRS can use it as a covariate."""
+    support = _as_dict(field.support)
+    facts_path = support.get("sidra_facts_path") or support.get("artifact_path")
+    if not facts_path:
+        raise ValueError("SIDRA context field has no facts path")
+    table_id = str(support.get("table_id") or "")
+    variable_id = str(support.get("variable_id") or "")
+    df = pl.read_parquet(facts_path)
+    if "table_id" in df.columns and table_id:
+        df = df.filter(pl.col("table_id").cast(pl.Utf8) == table_id)
+    if "variable_id" in df.columns and variable_id:
+        df = df.filter(pl.col("variable_id").cast(pl.Utf8) == variable_id)
+    value_col = "value_numeric" if "value_numeric" in df.columns else VALUE_COLUMN
+    out = df.with_columns([
+        pl.col("locality_id").cast(pl.Utf8).str.slice(0, 6).alias("municipality_cod6"),
+        pl.col("period").cast(pl.Utf8).str.slice(0, 4).cast(pl.Int64, strict=False).alias("year"),
+    ]).select([
+        pl.col("year"),
+        pl.col("municipality_cod6"),
+        pl.col(value_col).cast(pl.Float64, strict=False).alias(VALUE_COLUMN),
+        pl.lit(field.id).alias("field_id"),
+        pl.lit(field.name).alias("field_name"),
+        pl.lit("sidra_context_field").alias("operator"),
+    ])
+    return _write(output_dir / f"{field.id}.parquet", out)
+
+
+def _category_code_for_classification(category_tuple_raw: Any, classification_id: str) -> str | None:
+    import json
+    try:
+        pairs = json.loads(category_tuple_raw) if isinstance(category_tuple_raw, str) else category_tuple_raw
+    except Exception:
+        return None
+    for pair in pairs or []:
+        if pair and str(pair[0]) == str(classification_id):
+            return str(pair[1])
+    return None
+
+
+def _sidra_demographic_population_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int]:
+    """Materialize a demographic-stratified population panel (MSD §2.8):
+    (year, municipality_cod6, <axis>, value), axis category canonicalized via the
+    demographic-axis registry, dropping the marginal Total and unknown categories."""
+    from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, map_category
+
+    support = _as_dict(field.support)
+    facts_path = support.get("sidra_facts_path") or support.get("artifact_path")
+    classification_id = str(support.get("classification_id") or "")
+    axis = str(support.get("demographic_axis") or "stratum")
+    if not facts_path:
+        raise ValueError("demographic population field has no facts path")
+    df = pl.read_parquet(facts_path)
+    value_col = "value_numeric" if "value_numeric" in df.columns else VALUE_COLUMN
+    rows: list[dict[str, Any]] = []
+    for record in df.iter_rows(named=True):
+        code = _category_code_for_classification(record.get("category_tuple"), classification_id)
+        canonical = map_category(axis, "SIDRA", code) if code is not None else UNKNOWN
+        if canonical in {TOTAL, UNKNOWN}:
+            continue  # marginal/unknown is not a stratum of the disaggregated tensor
+        locality = str(record.get("locality_id") or "")
+        period = str(record.get("period") or "")
+        value = record.get(value_col)
+        rows.append({
+            "year": int(period[:4]) if period[:4].isdigit() else None,
+            "municipality_cod6": locality[:6],
+            axis: canonical,
+            VALUE_COLUMN: float(value) if value is not None else None,
+        })
+    out = pl.DataFrame(rows) if rows else pl.DataFrame({VALUE_COLUMN: []}, schema={VALUE_COLUMN: pl.Float64})
+    out = out.with_columns([
+        pl.lit(field.id).alias("field_id"),
+        pl.lit(field.name).alias("field_name"),
+        pl.lit("sidra_demographic_population").alias("operator"),
+    ])
+    return _write(output_dir / f"{field.id}.parquet", out)
+
+
 def _execute_non_rn(field: FieldNode, output_dir: Path, intent: Any = None) -> tuple[Path, int]:
     op = str(field.operator or "").lower()
     source = _source_path(field)
@@ -679,6 +889,12 @@ def execute_efg_result(
                     path, rows, support_update = _compute_rn_ratio(field, fields_by_id, out_dir)
                 elif op == "sidra_population_total_anchor":
                     path, rows = _sidra_population_tensor(field, out_dir)
+                    support_update = None
+                elif op == "sidra_context_field":
+                    path, rows = _sidra_context_tensor(field, out_dir)
+                    support_update = None
+                elif op == "sidra_demographic_population":
+                    path, rows = _sidra_demographic_population_tensor(field, out_dir)
                     support_update = None
                 elif op.startswith("Bridge") or "bridge" in op.lower() or field.kind in {"bridge_module", "bridge_divergence"}:
                     path, rows, support_update = _compute_bridge_tensor(field, fields_by_id, out_dir)

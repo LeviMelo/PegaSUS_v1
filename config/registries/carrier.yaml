@@ -36,6 +36,69 @@ carriers:
     - person_years
     - persons
     default_aggregation: additive
+  # Restricted clinical-event carriers (MSD §2.6, §3.10.4). Derived by σ restriction
+  # of a parent carrier; declared here so the engine's carrier knowledge is fully
+  # registry-driven (see clinical_event_definitions.yaml).
+  InfantDeaths:
+    label: Infant deaths
+    description: Liveborn deaths under 365.25 days (§2.6.2); restriction of Deaths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  NeonatalDeaths:
+    label: Neonatal deaths
+    description: Liveborn deaths under 28 days (§2.6.3); restriction of Deaths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  PostNeonatalDeaths:
+    label: Postneonatal deaths
+    description: Deaths in [28, 365.25) days (§2.6.4); restriction of Deaths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  HospitalDeaths:
+    label: Inpatient deaths
+    description: SIH in-hospital deaths; restriction of HospitalAdmissions.
+    allowed_units: [counts]
+    default_aggregation: additive
+  LowBirthWeightBirths:
+    label: Low-birth-weight births
+    description: Live births under 2500 g (§3.10.4); restriction of LiveBirths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  PrematurityBirths:
+    label: Preterm births
+    description: Live births under 37 weeks (§3.10.4); restriction of LiveBirths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  CongenitalAnomalyBirths:
+    label: Congenital anomaly births
+    description: Live births with congenital anomaly (§3.10.4); restriction of LiveBirths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  FacilityCapacityVector:
+    label: Facility capacity vector
+    description: CNES decoded capacity-vector component carrier (§2.7).
+    allowed_units: [counts, beds, binary_flag]
+    default_aggregation: additive
+  HospitalCosts_SH:
+    label: Hospital service costs
+    description: SIH VAL_SH billing component.
+    allowed_units: [BRL, reais_hospital_services]
+    default_aggregation: additive
+  HospitalCosts_SP:
+    label: Professional service costs
+    description: SIH VAL_SP billing component.
+    allowed_units: [BRL, reais_professional_services]
+    default_aggregation: additive
+  HospitalCosts_UTI:
+    label: ICU service costs
+    description: SIH VAL_UTI billing component.
+    allowed_units: [BRL, reais_icu_services]
+    default_aggregation: additive
+  HospitalCosts_TOT:
+    label: Total billing costs
+    description: SIH VAL_TOT billing component.
+    allowed_units: [BRL, reais_total_billing]
+    default_aggregation: additive
   ContextCells:
     label: SIDRA contextual cells
     description: Long-form SIDRA contextual fact cells before epidemiological projection.

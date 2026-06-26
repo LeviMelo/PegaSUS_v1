@@ -1,9 +1,62 @@
 # PegaSUS — MSD Compliance Remediation Plan (Plan of Record)
 
-Status: **active**. Authoritative spec: `MSD.md` (6790 lines, read in full).
+Status: **active**. Authoritative spec: `MSD.md`. Current state-of-record: `MSD_CONVERGENCE_AUDIT.md`.
 Strategy (locked with user): **architecture-first → radical refactor + compliance → rewrite tests as fraud-detectors.**
 
-This document is the durable ledger. Every defect carries `file:line` evidence and an
+> **§0 and §1–3 below are the original decontamination-era ledger (D1–D12 fraud fixes), kept
+> as history. The current frontier (feature build-out, 2026-06-26) is in §A below; read it
+> first.** The decontamination fraud (fake-green relabelling) is exterminated along the live
+> spine; the work now is filling real MSD architectural gaps, source-agnostically.
+
+---
+
+## §A. CURRENT FRONTIER — next tasks (2026-06-26), with entry points
+
+Done since the decontamination ledger (all verified on real Alagoas-2022 data — see AUDIT §2):
+registry-driven carrier/ratio engine; §3.11 ICD cause-specific mortality; §2.6/§3.10.4
+σ-restricted clinical events (maternal-child + birth outcomes, correct denominators);
+§3.10 named Core Seed Registry + `mandatory_fields` enforcement; ruthless parallel SIDRA
+acquisition client; §3.10.7 SIDRA V_X context ingestion with §2.9 regime routing;
+§2.8 demographic population tensor (sex) + demographic-aware stratified rates.
+
+**Next tasks (priority order). Do NOT dumb down or fake — wire the real modules.**
+
+1. **§2.8 demographic-tensor solver orchestration** (the real reconstruction, not the
+   degenerate anchor). Entry: `she/population/solvers.py::solve_population_tensor_problem`
+   (real projected-gradient/sparse-ADMM backends exist) + `she/population/schema.py`
+   (`PopulationTensorProblem` shape=(munis,years,age,sex,race), anchors, closure_totals,
+   migration_bounds, `PopulationObjectiveWeights`). Build an orchestrator that constructs a
+   real multi-strata problem from disaggregated SIDRA (acquire age×sex×race 9606) + SIM death
+   priors + §2.8.10 closure constraints, runs the solver, and admits the result for
+   `population_mode ∈ {independent_population_tensor, sim_informed_population_tensor}`. Wire
+   into `compile.py` (currently hardcodes `population_solver`→skipped at line ~324). The
+   current `solve_population_tensor_from_sidra_anchor` builds a 1×1×1×1×1 problem — replace
+   with the multi-strata construction. Respect §2.8.12 dense-national abort (`dense_national_abort_check`).
+2. **§2.10 ST-DFM execution.** Entry: `she/stdfm/pipeline.py::run_stdfm_pipeline` (real).
+   Wire for context fields whose §2.9 regime is `bounded_interpolate` (gate needs ≥3 temporal
+   points). Requires multi-year context data — acquire via `sidra/acquire.py` across periods.
+   Latent output carries §3.6 quarantine (already modeled in `she/sidra_context.py`).
+3. **§2.12.2 classification projection wiring.** Entry: `sidra/projection.py` (real loader).
+   Use the demographic axis maps to project SIDRA classifications onto canonical axes during
+   context/demographic ingestion (we already do sex; generalize to age_group/race via
+   `registries/demographic_axis.py`).
+4. **§3.10.7 V_X breadth.** Ingest the curated compendium (`config/registries/sidra_compendium.json`,
+   96 tables) by tier/default-keep through `sidra/acquire.py` → `context_facts` artifacts →
+   `she/sidra_context.py`. Client is ready; this is bounded loops + persistence.
+5. **National scale** — see SCALE_PLAN (streaming, GPU HSIC, UF-loop orchestration).
+6. **Engine source-agnosticism cleanups** — registry-drive `efg/executor.py` column-name
+   heuristics (`GEO_COLUMNS`/`YEAR_COLUMNS`/`DATE_COLUMNS`) and
+   `efg/diagnostic_strata.PRIMARY_DIAGNOSTIC_ROLES`; relocate the race-bridge prior out of
+   `tests/fixtures/`.
+
+**Filesystem note:** all live source is under `/src`. The `_review/slice28za_context_*/*.py`
+dev snapshots were confirmed unimported and removed (2026-06-26).
+
+---
+
+## §0 (historical) — Decontamination-era defect ledger
+
+This section is the durable ledger. Every defect carries `file:line` evidence and an
 MSD clause. "Fake" = label/manifest claims compliance the computation does not deliver.
 "Missing" = required computation absent. "Bug" = implemented but wrong.
 

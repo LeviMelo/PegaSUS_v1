@@ -13,6 +13,13 @@ from pegasus.efg.align import align_fields
 from pegasus.efg.bridges import bridge_summary, plan_bridge_candidates
 from pegasus.efg.core_seed import build_core_seed_set, core_seed_summary
 from pegasus.efg.declaration import OperatorSpec
+from pegasus.efg.core_seed_registry import enforce_mandatory_fields, resolve_core_seeds
+from pegasus.efg.diagnostic_strata import (
+    ICD_AXIS_BY_LEVEL,
+    diagnostic_columns_by_event,
+    enforce_health_seeds,
+    requested_icd_levels,
+)
 from pegasus.efg.equivalence import PrecompressionReport, precompress_fields
 from pegasus.efg.failed_branch import (
     FailedBranchRecord,
@@ -207,11 +214,16 @@ def _dictionary(field: FieldNode) -> dict[str, Any]:
     }
 
 
-def _event_groups(fields: Iterable[FieldNode]) -> dict[tuple[str, str], list[FieldNode]]:
+def _event_groups(
+    fields: Iterable[FieldNode], *, registry_root: str | Path = "config/registries"
+) -> dict[tuple[str, str], list[FieldNode]]:
+    from pegasus.registries.events import primary_event_carriers
+
+    countable = primary_event_carriers(root=registry_root)
     groups: dict[tuple[str, str], list[FieldNode]] = {}
     for field in fields:
         artifact = field.support.get("artifact_path")
-        if not artifact or field.carrier not in {"Deaths", "HospitalAdmissions", "LiveBirths", "Facilities"}:
+        if not artifact or field.carrier not in countable:
             continue
         if field.unit == "ICD10" or "diagnostic_topology" in field.role:
             continue
@@ -219,16 +231,20 @@ def _event_groups(fields: Iterable[FieldNode]) -> dict[tuple[str, str], list[Fie
     return groups
 
 
-def _ratio_role(numerator: FieldNode, denominator: FieldNode) -> str:
-    roles = {
-        ("Deaths", "Population"): "mortality_rate",
-        ("HospitalAdmissions", "Population"): "hospitalization_rate",
-        ("LiveBirths", "Population"): "birth_rate",
-        ("HospitalDeaths", "HospitalAdmissions"): "inpatient_mortality",
-        ("InfantDeaths", "LiveBirths"): "infant_mortality",
-        ("LowBirthWeightBirths", "LiveBirths"): "birth_outcome_share",
-    }
-    return roles.get((numerator.carrier, denominator.carrier), "unsupported_ratio")
+def _ratio_role(
+    numerator: FieldNode, denominator: FieldNode, *, registry_root: str | Path = "config/registries"
+) -> str:
+    """Resolve the estimand label for a (numerator, denominator) carrier pair.
+
+    Driven by the clinical event registry (MSD §2.6) — the engine holds no
+    hardcoded carrier→role table.
+    """
+    from pegasus.registries.events import clinical_ratio_specs
+
+    for spec in clinical_ratio_specs(root=registry_root):
+        if spec.numerator_carrier == numerator.carrier and spec.denominator_carrier == denominator.carrier:
+            return spec.role
+    return "unsupported_ratio"
 
 
 def _find_field(fields: list[FieldNode], selector: str) -> FieldNode | None:
@@ -528,13 +544,32 @@ def _build_efg_base(
         legality["legal"] += 1
         return field
 
+    from pegasus.registries.demographic_axis import DEMOGRAPHIC_AXES
+    from pegasus.registries.demographic_axis import source_column as _demo_source_column
+
+    def _demographic_axes(node: FieldNode) -> frozenset[str]:
+        return frozenset(set(node.axes) & DEMOGRAPHIC_AXES)
+
+    # Demographic axes that have a population denominator tensor admitted (e.g. {sex});
+    # only these support demographically-stratified rates (matched denominator exists).
+    available_demographic_axes: set[str] = set()
+    for node in roots:
+        if "demographic_stratified" in set(node.role or []):
+            available_demographic_axes |= (set(node.axes) & DEMOGRAPHIC_AXES)
+
     count_nodes: list[FieldNode] = []
-    for (artifact, carrier), parents in sorted(_event_groups(roots).items()):
+    strata_levels = requested_icd_levels(intent)
+    diagnostic_columns = diagnostic_columns_by_event(roots)
+    # Geo/time parent context per primary event carrier, reused to build σ-restricted
+    # clinical events (MSD §2.6/§3.10.4) from the same source artifact.
+    primary_event_context: dict[str, tuple[str, list[FieldNode]]] = {}
+    for (artifact, carrier), parents in sorted(_event_groups(roots, registry_root=root).items()):
         count_parents = [
             parent for parent in parents
             if {"geography", "time", "period"}.intersection(parent.axes)
             or {"geography_axis", "time_axis_candidate"}.intersection(parent.role)
         ] or [parents[0]]
+        primary_event_context.setdefault(carrier, (artifact, count_parents))
         operator = OperatorSpec(
             name=EFGOperator.COUNT_MEASURE.value,
             role="event_count",
@@ -549,25 +584,121 @@ def _build_efg_base(
         if child is not None:
             count_nodes.append(child)
 
+        # ICD diagnostic traversal (MSD §3.11): build cause-specific event counts by
+        # σ_C restriction of the primary diagnostic observer for this (artifact, carrier).
+        # Each becomes a legal additive measure that the RN loop below divides by the
+        # population denominator to yield cause-specific mortality / hospitalization.
+        icd_column = diagnostic_columns.get((artifact, carrier))
+        if icd_column and strata_levels:
+            for level, _seed in strata_levels:
+                axis_name = ICD_AXIS_BY_LEVEL[level]
+                strat_operator = OperatorSpec(
+                    name=EFGOperator.COUNT_MEASURE.value,
+                    role="cause_specific_event_count",
+                    output_kind="extensive_measure",
+                    params={
+                        "artifact_path": artifact,
+                        "carrier": carrier,
+                        "stratify_icd": level,
+                        "icd_column": icd_column,
+                        "icd_axis": axis_name,
+                        "icd_source_field": icd_column,
+                        "name": f"{count_parents[0].source[0]}.{Path(artifact).stem}.count.{axis_name}",
+                    },
+                )
+                strat_child = expand(strat_operator, count_parents)
+                if strat_child is not None:
+                    count_nodes.append(strat_child)
+
+        # Demographic stratification (MSD §2.8/§3.7.4): stratify this event count by each
+        # demographic axis (sex/age/race) that has a matching population denominator tensor,
+        # mapping source category codes to the canonical axis. Enables stratified rates.
+        source_system = count_parents[0].source[0] if count_parents[0].source else ""
+        for axis_name in sorted(available_demographic_axes):
+            column = _demo_source_column(axis_name, source_system, registry_root=root)
+            if not column:
+                continue
+            demo_operator = OperatorSpec(
+                name=EFGOperator.COUNT_MEASURE.value,
+                role=f"{axis_name}_stratified_event_count",
+                output_kind="extensive_measure",
+                params={
+                    "artifact_path": artifact,
+                    "carrier": carrier,
+                    "stratify_column": column,
+                    "stratify_axis": axis_name,
+                    "stratify_source": source_system,
+                    "name": f"{source_system}.{Path(artifact).stem}.count.{axis_name}",
+                },
+            )
+            demo_child = expand(demo_operator, count_parents)
+            if demo_child is not None:
+                count_nodes.append(demo_child)
+
+    # σ-restricted clinical events (MSD §2.6/§3.10.4): infant/neonatal/postneonatal
+    # death, inpatient death, low birth weight, prematurity, congenital anomaly. Each is
+    # a declarative predicate (from clinical_event_definitions.yaml) applied to the
+    # primary carrier's source records — fully registry-driven, no source-specific code.
+    from pegasus.registries.events import clinical_ratio_specs, restricted_event_specs
+
+    for rspec in restricted_event_specs(root=root):
+        context = primary_event_context.get(rspec.of_carrier)
+        if context is None or not rspec.has_conditions():
+            continue
+        artifact, restrict_parents = context
+        restrict_operator = OperatorSpec(
+            name=EFGOperator.COUNT_MEASURE.value,
+            role=f"{rspec.predicate}_count",
+            output_kind="extensive_measure",
+            params={
+                "artifact_path": artifact,
+                "carrier": rspec.event_carrier,
+                "restrict_predicate": rspec.predicate,
+                "restrict_conditions": [dict(cond) for cond in rspec.conditions],
+                "restrict_of_carrier": rspec.of_carrier,
+                "restrict_event_id": rspec.event_id,
+                "name": f"{restrict_parents[0].source[0]}.{Path(artifact).stem}.{rspec.event_carrier}",
+            },
+        )
+        restrict_child = expand(restrict_operator, restrict_parents)
+        if restrict_child is not None:
+            count_nodes.append(restrict_child)
+
+    # Radon–Nikodym ratios, driven by the clinical event registry's declared
+    # (numerator_carrier, denominator_carrier, role) pairings. The denominator pool is
+    # population anchors plus event counts, so cross-source/cross-event ratios
+    # (e.g. InfantDeaths / LiveBirths, HospitalDeaths / HospitalAdmissions) are built
+    # generically — the engine holds no hardcoded numerator→denominator map.
     denominators = [field for field in roots if field.carrier == "Population"]
     if operator_mode != "raw_only":
+        ratio_specs = clinical_ratio_specs(root=root)
+        denominator_pool = [*denominators, *count_nodes]
         for numerator in count_nodes:
-            for denominator in denominators:
-                role = _ratio_role(numerator, denominator)
-                operator = OperatorSpec(
-                    name=EFGOperator.RN.value,
-                    role=role,
-                    output_kind="intensive_density",
-                    params={"ratio_role": role},
-                )
-                alignment = align_fields(
-                    left=numerator,
-                    right=denominator,
-                    operator=operator,
-                    intent=intent,
-                    registries=registry_arg,
-                )
-                expand(operator, [numerator, denominator], alignment)
+            for spec in ratio_specs:
+                if spec.numerator_carrier != numerator.carrier:
+                    continue
+                for denominator in denominator_pool:
+                    if denominator.id == numerator.id or denominator.carrier != spec.denominator_carrier:
+                        continue
+                    # Demographic alignment (§3.7.4): a numerator stratified on a demographic
+                    # axis must divide a denominator on the SAME axis, never a marginal total
+                    # (and crude/ICD numerators divide the total, not a stratified pop).
+                    if _demographic_axes(numerator) != _demographic_axes(denominator):
+                        continue
+                    operator = OperatorSpec(
+                        name=EFGOperator.RN.value,
+                        role=spec.role,
+                        output_kind="intensive_density",
+                        params={"ratio_role": spec.role},
+                    )
+                    alignment = align_fields(
+                        left=numerator,
+                        right=denominator,
+                        operator=operator,
+                        intent=intent,
+                        registries=registry_arg,
+                    )
+                    expand(operator, [numerator, denominator], alignment)
 
     bridge_plan = None
     if operator_mode != "raw_only":
@@ -579,7 +710,7 @@ def _build_efg_base(
                 parents.append(by_id.get(candidate.denominator_id))
             parents = [parent for parent in parents if parent is not None]
             operator_name = EFGOperator.RN.value if str(candidate.required_operator).lower() == "ratio" else str(candidate.required_operator)
-            operator_role = _ratio_role(parents[0], parents[1]) if operator_name == EFGOperator.RN.value and len(parents) == 2 else str(candidate.bridge_type)
+            operator_role = _ratio_role(parents[0], parents[1], registry_root=root) if operator_name == EFGOperator.RN.value and len(parents) == 2 else str(candidate.bridge_type)
             operator = OperatorSpec(
                 name=operator_name,
                 role=operator_role,
@@ -673,6 +804,16 @@ def _build_efg_base(
     else:
         bridge_summary_payload = bridge_summary(bridge_plan)
     domain_summary_payload = _field_domain_summaries(compressed, constraints)
+    # Intent-contract enforcement (MSD §3.10): refuse a hollow success — fail the build
+    # loudly if the intent's health_seeds are not actually produced by the compiled EFG.
+    domain_summary_payload["health_seed_contract"] = enforce_health_seeds(intent, compressed)
+    # Named core-seed binding + mandatory_fields enforcement (MSD §3.10): bind canonical
+    # V_* / count seed ids to produced fields and fail loudly if the intent's
+    # mandatory_fields are not realized.
+    domain_summary_payload["core_seed_resolution"] = resolve_core_seeds(compressed, registry_root=root)
+    domain_summary_payload["mandatory_field_contract"] = enforce_mandatory_fields(
+        intent, compressed, registry_root=root
+    )
     payload = {
         "substrate_id": substrate.substrate_id,
         "field_ids": [field.id for field in compressed],

@@ -36,12 +36,9 @@ def _known_unit(unit: str, registry_root: Path) -> bool:
 
 
 def _known_carrier(carrier: str, registry_root: Path) -> bool:
-    if carrier in {
-        "HospitalDeaths", "InfantDeaths", "LowBirthWeightBirths",
-        "HospitalCosts_SH", "HospitalCosts_SP", "HospitalCosts_UTI",
-        "HospitalCosts_TOT", "FacilityCapacityVector",
-    }:
-        return True
+    # Carrier knowledge is fully registry-driven: all event/derived carriers are
+    # declared in carrier.yaml (see clinical_event_definitions.yaml for the
+    # restricted ones). No hardcoded carrier set in the engine.
     return carrier in load_carrier_registry(registry_root)
 
 
@@ -205,12 +202,16 @@ def evaluate_delta(
             _append(failed, "carrier")
 
     if operator.name == EFGOperator.COUNT_MEASURE.value and parents:
+        from pegasus.registries.events import primary_event_carriers
+
         carriers = {parent.carrier for parent in parents}
         artifacts = {parent.support.get("artifact_path") for parent in parents}
         if len(carriers) != 1 or len(artifacts) != 1:
             deltas["support"] = 0
             _append(failed, "support")
-        if next(iter(carriers)) not in {"Deaths", "HospitalAdmissions", "LiveBirths", "Facilities"}:
+        # COUNT_MEASURE is only legal for source-countable primary event carriers,
+        # as declared by the clinical event registry (no hardcoded carrier set).
+        if next(iter(carriers)) not in primary_event_carriers(root=registry_root):
             deltas["carrier"] = 0
             _append(failed, "carrier")
 
@@ -234,7 +235,7 @@ def evaluate_delta(
                 deltas["aggregation"] = 0
                 _append(failed, "aggregation")
                 warnings.append("raw_source_field_requires_measure_operator")
-            if ratio_rule(numerator, denominator, operator.role) is None:
+            if ratio_rule(numerator, denominator, operator.role, registry_root=registry_root) is None:
                 deltas["carrier"] = 0
                 deltas["unit"] = 0
                 _append(failed, "carrier")

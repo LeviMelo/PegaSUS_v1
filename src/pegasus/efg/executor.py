@@ -26,36 +26,6 @@ from pegasus.efg.race_bridge import (
 
 VALUE_COLUMN = "value"
 
-GEO_COLUMNS = (
-    "municipality_cod6",
-    "mun_residence_cod6",
-    "mun_movement_cod6",
-    "mun_occurrence_cod6",
-    "CODMUNRES",
-    "CODMUNOCOR",
-    "MUNIC_RES",
-    "MUNIC_MOV",
-)
-
-YEAR_COLUMNS = (
-    "year",
-    "death_year",
-    "birth_year",
-    "admission_year",
-    "period_year",
-    "ANO",
-)
-
-DATE_COLUMNS = (
-    "death_date",
-    "birth_date",
-    "admit_date",
-    "event_date",
-    "DTOBITO",
-    "DTNASC",
-    "DT_INTER",
-)
-
 METADATA_COLUMNS = {
     "field_id",
     "field_name",
@@ -157,31 +127,58 @@ def _source_column(field: FieldNode, df: pl.DataFrame) -> str | None:
     return None
 
 
-def _with_year(df: pl.DataFrame) -> pl.DataFrame:
+def _declared_axis_column(field: FieldNode | None, axis: str) -> str | None:
+    if field is None:
+        return None
+    support = _as_dict(field.support)
+    axes = _as_dict(field.axes)
+    candidates: list[Any] = []
+    if axis == "time":
+        candidates.extend([
+            support.get("time_column"),
+            support.get("year_column"),
+            support.get("period_column"),
+            support.get("support_time_column"),
+        ])
+    elif axis == "geography":
+        candidates.extend([
+            support.get("geography_column"),
+            support.get("municipality_column"),
+            support.get("support_geography_column"),
+        ])
+    candidates.extend([
+        support.get(f"{axis}_column"),
+        support.get("column") if axis in axes else None,
+        axes.get(axis),
+    ])
+    for candidate in candidates:
+        if candidate is not None and str(candidate):
+            return str(candidate)
+    return None
+
+
+def _with_year(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
+    source = _declared_axis_column(field, "time")
+    if source and source in df.columns:
+        return df.with_columns(pl.col(source).cast(pl.Int64, strict=False).alias("year"))
     if "year" in df.columns:
         return df.with_columns(pl.col("year").cast(pl.Int64, strict=False).alias("year"))
-    for column in YEAR_COLUMNS:
-        if column in df.columns:
-            return df.with_columns(pl.col(column).cast(pl.Int64, strict=False).alias("year"))
-    for column in DATE_COLUMNS:
-        if column in df.columns:
-            return df.with_columns(pl.col(column).cast(pl.Utf8).str.slice(0, 4).cast(pl.Int64, strict=False).alias("year"))
     return df.with_columns(pl.lit(None, dtype=pl.Int64).alias("year"))
 
 
-def _with_geo(df: pl.DataFrame) -> pl.DataFrame:
-    if "municipality_cod6" in df.columns:
+def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
+    source = _declared_axis_column(field, "geography")
+    if source and source in df.columns:
+        base = df.with_columns(pl.col(source).cast(pl.Utf8).str.extract(r"(\d{6})", 1).alias("municipality_cod6"))
+    elif "municipality_cod6" in df.columns:
         base = df
     else:
-        source = next((column for column in GEO_COLUMNS if column in df.columns), None)
-        if source is None:
-            return df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("municipality_cod6"))
-        base = df.with_columns(pl.col(source).cast(pl.Utf8).str.extract(r"(\d{6})", 1).alias("municipality_cod6"))
+        return df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("municipality_cod6"))
     return base.filter(~pl.col("municipality_cod6").cast(pl.Utf8).str.contains(r"^\d{2}0000$").fill_null(False))
 
 
-def _support_frame(df: pl.DataFrame) -> pl.DataFrame:
-    return _with_geo(_with_year(df))
+def _support_frame(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
+    return _with_geo(_with_year(df, field), field)
 
 
 def _support_keys(df: pl.DataFrame) -> list[str]:
@@ -327,7 +324,7 @@ def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.D
 
 
 def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
-    df = _support_frame(pl.read_parquet(source))
+    df = _support_frame(pl.read_parquet(source), field)
     base_keys = _support_keys(df)
     support = _as_dict(field.support)
     conditions = support.get("restrict_conditions")
@@ -382,7 +379,7 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
 def _functional_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
     """Materialize a statistical functional (mean/median) of a per-record mark over each
     support cell (MSD §3.10.4-6 Ψ operators)."""
-    df = _support_frame(pl.read_parquet(source))
+    df = _support_frame(pl.read_parquet(source), field)
     support = _as_dict(field.support)
     mark = str(support.get("mark_column") or "")
     functional = str(support.get("functional") or "mean")
@@ -405,7 +402,7 @@ def _functional_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
 
 
 def _sum_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
-    df = _support_frame(pl.read_parquet(source))
+    df = _support_frame(pl.read_parquet(source), field)
     df = df.with_columns(pl.col(column).cast(pl.Float64, strict=False).fill_null(0.0).alias("__value__"))
     keys = _support_keys(df)
     if keys:
@@ -421,7 +418,7 @@ def _sum_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
 
 
 def _source_field_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
-    df = _support_frame(pl.read_parquet(source))
+    df = _support_frame(pl.read_parquet(source), field)
     keys = _support_keys(df)
     out = df.select([
         *(pl.col(key) for key in keys),
@@ -561,14 +558,14 @@ def _race_column(field: FieldNode, parent: FieldNode, df: pl.DataFrame) -> str:
     candidates = [
         support.get("column"),
         support.get("source_column"),
-        "race_color_admin",
-        "RACACOR",
-        "RACA_COR",
     ]
     for candidate in candidates:
         if candidate is not None and str(candidate) in df.columns:
             return str(candidate)
-    raise ValueError(f"Bridge_R field {field.id} could not locate an administrative race column")
+    raise ValueError(
+        f"Bridge_R field {field.id} parent {parent.id} lacks a registry-declared "
+        "administrative race source column present in the source artifact"
+    )
 
 
 def _fixedc_support_groups(df: pl.DataFrame) -> list[tuple[dict[str, Any], pl.DataFrame]]:
@@ -602,7 +599,7 @@ def _compute_fixedc_race_bridge_tensor(
     source = _source_path(parent)
     if source is None:
         raise ValueError(f"Bridge_R parent {parent.id} has no source artifact path")
-    df = _support_frame(pl.read_parquet(source))
+    df = _support_frame(pl.read_parquet(source), parent)
     race_column = _race_column(field, parent, df)
     state_col = "race_missingness_state" if "race_missingness_state" in df.columns else None
 

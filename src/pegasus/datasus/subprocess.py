@@ -39,6 +39,7 @@ class DatasusConfig:
     r_library_path: str | None = None
     r_timeout_seconds: int = 7200
     heartbeat_timeout_seconds: int = 900
+    max_parallel_requests: int = 4
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "DatasusConfig":
@@ -48,11 +49,16 @@ class DatasusConfig:
             "PEGASUS_DATASUS_HEARTBEAT_TIMEOUT_SECONDS",
             payload.get("heartbeat_timeout_seconds", 900),
         )
+        parallel_raw = os.environ.get(
+            "PEGASUS_DATASUS_MAX_PARALLEL_REQUESTS",
+            payload.get("max_parallel_requests", 4),
+        )
         return cls(
             rscript_path=str(payload.get("rscript_path", "Rscript")),
             r_library_path=None if r_library_path in {None, ""} else str(r_library_path),
             r_timeout_seconds=int(r_timeout_raw),
             heartbeat_timeout_seconds=int(heartbeat_timeout_raw),
+            max_parallel_requests=max(1, int(parallel_raw)),
         )
 
     @classmethod

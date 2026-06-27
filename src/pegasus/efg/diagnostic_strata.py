@@ -38,15 +38,6 @@ ICD_AXIS_BY_LEVEL: dict[str, str] = {
     "curated": "curated_cause_group",
 }
 
-# Only *primary, single-valued* diagnostic positions are restrictable into a partition
-# of the event population.  Associated/secondary chains are multi-valued (one record can
-# carry several codes) and would double count, so they are deliberately excluded here.
-PRIMARY_DIAGNOSTIC_ROLES: frozenset[str] = frozenset({
-    "underlying_cause",
-    "sih_principal_diagnosis",
-})
-
-
 def _intent_attr(intent: Any, name: str, default: Any) -> Any:
     if intent is None:
         return default
@@ -80,6 +71,35 @@ def _field_attr(field: Any, name: str, default: Any = None) -> Any:
     return getattr(field, name, default)
 
 
+def _field_roles(field: Any) -> set[str]:
+    return {str(role) for role in (_field_attr(field, "role", []) or [])}
+
+
+def _field_axes(field: Any) -> dict[str, Any]:
+    return dict(_field_attr(field, "axes", {}) or {})
+
+
+def is_primary_diagnostic_observer(field: Any) -> bool:
+    """Return whether this ICD observer can legally partition the event population.
+
+    The decision is registry-backed: source_fields.yaml marks primary,
+    single-valued diagnostic positions with ``role: primary_diagnostic`` and
+    ``axes.diagnostic_partition: primary_single_valued``. Multi-valued
+    associated/secondary chains remain observers and are not σ_C count
+    partitions, because one event can contribute multiple codes.
+    """
+
+    roles = _field_roles(field)
+    axes = _field_axes(field)
+    unit = str(_field_attr(field, "unit", ""))
+    if unit != "ICD10" and "diagnostic_topology" not in roles:
+        return False
+    return (
+        "primary_diagnostic" in roles
+        or axes.get("diagnostic_partition") == "primary_single_valued"
+    )
+
+
 def diagnostic_columns_by_event(roots: Iterable[Any]) -> dict[tuple[str, str], str]:
     """Map ``(artifact_path, carrier) -> icd_column`` for primary diagnostic observers.
 
@@ -89,12 +109,7 @@ def diagnostic_columns_by_event(roots: Iterable[Any]) -> dict[tuple[str, str], s
     mapping: dict[tuple[str, str], str] = {}
     for field in roots:
         unit = str(_field_attr(field, "unit", ""))
-        axes = dict(_field_attr(field, "axes", {}) or {})
-        role = _field_attr(field, "axes", {}) or {}
-        topology_role = axes.get("icd_topology_role") or axes.get("diagnostic_role")
-        if unit != "ICD10" and "diagnostic_topology" not in set(_field_attr(field, "role", []) or []):
-            continue
-        if topology_role not in PRIMARY_DIAGNOSTIC_ROLES:
+        if not is_primary_diagnostic_observer(field):
             continue
         support = dict(_field_attr(field, "support", {}) or {})
         column = support.get("column")
@@ -116,16 +131,8 @@ class HealthSeedContractError(ValueError):
     """Raised when an intent's ``health_seeds`` are not satisfied by the compiled EFG."""
 
 
-def _field_roles(field: Any) -> set[str]:
-    return {str(role) for role in (_field_attr(field, "role", []) or [])}
-
-
 def _field_support(field: Any) -> dict[str, Any]:
     return dict(_field_attr(field, "support", {}) or {})
-
-
-def _field_axes(field: Any) -> dict[str, Any]:
-    return dict(_field_attr(field, "axes", {}) or {})
 
 
 def _has_event_count(fields: Iterable[Any], carrier: str) -> bool:
@@ -206,10 +213,10 @@ def enforce_health_seeds(intent: Any, fields: Iterable[Any]) -> dict[str, Any]:
 __all__ = [
     "HealthSeedContractError",
     "ICD_AXIS_BY_LEVEL",
-    "PRIMARY_DIAGNOSTIC_ROLES",
     "diagnostic_columns_by_event",
     "enforce_health_seeds",
     "health_seeds",
+    "is_primary_diagnostic_observer",
     "requested_icd_levels",
     "seed_satisfaction",
 ]

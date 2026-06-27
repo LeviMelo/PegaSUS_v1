@@ -46,6 +46,8 @@ class CompendiumTable:
 @dataclass(frozen=True)
 class CompendiumRequestPlan:
     table_id: str
+    tier: str
+    group: str | None
     variables: tuple[str, ...]
     periods: tuple[str, ...]
     locality_level: str
@@ -66,6 +68,8 @@ class CompendiumRequestPlan:
     def as_manifest(self) -> dict[str, Any]:
         return {
             "table_id": self.table_id,
+            "tier": self.tier,
+            "group": self.group,
             "variables": list(self.variables),
             "periods": list(self.periods),
             "locality_level": self.locality_level,
@@ -151,10 +155,14 @@ def load_sidra_compendium(path: str | Path = "config/registries/sidra_compendium
 def select_compendium_tables(
     tables: tuple[CompendiumTable, ...],
     *,
-    tiers: tuple[str, ...] = ("T1_CORE",),
+    tiers: tuple[str, ...] | None = None,
 ) -> tuple[CompendiumTable, ...]:
-    allowed = {str(t) for t in tiers}
-    return tuple(table for table in tables if table.tier in allowed and table.default_keep_variables)
+    allowed = None if tiers is None else {str(t) for t in tiers}
+    return tuple(
+        table
+        for table in tables
+        if table.default_keep_variables and (allowed is None or table.tier in allowed)
+    )
 
 
 def _numeric_periods(table: SIDRATableMetadata, *, end_year: int, max_periods: int) -> tuple[str, ...]:
@@ -254,6 +262,8 @@ def plan_compendium_request(
     classifications, policy = _legal_classification_request(compendium=compendium, official=official)
     return CompendiumRequestPlan(
         table_id=compendium.table_id,
+        tier=compendium.tier,
+        group=compendium.group,
         variables=variables,
         periods=periods,
         locality_level=locality_level,

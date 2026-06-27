@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,14 +51,33 @@ class MicrodatasusClient:
             system=system, uf=uf, years=years,
             config={"rscript_path": self.config.rscript_path}, data_root=self.data_root,
         )
-        completed: list[DATASUSRequestManifest] = []
-        paths: list[str] = []
-        for request in requests:
+        if not requests:
+            return MicrodatasusBatchResult((), ())
+
+        def run_one(request: DATASUSRequestManifest) -> tuple[DATASUSRequestManifest, str]:
             result = fetch_datasus_chunk(
                 request, config=self.config, cache=self.cache,
                 timeout_seconds=self.config.r_timeout_seconds,
                 heartbeat_timeout_seconds=self.config.heartbeat_timeout_seconds,
             )
-            completed.append(result)
-            paths.append(str(write_request_manifest(result, root=self.manifest_root)))
+            return result, str(write_request_manifest(result, root=self.manifest_root))
+
+        completed: list[DATASUSRequestManifest | None] = [None] * len(requests)
+        paths: list[str | None] = [None] * len(requests)
+        worker_count = min(max(1, self.config.max_parallel_requests), len(requests))
+        if worker_count == 1:
+            for idx, request in enumerate(requests):
+                result, path = run_one(request)
+                completed[idx] = result
+                paths[idx] = path
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="datasus-fetch") as pool:
+                futures = {pool.submit(run_one, request): idx for idx, request in enumerate(requests)}
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    result, path = future.result()
+                    completed[idx] = result
+                    paths[idx] = path
+        if any(item is None for item in completed) or any(item is None for item in paths):
+            raise RuntimeError("DATASUS parallel fetch did not complete all request slots")
         return MicrodatasusBatchResult(tuple(completed), tuple(paths))

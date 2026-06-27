@@ -203,11 +203,40 @@ def normalize_sih_rd_events(*, input_path: str | Path, output_path: str | Path, 
     df = _read_table(input_path)
     icd = _icd_norm(_raw(df, "DIAG_PRINC"))
     morte = _raw(df, "MORTE").str.strip_chars()
+    cod_idade = _raw(df, "COD_IDADE").str.strip_chars()
+    idade = _raw(df, "IDADE").str.strip_chars().cast(pl.Float64, strict=False)
+    age_years = (
+        pl.when(cod_idade == "2").then(idade / 365.25)
+        .when(cod_idade == "3").then(idade / 12.0)
+        .when(cod_idade == "4").then(idade)
+        .when(cod_idade == "5").then(100.0 + idade)
+        .otherwise(None)
+    )
+    age_days = (
+        pl.when(cod_idade == "2").then(idade)
+        .when(cod_idade == "3").then(30.4375 * idade)
+        .when(cod_idade == "4").then(365.25 * idade)
+        .when(cod_idade == "5").then(365.25 * (100.0 + idade))
+        .otherwise(None)
+    )
+    age_unit = (
+        pl.when(cod_idade == "2").then(pl.lit("days"))
+        .when(cod_idade == "3").then(pl.lit("months"))
+        .when(cod_idade == "4").then(pl.lit("years"))
+        .when(cod_idade == "5").then(pl.lit("years_100_plus"))
+        .otherwise(pl.lit("unknown"))
+    )
     out = df.with_row_index("_row").with_columns(
         pl.format("sih_{}_{}", pl.col("_row"), pl.lit(source_manifest_hash[:8])).alias("admission_id"),
         pl.lit("SIH-RD").alias("source_system"),
         _raw(df, "ANO_CMPT").str.strip_chars().cast(pl.Int64, strict=False).alias("admission_year"),
         _cod6(_raw(df, "MUNIC_RES")).alias("mun_residence_cod6"),
+        age_years.alias("age_years"),
+        age_days.alias("age_days"),
+        age_unit.alias("age_unit"),
+        _raw(df, "SEXO").str.strip_chars().alias("sex"),
+        _raw(df, "RACA_COR").str.strip_chars().alias("race_color_billing"),
+        pl.lit("sih_billing_race_color").alias("race_axis_type"),
         icd.alias("principal_icd_norm"),
         _icd_parse_state(icd).alias("principal_icd_parse_state"),
         pl.when(morte == "1").then(1).when(morte == "0").then(0).otherwise(None).alias("death_flag"),
@@ -220,6 +249,7 @@ def normalize_sih_rd_events(*, input_path: str | Path, output_path: str | Path, 
     )
     canonical = [
         "admission_id", "source_system", "admission_year", "mun_residence_cod6",
+        "age_years", "age_days", "age_unit", "sex", "race_color_billing", "race_axis_type",
         "principal_icd_norm", "principal_icd_parse_state", "death_flag", "stay_length_days",
         "hospital_service_cost_real", "professional_service_cost_real", "icu_cost_real",
         "total_admission_cost_real", "source_manifest_hash",

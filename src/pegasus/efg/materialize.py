@@ -43,14 +43,6 @@ AGGREGATION_LAWS: frozenset[str] = frozenset({
     "non_aggregable",
 })
 COUNT_UNITS: frozenset[str] = frozenset({"count", "counts", "events", "admissions", "births", "deaths"})
-DIAGNOSTIC_CODE_COLUMNS: frozenset[str] = frozenset({
-    "underlying_icd_norm",
-    "associated_conditions_norm",
-    "principal_icd_norm",
-    "anomaly_icd_code",
-})
-
-
 class EFGMaterializationError(ValueError):
     """Raised when substrate-to-EFG metadata materialization is invalid."""
 
@@ -135,7 +127,7 @@ def _safe_aggregation(value: str) -> Literal[
 def _is_diagnostic_candidate(candidate: SubstrateFieldCandidate) -> bool:
     roles = {str(role) for role in candidate.role}
     return (
-        str(candidate.column) in DIAGNOSTIC_CODE_COLUMNS
+        str(candidate.quality_role) == "diagnostic_code"
         or str(candidate.unit) == "ICD10"
         or "diagnostic_topology" in roles
     )
@@ -178,7 +170,7 @@ def classify_substrate_candidate_kind(candidate: SubstrateFieldCandidate) -> Lit
 def support_from_substrate_candidate(candidate: SubstrateFieldCandidate) -> dict[str, Any]:
     """Build a conservative support descriptor without fabricating axes."""
 
-    return {
+    support = {
         "support_kind": "source_artifact_column",
         "source_system": candidate.source_system,
         "artifact_path": candidate.artifact_path,
@@ -190,6 +182,12 @@ def support_from_substrate_candidate(candidate: SubstrateFieldCandidate) -> dict
         "numeric_min": candidate.numeric_min,
         "numeric_max": candidate.numeric_max,
     }
+    roles = {str(role) for role in candidate.role}
+    if "time" in candidate.axes or "time_axis_candidate" in roles:
+        support["time_column"] = candidate.column
+    if "geography" in candidate.axes or "geography_axis" in roles:
+        support["geography_column"] = candidate.column
+    return support
 
 
 def materialize_candidate_field(candidate: SubstrateFieldCandidate) -> SubstrateMaterializedField:

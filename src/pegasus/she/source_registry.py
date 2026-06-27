@@ -22,14 +22,6 @@ from pegasus.registries.source_fields import (
 )
 
 
-DIAGNOSTIC_CODE_COLUMNS: frozenset[str] = frozenset({
-    "underlying_icd_norm",
-    "associated_conditions_norm",
-    "principal_icd_norm",
-    "anomaly_icd_code",
-})
-
-
 class CarrierId(str):
     """Canonical registry carrier ID with legacy equality compatibility.
 
@@ -178,7 +170,7 @@ def _spec_from_entry(entry: SourceFieldRegistryEntry) -> SourceFieldSpec:
     role = _tuple(entry.role)
     warning = entry.warning
 
-    if column_name in DIAGNOSTIC_CODE_COLUMNS or str(entry.quality_role) == "diagnostic_code":
+    if str(entry.quality_role) == "diagnostic_code":
         unit = "ICD10"
         aggregation = "non_aggregable"
         if "diagnostic_topology" not in role:

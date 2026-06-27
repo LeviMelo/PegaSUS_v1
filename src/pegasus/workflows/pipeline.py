@@ -420,7 +420,19 @@ def _compendium_enabled(intent: UserIntent) -> bool:
 
 
 def _selected_compendium_tables() -> tuple[Any, ...]:
-    return select_compendium_tables(load_sidra_compendium(), tiers=("T1_CORE",))
+    return select_compendium_tables(load_sidra_compendium())
+
+
+def _compendium_selection_summary(selected: tuple[Any, ...]) -> dict[str, Any]:
+    tiers: dict[str, int] = {}
+    for table in selected:
+        tier = str(getattr(table, "tier", "UNKNOWN"))
+        tiers[tier] = tiers.get(tier, 0) + 1
+    return {
+        "scope": "default_keep_catalogue",
+        "selected_table_count": len(selected),
+        "selected_tiers": dict(sorted(tiers.items())),
+    }
 
 
 def _plan_sidra_compendium_from_metadata(
@@ -488,7 +500,7 @@ def _acquire_sidra_compendium_context(
             "compendium_request": plan.as_manifest(),
         })
         chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
-        work_dir = data_root / "sidra" / "context" / f"tier=T1_CORE" / f"uf={uf}" / f"table={plan.table_id}"
+        work_dir = data_root / "sidra" / "context" / f"tier={plan.tier}" / f"uf={uf}" / f"table={plan.table_id}"
         work_dir.mkdir(parents=True, exist_ok=True)
         results = extract_chunk_plan(
             chunks,
@@ -532,10 +544,10 @@ def _acquire_sidra_compendium_context(
             "SIDRA compendium acquisition produced no context_facts artifacts; "
             f"blocked={ [b.as_manifest() for b in blocked[:10]] }"
         )
+    selection = _compendium_selection_summary(selected)
     return artifacts, {
         "status": "success" if artifacts else "blocked",
-        "tier": "T1_CORE",
-        "selected_table_count": len(selected),
+        **selection,
         "planned_table_count": len(plans),
         "artifact_count": len(artifacts),
         "artifacts": acquired,
@@ -552,13 +564,13 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
     from pegasus.geo.uf import resolve_uf_code
     sidra_compendium_plan: dict[str, Any]
     selected = _selected_compendium_tables()
+    selection = _compendium_selection_summary(selected)
     try:
         metadata = read_normalized_metadata_tables("data/metadata/sidra/normalized")
         plans, blocked = _plan_sidra_compendium_from_metadata(intent=intent, uf=uf, metadata=metadata)
         sidra_compendium_plan = {
             "enabled": _compendium_enabled(intent),
-            "tier": "T1_CORE",
-            "selected_table_count": len(selected),
+            **selection,
             "planned_table_count": len(plans),
             "planned_tables": [plan.as_manifest() for plan in plans],
             "blocked": [item.as_manifest() for item in blocked],
@@ -567,8 +579,7 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
     except Exception as exc:
         sidra_compendium_plan = {
             "enabled": _compendium_enabled(intent),
-            "tier": "T1_CORE",
-            "selected_table_count": len(selected),
+            **selection,
             "planned_table_count": 0,
             "planned_tables": [],
             "blocked": [

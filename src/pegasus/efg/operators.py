@@ -184,6 +184,28 @@ def _source_hashes(parents: list[FieldNode]) -> list[str]:
     )
 
 
+def _support_axis_columns(parents: list[FieldNode]) -> dict[str, str]:
+    """Carry registry-declared support-axis columns into derived operators.
+
+    Source fields already know their raw column in ``support.column`` and their
+    semantic axis in ``axes``/``role``. The physical executor should not guess
+    source-specific names; it consumes these canonical declarations.
+    """
+
+    output: dict[str, str] = {}
+    for parent in parents:
+        column = parent.support.get("column")
+        if not column:
+            continue
+        roles = set(parent.role or [])
+        axes = dict(parent.axes or {})
+        if "time" in axes or "time_axis_candidate" in roles:
+            output.setdefault("time_column", str(column))
+        if "geography" in axes or "geography_axis" in roles:
+            output.setdefault("geography_column", str(column))
+    return output
+
+
 def _result_for_field(field: FieldNode) -> OperatorResult:
     return OperatorResult(
         status="success",
@@ -242,6 +264,7 @@ def apply_operator(
         support.update({
             "support_kind": "source_artifact_event_count",
             "source_columns": sorted({str(p.support.get("column")) for p in parents}),
+            **_support_axis_columns(parents),
         })
         axes: dict[str, Any] = {}
         for item in parents:
@@ -319,6 +342,7 @@ def apply_operator(
             "support_kind": "source_artifact_statistical_functional",
             "functional": functional,
             "mark_column": mark_column,
+            **_support_axis_columns(parents),
         })
         axes = {}
         for item in parents:

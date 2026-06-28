@@ -95,6 +95,13 @@ def project_and_bound_context_facts(
             rows=0,
             metadata={
                 "status": "projected_empty",
+                "high_dimensional": False,
+                "estimated_cells_raw": 0,
+                "high_dimensional_bound": {
+                    "status": "not_required",
+                    "reason": "sidra_context_empty",
+                    "operator": "sidra_context_total_only_projection",
+                },
                 "pushforward_status": "not_required",
                 "projection_matrix_id": "sidra_context_total_only_v1",
                 "warnings": ["sidra_context_empty"],
@@ -150,10 +157,22 @@ def project_and_bound_context_facts(
     out_path = Path(output_path) if output_path is not None else facts_path.with_name(f"{facts_path.stem}.projected.parquet")
     projected = pl.DataFrame(rows) if rows else frame.head(0)
     projected.write_parquet(out_path)
+    estimated_cells_raw = int(frame.height)
+    high_dimensional = estimated_cells_raw > 49_900
+    bound_status = "bounded" if high_dimensional else "not_required"
     metadata = {
         "status": "projected",
         "projection_matrix_id": "sidra_context_total_only_v1",
         "total_category_policy": "total_only_view",
+        "high_dimensional": high_dimensional,
+        "estimated_cells_raw": estimated_cells_raw,
+        "high_dimensional_bound": {
+            "status": bound_status,
+            "reason": "total-only SIDRA context projection" if high_dimensional else "raw SIDRA context is below high-dimensional bound threshold",
+            "operator": "sidra_context_total_only_projection",
+            "input_cells": estimated_cells_raw,
+            "output_cells": int(projected.height),
+        },
         "pushforward_status": "not_required_total_only",
         "source_path": str(facts_path),
         "projected_path": str(out_path),

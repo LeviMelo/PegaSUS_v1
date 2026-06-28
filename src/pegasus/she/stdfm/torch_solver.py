@@ -10,7 +10,6 @@ from pegasus.compute.kernels import tensor_nbytes
 from pegasus.compute.random import seed_everything
 from pegasus.compute.torch_backend import torch_runtime
 from pegasus.core.exceptions import ComputeBackendError
-from pegasus.she.stdfm.blocked import blocked_solver_pending
 from pegasus.she.stdfm.objective import transform_observations, validate_stdfm_problem
 from pegasus.she.stdfm.schema import (
     STDFMFitResult,
@@ -226,10 +225,7 @@ def solve_stdfm(
     tolerance: float = 5e-5,
 ) -> STDFMOutputSchema | STDFMFitResult:
     if problem is None:
-        return blocked_solver_pending(
-            field_id=input_schema.field_id,
-            reason="ST-DFM numerical observations and masks were not supplied.",
-        )
+        raise ValueError("ST-DFM numerical observations and masks were not supplied.")
     validate_stdfm_problem(problem)
     if input_schema.observation_shape != problem.shape[:2]:
         raise ValueError("ST-DFM input schema support does not match numerical problem support.")
@@ -242,8 +238,8 @@ def solve_stdfm(
             estimated_bytes=tensor_nbytes(problem.shape, copies=12),
         )
         torch, device, dtype = torch_runtime(plan)
-    except ComputeBackendError as exc:
-        return blocked_solver_pending(field_id=input_schema.field_id, reason=str(exc))
+    except ComputeBackendError:
+        raise
     transformed, transform_warnings = transform_observations(problem)
     fits = [
         _fit_start(

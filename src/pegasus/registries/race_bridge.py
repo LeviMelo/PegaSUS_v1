@@ -214,7 +214,7 @@ def select_compile_race_bridge_prior(
             continue
         if entry.source_axis != source_axis or entry.target_axis != target_axis:
             continue
-        if entry.mode != "fixedC_dynamic_weight":
+        if entry.mode != "localPi_posteriorC":
             continue
         if "*" not in entry.region_scope and uf not in entry.region_scope:
             continue

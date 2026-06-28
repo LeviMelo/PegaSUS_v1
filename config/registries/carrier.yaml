@@ -9,9 +9,12 @@ carriers:
     default_aggregation: additive
   LiveBirths:
     label: Live birth events
-    description: Individual live-birth events and derived live-birth counts from SINASC.
+    description: Individual live-birth events, derived live-birth counts, and SINASC marked functional primitives.
     allowed_units:
     - counts
+    - grams
+    - weeks
+    - score
     default_aggregation: additive
   HospitalAdmissions:
     label: Hospital admissions

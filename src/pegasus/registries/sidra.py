@@ -6,7 +6,13 @@ from pathlib import Path
 
 from pegasus.registries.generic import RegistryEntry, active_entries, get_entry, load_entries, registry_manifest
 
-REGISTRY_FILES = ('sidra_registry.yaml', 'sidra.yaml', 'sidra_tables.yaml')
+REGISTRY_FILES = (
+    "sidra_views.yaml",
+    "sidra_category_maps.yaml",
+    "sidra_stitching.yaml",
+    "sidra_regime_registry.yaml",
+    "sidra_table_seed.jsonl",
+)
 
 
 def load_sidra_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:

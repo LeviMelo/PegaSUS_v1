@@ -21,7 +21,16 @@ from pegasus.core.io_utils import _compact, _hash_payload, _load_json, _safe_id,
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pegasus.compute.glm import GLMError, crossfit_residuals, fit_glm, select_count_family
+from pegasus.compute.glm import (
+    GLMError,
+    _predict_residuals,
+    crossfit_residuals,
+    fit_glm,
+    fit_glm_penalized,
+    make_blocked_folds,
+    select_count_family,
+)
+from pegasus.geo.adjacency import load_adjacency
 
 # Count families eligible for §6.2 data-aware routing and log-exposure offsets.
 _COUNT_FAMILIES = {"poisson_count_with_log_offset", "negative_binomial", "quasi_poisson", "hurdle_poisson", "hurdle_nb"}
@@ -35,6 +44,7 @@ DEFAULT_MODEL_MANIFEST = Path("Tables") / "pirs_model_execution_manifest.json"
 DEFAULT_COEFFICIENTS = Path("Tables") / "pirs_model_coefficients.parquet"
 DEFAULT_FITTED_VALUES = Path("Tables") / "pirs_fitted_values.parquet"
 DEFAULT_RESIDUAL_VALUES = Path("Tables") / "pirs_residual_values.parquet"
+DEFAULT_SUPPORT_INDEX = Path("Tables") / "support_index.parquet"
 MODEL_GATE_KEY = "pirs_model_execution_gate"
 JSON_ATTACH_TARGETS: tuple[str, ...] = (
     "RunConfig.json",
@@ -68,13 +78,26 @@ def _field_id_by_role(manifest: Mapping[str, Any], role: str) -> str | None:
 
 
 def _covariate_field_ids(manifest: Mapping[str, Any]) -> list[str]:
-    return [str(spec.get("field_id")) for spec in _field_specs(manifest) if spec.get("role") == "covariate" and spec.get("field_id") not in (None, "")]
+    return [
+        str(spec.get("field_id"))
+        for spec in _field_specs(manifest)
+        if spec.get("role") in {"covariate", "spatial_effect"} and spec.get("field_id") not in (None, "")
+    ]
 
 
 def _matrix_path(run_dir: Path, manifest: Mapping[str, Any]) -> Path:
     raw = manifest.get("matrix_path")
     if raw in (None, ""):
         return run_dir / "Tables" / "pirs_design_matrix.parquet"
+    path = Path(str(raw))
+    if path.is_absolute() or path.exists():
+        return path
+    return run_dir / path
+
+
+def _resolve_run_path(run_dir: Path, raw: Any) -> Path | None:
+    if raw in (None, ""):
+        return None
     path = Path(str(raw))
     if path.is_absolute() or path.exists():
         return path
@@ -109,14 +132,185 @@ def _design_columns(manifest: Mapping[str, Any], rows: Sequence[Mapping[str, Any
         return "response", [], None
     columns = set(rows[0].keys())
     response = "response" if "response" in columns else "outcome"
-    covariates = [spec.get("column") for spec in _field_specs(manifest) if spec.get("role") == "covariate"]
+    covariates = [
+        spec.get("column")
+        for spec in _field_specs(manifest)
+        if spec.get("role") in {"covariate", "spatial_effect"}
+    ]
     covariates = [str(col) for col in covariates if col in columns]
     if not covariates:
-        covariates = sorted(col for col in columns if str(col).startswith("covariate_"))
+        covariates = sorted(col for col in columns if str(col).startswith(("covariate_", "spatial_")))
     offset = next((str(spec.get("column")) for spec in _field_specs(manifest) if spec.get("role") == "offset" and spec.get("column") in columns), None)
     if offset is None and "offset" in columns:
         offset = "offset"
     return response, covariates, offset
+
+
+def _spatial_effect(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    spatial = manifest.get("spatial_effect")
+    payload = dict(spatial) if isinstance(spatial, Mapping) else {}
+    if "mode" not in payload:
+        payload["mode"] = manifest.get("spatial_effect_mode") or "none"
+    return payload
+
+
+def _support_rows(run_dir: Path) -> list[dict[str, Any]]:
+    return _read_rows(run_dir / DEFAULT_SUPPORT_INDEX)
+
+
+def _municipality_for_row(row: Mapping[str, Any], support_rows: Sequence[Mapping[str, Any]]) -> str | None:
+    for key in ("municipality_cod6", "municipality", "mun_residence_cod6", "mun_occurrence_cod6", "ibge_cod7"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)[:6]
+    try:
+        support = support_rows[int(row.get("row_id", -1))]
+    except (TypeError, ValueError, IndexError):
+        return None
+    for key in ("municipality_cod6", "municipality", "mun_residence_cod6", "mun_occurrence_cod6", "ibge_cod7"):
+        value = support.get(key)
+        if value not in (None, ""):
+            return str(value)[:6]
+    return None
+
+
+def _icar_design(
+    *,
+    run_dir: Path,
+    manifest: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    X: np.ndarray,
+    term_names: list[str],
+) -> tuple[np.ndarray, np.ndarray, list[str], dict[str, Any]]:
+    spatial = _spatial_effect(manifest)
+    adjacency_path = _resolve_run_path(run_dir, spatial.get("adjacency_path") or spatial.get("geo_adjacency_path"))
+    if adjacency_path is None:
+        raise PIRSModelExecutionError("icar_spatial_effect_requires_adjacency_path")
+    adjacency = load_adjacency(adjacency_path)
+    support = _support_rows(run_dir)
+    municipalities = [_municipality_for_row(row, support) for row in rows]
+    missing = sum(1 for value in municipalities if value in (None, ""))
+    if missing:
+        raise PIRSModelExecutionError(f"icar_spatial_effect_missing_municipality_support:{missing}_rows")
+    categories = sorted({str(value) for value in municipalities if value not in (None, "")})
+    if not categories:
+        raise PIRSModelExecutionError("icar_spatial_effect_empty_municipality_support")
+    index = {mun: i for i, mun in enumerate(categories)}
+    n, p = X.shape
+    m = len(categories)
+    Z = np.zeros((n, m), dtype=float)
+    for row_idx, mun in enumerate(municipalities):
+        Z[row_idx, index[str(mun)]] = 1.0
+
+    laplacian = np.zeros((m, m), dtype=float)
+    missing_nodes: list[str] = []
+    for mun in categories:
+        neighbors = [nb for nb in adjacency.get(mun, ()) if nb in index]
+        if mun not in adjacency:
+            missing_nodes.append(mun)
+        i = index[mun]
+        laplacian[i, i] = float(len(neighbors))
+        for nb in neighbors:
+            laplacian[i, index[nb]] -= 1.0
+    tau = float(spatial.get("icar_precision") or spatial.get("tau") or 1.0)
+    ridge = float(spatial.get("icar_ridge") or 1e-6)
+    penalty = np.zeros((p + m, p + m), dtype=float)
+    penalty[p:, p:] = tau * laplacian + ridge * np.eye(m)
+    X_aug = np.column_stack([X, Z])
+    terms = [*term_names, *[f"ICAR[{mun}]" for mun in categories]]
+    manifest_payload = {
+        "mode": "ICAR",
+        "executed": True,
+        "adjacency_path": str(adjacency_path),
+        "municipality_count": m,
+        "municipalities": categories,
+        "tau": tau,
+        "ridge": ridge,
+        "missing_adjacency_nodes": missing_nodes,
+        "penalty": "graph_laplacian_precision",
+    }
+    return X_aug, penalty, terms, manifest_payload
+
+
+def _icar_prediction_matrix(
+    *,
+    run_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+    X: np.ndarray,
+    categories: Sequence[str],
+) -> np.ndarray:
+    support = _support_rows(run_dir)
+    index = {str(mun): i for i, mun in enumerate(categories)}
+    Z = np.zeros((len(rows), len(index)), dtype=float)
+    for row_idx, row in enumerate(rows):
+        mun = _municipality_for_row(row, support)
+        if mun in index:
+            Z[row_idx, index[str(mun)]] = 1.0
+    return np.column_stack([X, Z])
+
+
+def _crossfit_icar_residuals(
+    *,
+    run_dir: Path,
+    manifest: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    y: np.ndarray,
+    X: np.ndarray,
+    family: str,
+    offset: np.ndarray | None,
+    term_names: list[str],
+    n_folds: int = 5,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    n = len(rows)
+    folds = make_blocked_folds(n, n_folds=n_folds, block_index=None)
+    oof = np.full(n, np.nan)
+    used = 0
+    for test_idx in folds:
+        train_idx = np.setdiff1d(np.arange(n), test_idx, assume_unique=False)
+        if train_idx.size <= X.shape[1] + 1:
+            continue
+        train_rows = [rows[int(i)] for i in train_idx]
+        test_rows = [rows[int(i)] for i in test_idx]
+        X_train, penalty, fit_terms, spatial_fit = _icar_design(
+            run_dir=run_dir,
+            manifest=manifest,
+            rows=train_rows,
+            X=X[train_idx],
+            term_names=term_names,
+        )
+        fit = fit_glm_penalized(
+            y=y[train_idx],
+            X=X_train,
+            family=family,
+            penalty=penalty,
+            offset=None if offset is None else offset[train_idx],
+            term_names=fit_terms,
+        )
+        X_test = _icar_prediction_matrix(
+            run_dir=run_dir,
+            rows=test_rows,
+            X=X[test_idx],
+            categories=spatial_fit["municipalities"],
+        )
+        oof[test_idx] = _predict_residuals(
+            fit=fit,
+            y=y[test_idx],
+            X=X_test,
+            offset=None if offset is None else offset[test_idx],
+            prior_weights=None,
+            family=family,
+            residual_type=fit.residual_type,
+        )
+        used += 1
+    return oof, {
+        "residual_mode": "cross_fitted",
+        "residual_type": "icar_penalized",
+        "n_folds_used": used,
+        "fold_coverage": float(np.mean(~np.isnan(oof))) if n else 0.0,
+        "block_preserving": False,
+        "spatial_effect_mode": "ICAR",
+        "in_sample": False,
+    }
 
 
 _MISSING_TOKENS: frozenset[str] = frozenset({"", "nan", "inf", "-inf", "none", "null", "na"})
@@ -190,6 +384,8 @@ def _block_index(rows: Sequence[Mapping[str, Any]]) -> list[int] | None:
 
 def _fit_model(
     *,
+    run_dir: Path,
+    manifest: Mapping[str, Any],
     rows: Sequence[Mapping[str, Any]],
     response_column: str,
     covariate_columns: Sequence[str],
@@ -207,6 +403,8 @@ def _fit_model(
     y, X, term_names, missing_warnings, missing_shares = _build_design(
         rows=rows, response_column=response_column, covariate_columns=covariate_columns
     )
+    spatial_manifest = _spatial_effect(manifest)
+    spatial_mode = str(spatial_manifest.get("mode") or "none")
     requested_family = family
     # Data-aware family routing (MSD §6.2): refine count families to hurdle/NB by the
     # observed zero-mass and dispersion. The actually-fitted family is recorded honestly.
@@ -223,13 +421,32 @@ def _fit_model(
         raise PIRSModelExecutionError(f"count PIRS response contains negative values for family {family}")
 
     try:
-        fit = fit_glm(
-            y=y,
-            X=X,
-            family=family,
-            offset=offset_vec if log_offset else None,
-            term_names=term_names,
-        )
+        if spatial_mode == "ICAR":
+            X_fit, penalty, fit_terms, spatial_fit = _icar_design(
+                run_dir=run_dir,
+                manifest=manifest,
+                rows=rows,
+                X=X,
+                term_names=term_names,
+            )
+            fit = fit_glm_penalized(
+                y=y,
+                X=X_fit,
+                family=family,
+                penalty=penalty,
+                offset=offset_vec if log_offset else None,
+                term_names=fit_terms,
+            )
+            spatial_manifest = spatial_fit
+            missing_warnings.append("icar_penalized_irls_spatial_random_effect")
+        else:
+            fit = fit_glm(
+                y=y,
+                X=X,
+                family=family,
+                offset=offset_vec if log_offset else None,
+                term_names=term_names,
+            )
     except GLMError as exc:
         raise PIRSModelExecutionError(f"glm_fit_failed:{family}:{exc}") from exc
 
@@ -237,7 +454,7 @@ def _fit_model(
     residual_vector = in_sample_residual
     actual_mode = "in_sample"
     crossfit_diag: dict[str, Any] = {}
-    if residual_mode in {"cross_fitted", "parametric_bootstrap"}:
+    if residual_mode in {"cross_fitted", "parametric_bootstrap"} and spatial_mode != "ICAR":
         oof, crossfit_diag = crossfit_residuals(
             y=y,
             X=X,
@@ -264,6 +481,30 @@ def _fit_model(
         else:
             actual_mode = "cross_fitted"
         residual_vector = oof
+    elif residual_mode in {"cross_fitted", "parametric_bootstrap"} and spatial_mode == "ICAR":
+        oof, crossfit_diag = _crossfit_icar_residuals(
+            run_dir=run_dir,
+            manifest=manifest,
+            rows=rows,
+            y=y,
+            X=X,
+            family=family,
+            offset=offset_vec if log_offset else None,
+            term_names=term_names,
+        )
+        nan_mask = np.isnan(oof)
+        if nan_mask.any():
+            oof = oof.copy()
+            oof[nan_mask] = in_sample_residual[nan_mask]
+            backfilled = int(nan_mask.sum())
+            crossfit_diag["in_sample_backfilled_rows"] = backfilled
+            actual_mode = "cross_fitted_icar_with_in_sample_backfill"
+            missing_warnings.append(
+                f"icar_residual_mode_mixed_cross_fitted_and_in_sample_backfill:{backfilled}_rows"
+            )
+        else:
+            actual_mode = "cross_fitted_icar"
+        residual_vector = oof
 
     residual = residual_vector
     return {
@@ -277,7 +518,7 @@ def _fit_model(
         "rmse": float(math.sqrt(float(np.mean(np.square(residual))))) if len(residual) else None,
         "mean_residual": float(np.mean(residual)) if len(residual) else None,
         "sigma": float(np.std(residual, ddof=1)) if len(residual) > 1 else 0.0,
-        "solver": f"glm_irls:{family}",
+        "solver": f"glm_irls_icar_penalized:{family}" if spatial_mode == "ICAR" else f"glm_irls:{family}",
         "family_requested": requested_family,
         "family_fitted": fit.family,
         "residual_type": fit.residual_type,
@@ -289,6 +530,7 @@ def _fit_model(
         "dispersion": fit.dispersion,
         "crossfit": crossfit_diag,
         "missing_shares": missing_shares,
+        "spatial_effect": spatial_manifest,
         "warnings": missing_warnings,
     }
 
@@ -324,14 +566,24 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
     model_id = f"pirs_model_{_safe_id(outcome_field_id)}_{digest}"
     residual_field_id = f"pirs_residual_{_safe_id(outcome_field_id)}_{digest}"
     residual_mode = str(manifest.get("residual_mode") or "in_sample")
-    fit = _fit_model(
-        rows=rows,
-        response_column=response_column,
-        covariate_columns=covariate_columns,
-        offset_column=offset_column,
-        family=family,
-        residual_mode=residual_mode,
-    )
+    try:
+        fit = _fit_model(
+            run_dir=root,
+            manifest=manifest,
+            rows=rows,
+            response_column=response_column,
+            covariate_columns=covariate_columns,
+            offset_column=offset_column,
+            family=family,
+            residual_mode=residual_mode,
+        )
+    except PIRSModelExecutionError as exc:
+        return _blocking_manifest(
+            run_dir=root,
+            model_manifest_path=model_manifest_path,
+            design_matrix_manifest_path=design_manifest_path,
+            reasons=[str(exc)],
+        )
     coefficients = [{"model_id": model_id, "term": term, "coefficient": coef, "term_index": i, "family": family} for i, (term, coef) in enumerate(zip(fit["terms"], fit["coefficients"], strict=False))]
     fitted_rows = []
     residual_rows = []
@@ -383,6 +635,7 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
             "dispersion": fit.get("dispersion"),
             "missing_shares": fit.get("missing_shares"),
             "solver": fit.get("solver"),
+            "spatial_effect": fit.get("spatial_effect"),
             "irls_iterations": fit.get("irls_iterations"),
             "irls_converged": fit.get("irls_converged"),
         },

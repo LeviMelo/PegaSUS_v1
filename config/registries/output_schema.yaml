@@ -1,11 +1,162 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for output_schema.yaml; not a calibrated analytic
-  registry.
+updated_at: '2026-06-27'
+provenance: Authoritative registry mirror of the immutable 17-key output bundle contract in pegasus.output.schemas.
 entries:
-- id: immutable_17_key_bundle
-  status: stable
-  description: Exact run bundle key contract.
+- id: V_fields
+  status: active
+  filename: V_fields.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Canonical field-node table.
+  warnings: []
+- id: E_DAG
+  status: active
+  filename: E_DAG.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Field dependency DAG edge table.
+  warnings: []
+- id: Q_tensor
+  status: active
+  filename: Q_tensor.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Field diagnostic state tensor.
+  warnings: []
+- id: P_vector
+  status: active
+  filename: P_vector.json
+  artifact_type: json
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Population and denominator provenance vector.
+  warnings: []
+- id: UserIntent
+  status: active
+  filename: UserIntent.json
+  artifact_type: json
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Frozen user intent including run profile.
+  warnings: []
+- id: Warnings
+  status: active
+  filename: Warnings.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - contextual
+  - full
+  description: Bundle warnings, including empty_by_profile declarations.
+  warnings: []
+- id: ModelAssociations
+  status: active
+  filename: ModelAssociations.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - contextual
+  - full
+  description: Fitted or planned model associations.
+  warnings: []
+- id: ResidualAssociations
+  status: active
+  filename: ResidualAssociations.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - full
+  description: Residual-field associations.
+  warnings: []
+- id: Hypotheses
+  status: active
+  filename: Hypotheses.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - contextual
+  - full
+  description: HSIC and hypothesis-scan output table.
+  warnings: []
+- id: Tables
+  status: active
+  filename: Tables
+  artifact_type: directory
+  required_nonempty_profiles:
+  - contextual
+  - full
+  description: Auxiliary first-class tabular artifacts.
+  warnings: []
+- id: Maps
+  status: active
+  filename: Maps
+  artifact_type: directory
+  required_nonempty_profiles:
+  - full
+  description: Auxiliary first-class map artifacts.
+  warnings: []
+- id: VariableDictionary
+  status: active
+  filename: VariableDictionary.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Human-readable variable dictionary.
+  warnings: []
+- id: FailedBranches
+  status: active
+  filename: FailedBranches.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - full
+  description: Typed failed-operator branches.
+  warnings: []
+- id: QuarantinedFields
+  status: active
+  filename: QuarantinedFields.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - full
+  description: Quarantined field table.
+  warnings: []
+- id: ForcedFields
+  status: active
+  filename: ForcedFields.parquet
+  artifact_type: parquet
+  required_nonempty_profiles:
+  - full
+  description: User-forced field table.
+  warnings: []
+- id: RunConfig
+  status: active
+  filename: RunConfig.json
+  artifact_type: json
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Frozen runtime configuration.
+  warnings: []
+- id: ReproducibilityManifest
+  status: active
+  filename: ReproducibilityManifest.json
+  artifact_type: json
+  required_nonempty_profiles:
+  - core_vital
+  - contextual
+  - full
+  description: Reproducibility manifest and telemetry.
   warnings: []

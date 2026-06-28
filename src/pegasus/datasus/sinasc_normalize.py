@@ -245,56 +245,95 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
     first real file). Every canonical field is a Polars expression over the raw
     SINASC columns; clinical indicators (low birth weight, prematurity, cesarean,
     maternal-age bands) are computed per §2.6 definitions as 0/1 additive flags."""
-    from pegasus.datasus.normalize import _cod6, _datasus_year, _raw
-
     df = _read_table(input_path)
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    peso = _raw(df, "PESO").str.strip_chars().cast(pl.Int64, strict=False)
-    semg = _raw(df, "SEMAGESTAC").str.strip_chars().cast(pl.Int64, strict=False)
-    parto = _raw(df, "PARTO").str.strip_chars()
-    age = _raw(df, "IDADEMAE").str.strip_chars().cast(pl.Int64, strict=False)
-    sex = (
-        pl.when(_raw(df, "SEXO").str.strip_chars() == "1").then(pl.lit("male"))
-        .when(_raw(df, "SEXO").str.strip_chars() == "2").then(pl.lit("female"))
-        .otherwise(pl.lit("unknown"))
-    )
-    _peso_valid = peso.is_not_null() & (peso > 0)
-    _semg_valid = semg.is_not_null() & (semg > 0)
-    _age_valid = age.is_not_null() & (age > 0)
-
-    out = df.with_row_index("_row").with_columns(
-        pl.format("sinasc_{}_{}", pl.col("_row"), pl.lit(source_manifest_hash[:8])).alias("event_id"),
-        pl.lit("SINASC").alias("source_system"),
-        _raw(df, "DTNASC").alias("birth_date"),
-        _datasus_year(_raw(df, "DTNASC")).alias("birth_year"),
-        _cod6(_raw(df, "CODMUNRES")).alias("mun_residence_cod6"),
-        _cod6(_raw(df, "CODMUNNASC")).alias("mun_birth_cod6"),
-        pl.when(_age_valid).then(age).otherwise(None).alias("mother_age_years"),
-        _raw(df, "DTNASCMAE").alias("maternal_birth_date"),
-        sex.alias("newborn_sex"),
-        _raw(df, "RACACOR").str.strip_chars().alias("newborn_race_admin"),
-        _raw(df, "RACACORMAE").str.strip_chars().alias("maternal_race_admin"),
-        pl.when(_peso_valid & (peso < 2500)).then(1).when(_peso_valid).then(0).otherwise(None).alias("low_birth_weight_flag"),
-        pl.when(_semg_valid & (semg < 37)).then(1).when(_semg_valid).then(0).otherwise(None).alias("prematurity_flag"),
-        pl.when(parto == "2").then(1).when(parto == "1").then(0).otherwise(None).alias("cesarean_flag"),
-        pl.when(_age_valid & (age < 20)).then(1).when(_age_valid).then(0).otherwise(None).alias("adolescent_mother_flag"),
-        pl.when(_age_valid & (age >= 35)).then(1).when(_age_valid).then(0).otherwise(None).alias("advanced_maternal_age_flag"),
-        _raw(df, "CODANOMAL").str.extract(r"([A-Z][0-9]{2,3})", 1).alias("anomaly_icd_code"),
-        pl.lit(source_manifest_hash).alias("source_manifest_hash"),
-    )
-    canonical = [
-        "event_id", "source_system", "birth_date", "birth_year", "mun_residence_cod6", "mun_birth_cod6",
-        "mother_age_years", "maternal_birth_date", "newborn_sex", "newborn_race_admin", "maternal_race_admin",
-        "low_birth_weight_flag", "prematurity_flag",
-        "cesarean_flag", "adolescent_mother_flag", "advanced_maternal_age_flag",
-        "anomaly_icd_code", "source_manifest_hash",
-    ]
-    out = out.select(canonical)
+    records: list[dict[str, Any]] = []
+    for idx, row in enumerate(df.to_dicts()):
+        raw_payload = {str(k): v for k, v in row.items()}
+        birth_date, birth_year, birth_date_state = parse_sinasc_date(row.get("DTNASC"))
+        res6, res7, res_state = municipality_codes(row.get("CODMUNRES"))
+        birth6, birth7, birth_state = municipality_codes(row.get("CODMUNNASC"))
+        mother_age = int_or_none(row.get("IDADEMAE"))
+        birth_weight, birth_weight_state, _low_birth_weight = decode_birth_weight(row.get("PESO"))
+        gest_weeks, gest_state, _premature = decode_gestational_age(row.get("SEMAGESTAC"))
+        apgar1, apgar1_state, _low_apgar1 = decode_apgar(row.get("APGAR1"))
+        apgar5, apgar5_state, _low_apgar5 = decode_apgar(row.get("APGAR5"))
+        delivery_code, delivery_state, _cesarean = decode_delivery_mode(row.get("PARTO"))
+        prenatal, prenatal_state, prenatal_raw = decode_count_preserve_leading_zero(
+            row.get("CONSULTAS"),
+            sentinels={"99"},
+            upper=98,
+        )
+        anomaly_flag, anomaly_flag_state = decode_anomaly_flag(row.get("IDANOMAL"))
+        anomaly_code, anomaly_code_state, anomaly_positive = normalize_anomaly_icd(row.get("CODANOMAL"), anomaly_flag)
+        newborn_race, newborn_race_state = decode_race(row.get("RACACOR"))
+        maternal_race, maternal_race_state = decode_race(row.get("RACACORMAE"))
+        event_key = _clean(row.get("NUMERODN")) or f"{idx}_{source_manifest_hash[:8]}"
+        records.append(
+            {
+                "event_id": f"SINASC-{event_key}",
+                "source_system": "SINASC",
+                "birth_date": birth_date,
+                "birth_year": birth_year,
+                "birth_date_state": birth_date_state,
+                "mun_residence_cod6": res6,
+                "mun_residence_cod7": res7,
+                "mun_residence_state": res_state,
+                "mun_birth_cod6": birth6,
+                "mun_birth_cod7": birth7,
+                "mun_birth_state": birth_state,
+                "mother_age_years": mother_age,
+                "maternal_birth_date": _clean(row.get("DTNASCMAE")),
+                "newborn_sex": {"1": "male", "2": "female"}.get(_digits(row.get("SEXO")) or "", "unknown"),
+                "newborn_race_admin": newborn_race,
+                "newborn_race_state": newborn_race_state,
+                "maternal_race_admin": maternal_race,
+                "maternal_race_state": maternal_race_state,
+                "birth_weight_g": birth_weight,
+                "birth_weight_grams": birth_weight,
+                "birth_weight_state": birth_weight_state,
+                "gestational_weeks": gest_weeks,
+                "gestational_age_state": gest_state,
+                "apgar_1min": apgar1,
+                "apgar_1min_state": apgar1_state,
+                "apgar_5min": apgar5,
+                "apgar_5min_state": apgar5_state,
+                "delivery_mode_code": delivery_code,
+                "delivery_mode_state": delivery_state,
+                "prenatal_consult_count": prenatal,
+                "prenatal_consult_state": prenatal_state,
+                "prenatal_consult_raw_digits": prenatal_raw,
+                "prenatal_visit_group": _clean(row.get("CONSULTAS")),
+                "live_children_count": int_or_none(row.get("QTDFILVIVO")),
+                "deceased_children_count": int_or_none(row.get("QTDFILMORT")),
+                "prior_pregnancy_count": int_or_none(row.get("QTDGESTANT")),
+                "prior_vaginal_delivery_count": int_or_none(row.get("QTDPARTNOR")),
+                "prior_cesarean_delivery_count": int_or_none(row.get("QTDPARTCES")),
+                "anomaly_flag": anomaly_flag,
+                "anomaly_flag_state": anomaly_flag_state,
+                "anomaly_icd_code": anomaly_code,
+                "anomaly_icd_state": anomaly_code_state,
+                "anomaly_positive": anomaly_positive,
+                "record_state": "valid" if birth_year is not None and res6 is not None else "invalid_identity",
+                "source_manifest_hash": source_manifest_hash,
+                "row_hash": _stable_hash(raw_payload),
+                "raw_json": json.dumps(raw_payload, ensure_ascii=False, sort_keys=True, default=str),
+            }
+        )
+    out = pl.DataFrame(records, infer_schema_length=None)
     out.write_parquet(out_path)
+    valid_rows = int((out.get_column("record_state") == "valid").sum()) if out.height else 0
     return {
         "row_count": out.height,
+        "valid_rows": valid_rows,
+        "low_birth_weight_rows": int(out.filter(pl.col("birth_weight_g").is_not_null() & (pl.col("birth_weight_g") < 2500)).height) if out.height else 0,
+        "prematurity_rows": int(out.filter(pl.col("gestational_weeks").is_not_null() & (pl.col("gestational_weeks") < 37)).height) if out.height else 0,
+        "cesarean_rows": int(out.filter(pl.col("delivery_mode_code") == "2").height) if out.height else 0,
+        "low_apgar5_rows": int(out.filter(pl.col("apgar_5min").is_not_null() & (pl.col("apgar_5min") < 7)).height) if out.height else 0,
+        "insufficient_prenatal_rows": int(out.filter(pl.col("prenatal_consult_count").is_not_null() & (pl.col("prenatal_consult_count") < 7)).height) if out.height else 0,
+        "anomaly_rows": int(out.get_column("anomaly_positive").fill_null(False).sum()) if out.height else 0,
         "output_path": str(out_path),
         "column_count": len(out.columns),
         "columns": out.columns,

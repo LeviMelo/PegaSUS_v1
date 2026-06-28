@@ -22,8 +22,19 @@ ResidualMode = Literal[
 
 ModelFamily = Literal[
     "poisson_count_with_log_offset",
+    "negative_binomial",
+    "quasi_poisson",
+    "hurdle_poisson",
+    "hurdle_nb",
     "binomial_proportion",
+    "beta_binomial",
+    "dirichlet",
+    "multinomial_logit",
     "gaussian_identity",
+    "lognormal",
+    "two_part_lognormal",
+    "student_t",
+    "gamma",
     "sih_gamma_cost_component",
 ]
 

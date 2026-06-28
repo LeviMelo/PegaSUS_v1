@@ -3,7 +3,12 @@ from pathlib import Path
 import pytest
 
 from pegasus.core.exceptions import MemoryPreflightError
-from pegasus.registries.population import PopulationTensorScaleError, get_population_solver, select_population_solver
+from pegasus.registries.population import (
+    PopulationSolverUnavailableError,
+    PopulationTensorScaleError,
+    get_population_solver,
+    select_population_solver,
+)
 from pegasus.she.population.schema import PopulationObjectiveWeights, PopulationTensorProblem
 from pegasus.she.population.solvers import (
     dense_national_abort_check,
@@ -11,7 +16,7 @@ from pegasus.she.population.solvers import (
     solve_population_tensor_problem,
 )
 from pegasus.she.population.sparse_admm import plan_sparse_population_solver, solve_sparse_population
-from pegasus.she.population.state_space import build_population_state_space
+from pegasus.she.population.state_space import build_population_state_space, solve_population_state_space_smoother
 from pegasus.sidra.facts import normalize_fixture_json_to_facts
 
 
@@ -30,6 +35,14 @@ def test_population_solver_registry_selects_independent_mode():
     spec = select_population_solver(mode="independent_denominator")
     assert spec.solver_id == "projected_gradient_small_v1"
     assert get_population_solver(spec.solver_id).sparse_jacobian is True
+
+
+def test_population_solver_refuses_legacy_scaffold_backend():
+    with pytest.raises(PopulationSolverUnavailableError, match="population_solver_unavailable_for_scale"):
+        select_population_solver(
+            mode="sim_informed_denominator",
+            solver_id="sim_informed_sparse_admm_scaffold_v1",
+        )
 
 
 def test_independent_population_tensor_solves_from_sidra_anchor(tmp_path: Path):
@@ -144,6 +157,23 @@ def test_sparse_state_space_records_transition_and_constraint_groups():
     assert len(state.birth_edges) == 4
     assert len(state.race_groups) == 12
     assert len(state.closure_groups) == 4
+
+
+def test_reduced_state_space_smoother_fills_missing_cohort_path():
+    problem = PopulationTensorProblem(
+        shape=(1, 3, 3, 1, 1),
+        anchors=(100.0, None, None, None, 91.0, None, None, None, 84.0),
+        hard_anchor_mask=(True, False, False, False, True, False, False, False, True),
+        closure_totals=(100.0, 91.0, 84.0),
+        migration_bounds=(0.0,) * 9,
+        weights=PopulationObjectiveWeights(death=0.0),
+    )
+    smoothed = solve_population_state_space_smoother(problem)
+    assert smoothed.result.telemetry.converged is True
+    assert smoothed.result.population[0] == pytest.approx(100.0)
+    assert sum(smoothed.result.population[3:6]) == pytest.approx(91.0)
+    assert sum(smoothed.result.population[6:9]) == pytest.approx(84.0)
+    assert smoothed.as_manifest()["solver_backend"] == "state_space_smoother_reduced_rts"
 
 
 def test_sparse_population_memory_preflight_aborts():

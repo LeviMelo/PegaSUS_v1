@@ -20,6 +20,26 @@ def validate_registry_file(path: str | Path) -> list[str]:
     path = Path(path)
     errors: list[str] = []
 
+    if path.name in {"carrier.yaml", "unit.yaml", "aggregation.yaml", "provenance.yaml"}:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            return [f"{path.name}: registry is not a mapping"]
+        if "schema_version" not in data:
+            errors.append(f"{path.name}: missing schema_version")
+        if "registry_id" not in data:
+            errors.append(f"{path.name}: missing registry_id")
+        semantic_key = {
+            "carrier.yaml": "carriers",
+            "unit.yaml": "units",
+            "aggregation.yaml": "aggregations",
+            "provenance.yaml": "provenance_tags",
+        }[path.name]
+        values = data.get(semantic_key)
+        if not isinstance(values, dict) or not values:
+            errors.append(f"{path.name}: missing nonempty {semantic_key}")
+        return errors
+
     if path.name == "registry_manifest.yaml":
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -70,10 +90,10 @@ def validate_registry_tree(root: str | Path = "config/registries") -> list[str]:
         "registry_manifest.yaml",
         "source_fields.yaml",
         "composite_decoders.yaml",
-        "carrier_registry.yaml",
-        "unit_registry.yaml",
-        "aggregation_registry.yaml",
-        "provenance_registry.yaml",
+        "carrier.yaml",
+        "unit.yaml",
+        "aggregation.yaml",
+        "provenance.yaml",
         "quality_permissions.yaml",
         "race_axis_registry.yaml",
         "race_bridge_priors.yaml",

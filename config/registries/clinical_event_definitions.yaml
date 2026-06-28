@@ -200,7 +200,7 @@ entries:
     of_carrier: LiveBirths
     predicate: low_birth_weight
     conditions:
-    - {column: low_birth_weight_flag, op: is_true}
+    - {column: birth_weight_grams, op: lt, value: 2500}
   denominator_carriers:
   - LiveBirths
   default_aggregation: additive
@@ -221,7 +221,7 @@ entries:
     of_carrier: LiveBirths
     predicate: prematurity
     conditions:
-    - {column: prematurity_flag, op: is_true}
+    - {column: gestational_weeks, op: lt, value: 37}
   denominator_carriers:
   - LiveBirths
   default_aggregation: additive
@@ -242,7 +242,7 @@ entries:
     of_carrier: LiveBirths
     predicate: congenital_anomaly
     conditions:
-    - {column: congenital_anomaly_flag, op: is_true}
+    - {column: anomaly_positive, op: is_true}
   denominator_carriers:
   - LiveBirths
   default_aggregation: additive
@@ -263,7 +263,7 @@ entries:
     of_carrier: LiveBirths
     predicate: cesarean
     conditions:
-    - {column: cesarean_flag, op: is_true}
+    - {column: delivery_mode_code, op: eq, value: "2"}
   denominator_carriers: [LiveBirths]
   default_aggregation: additive
   allowed_rates: [birth_outcome_share]
@@ -282,7 +282,7 @@ entries:
     of_carrier: LiveBirths
     predicate: low_apgar1
     conditions:
-    - {column: low_apgar1_flag, op: is_true}
+    - {column: apgar_1min, op: lt, value: 7}
   denominator_carriers: [LiveBirths]
   default_aggregation: additive
   allowed_rates: [birth_outcome_share]
@@ -301,7 +301,7 @@ entries:
     of_carrier: LiveBirths
     predicate: low_apgar5
     conditions:
-    - {column: low_apgar5_flag, op: is_true}
+    - {column: apgar_5min, op: lt, value: 7}
   denominator_carriers: [LiveBirths]
   default_aggregation: additive
   allowed_rates: [birth_outcome_share]

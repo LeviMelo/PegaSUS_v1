@@ -17,6 +17,18 @@ units:
     dimension: duration
     additive: true
     description: Hospital stay or ICU days when summed over admissions.
+  weeks:
+    dimension: duration
+    additive: false
+    description: Gestational duration in completed weeks; used as a marked functional primitive.
+  grams:
+    dimension: mass
+    additive: false
+    description: Birth weight in grams; used as a marked functional primitive.
+  score:
+    dimension: ordinal_score
+    additive: false
+    description: Bounded clinical score such as Apgar; used as a marked functional primitive.
   BRL:
     dimension: currency
     additive: true

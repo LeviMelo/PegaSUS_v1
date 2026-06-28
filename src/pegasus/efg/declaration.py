@@ -34,6 +34,24 @@ def _race_axis(field: FieldNode | None) -> str | None:
     )
 
 
+def _race_metadata_required(field: FieldNode | None) -> bool:
+    """Detect race-stratified operands whose declaration axis must be explicit."""
+    if field is None:
+        return False
+    roles = {str(value).casefold() for value in (field.role or [])}
+    sources = {str(value).casefold() for value in (field.source or [])}
+    axes = {str(key).casefold(): str(value).casefold() for key, value in (field.axes or {}).items()}
+    support = {str(key).casefold(): str(value).casefold() for key, value in (field.support or {}).items()}
+    text = " ".join([
+        " ".join(roles),
+        " ".join(sources),
+        " ".join(f"{key}={value}" for key, value in axes.items()),
+        " ".join(f"{key}={value}" for key, value in support.items()),
+    ])
+    tokens = ("race", "raca", "raça", "cor_raca", "cor/raça", "race_axis")
+    return any(token in text for token in tokens)
+
+
 def _bridge_applied(field: FieldNode) -> bool:
     provenance = set(field.provenance or [])
     operators = {field.operator} if field.operator else set()
@@ -51,6 +69,7 @@ def _bridge_applied(field: FieldNode) -> bool:
             "Bridge_R",
             "Bridge_R_fixedC_dynamicW",
             "Bridge_R_posteriorC",
+            "Bridge_R_localPi_posteriorC",
         }
     ) or "race_bridge_applied" in warnings
 
@@ -67,9 +86,37 @@ def evaluate_declaration_compatibility(
 
     numerator_race = _race_axis(numerator)
     denominator_race = _race_axis(denominator)
+    numerator_requires_race_axis = _race_metadata_required(numerator)
+    denominator_requires_race_axis = _race_metadata_required(denominator)
+
+    if numerator_race is None and denominator_race is None:
+        if numerator_requires_race_axis or denominator_requires_race_axis:
+            return DeclarationResult(
+                ok=False,
+                failed_terms=["declaration"],
+                warnings=["race_axis_declaration_unverifiable"],
+                reason=(
+                    "Race-stratified RN declaration lacks explicit race_axis_type "
+                    f"metadata: numerator_required={numerator_requires_race_axis}; "
+                    f"denominator_required={denominator_requires_race_axis}."
+                ),
+            )
+        return DeclarationResult(ok=True, failed_terms=[], warnings=[])
 
     if numerator_race is None or denominator_race is None:
-        return DeclarationResult(ok=True, failed_terms=[], warnings=[])
+        return DeclarationResult(
+            ok=False,
+            failed_terms=["declaration"],
+            warnings=[
+                "race_axis_declaration_unverifiable"
+                if numerator_requires_race_axis or denominator_requires_race_axis
+                else "race_axis_metadata_missing_fail_closed"
+            ],
+            reason=(
+                f"Race-axis metadata missing for RN declaration: "
+                f"numerator={numerator_race}; denominator={denominator_race}."
+            ),
+        )
 
     if numerator_race == denominator_race:
         return DeclarationResult(ok=True, failed_terms=[], warnings=[])

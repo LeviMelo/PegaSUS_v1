@@ -10,6 +10,25 @@ from pegasus.sidra.api import SidraClient
 from pegasus.sidra.schemas import SIDRAMetadata, SIDRATableMetadata
 
 
+def fixture_sidra_metadata() -> SIDRAMetadata:
+    """Deterministic SIDRA metadata fixture for local planner/hash tests."""
+    table = SIDRATableMetadata(
+        table_id="9606",
+        name="Populacao residente",
+        variables=["93"],
+        periods=["2022"],
+        locality_levels=["N6"],
+        localities_by_level={"N6": ["2704302", "2700300"]},
+        classifications={
+            "2": ["6794"],
+            "86": ["95251"],
+            "287": ["100362"],
+        },
+        units_by_variable={"93": "Pessoas"},
+    )
+    return SIDRAMetadata(tables={"9606": table})
+
+
 def load_table_seed(path: str | Path) -> list[dict]:
     rows: list[dict] = []
     for line in Path(path).read_text(encoding="utf-8").splitlines():

@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from pegasus.pirs.spatial import select_spatial_effect_mode
+
 
 DESIGN_PLAN_SCHEMA_VERSION = "1.0"
 DESIGN_PLAN_ARTIFACT = "pirs_design_plan"
@@ -61,6 +63,8 @@ class PIRSDesignPlan:
     budget: str
     residual_mode: str
     family: str
+    spatial_effect_mode: str
+    spatial_effect: dict[str, Any]
     fold_scheme: dict[str, Any]
     outcome_field_id: str | None
     covariate_field_ids: tuple[str, ...]
@@ -88,6 +92,8 @@ class PIRSDesignPlan:
             "budget": self.budget,
             "residual_mode": self.residual_mode,
             "family": self.family,
+            "spatial_effect_mode": self.spatial_effect_mode,
+            "spatial_effect": dict(self.spatial_effect),
             "fold_scheme": self.fold_scheme,
             "outcome_field_id": self.outcome_field_id,
             "covariate_field_ids": list(self.covariate_field_ids),
@@ -247,6 +253,31 @@ def _fold_scheme(plan: Mapping[str, Any]) -> dict[str, Any]:
     return {"mode": "not_declared", "fold_count": None, "source": "selection_plan_missing_fold_scheme"}
 
 
+def _spatial_effect_payload(plan: Mapping[str, Any], *, budget: str) -> tuple[str, tuple[str, ...], dict[str, Any]]:
+    direct = _string_or_none(plan.get("spatial_effect_mode"))
+    if direct:
+        return direct, (), {"mode": direct, "reason": "declared_by_selection_plan", "warnings": []}
+    diagnostics = _as_dict(plan.get("diagnostics"))
+    direct = _string_or_none(diagnostics.get("spatial_effect_mode"))
+    if direct:
+        return direct, (), {"mode": direct, "reason": "declared_by_selection_diagnostics", "warnings": []}
+
+    def first_present(key: str) -> Any:
+        return plan[key] if key in plan and plan[key] is not None else diagnostics.get(key)
+
+    selector = select_spatial_effect_mode(
+        budget=budget,
+        time_period_count=first_present("time_period_count"),
+        spatial_missingness=first_present("spatial_missingness"),
+        moran_i=first_present("moran_i"),
+    )
+    manifest = selector.as_manifest()
+    adjacency_path = first_present("adjacency_path") or first_present("geo_adjacency_path")
+    if adjacency_path not in (None, ""):
+        manifest["adjacency_path"] = str(adjacency_path)
+    return selector.mode, selector.warnings, manifest
+
+
 def _selection_hash(plan: Mapping[str, Any]) -> str | None:
     for key in ("selection_plan_hash", "source_selection_plan_hash", "manifest_hash", "registry_hash"):
         value = _string_or_none(plan.get(key))
@@ -275,6 +306,7 @@ def build_pirs_design_plan(
     """Build a non-mutating design plan from a PIRS selection plan."""
 
     payload = _selection_payload(selection_plan)
+    plan_budget = str(budget or payload.get("budget") or "fast")
     outcome = _selected_outcome(payload)
     covariates = _selected_covariates(payload)
     offset = _selected_offset(payload)
@@ -284,6 +316,8 @@ def build_pirs_design_plan(
         warnings.append("pirs_design_plan_missing_outcome")
     if not covariates:
         warnings.append("pirs_design_plan_missing_covariates")
+    spatial_mode, spatial_warnings, spatial_manifest = _spatial_effect_payload(payload, budget=plan_budget)
+    warnings.extend(spatial_warnings)
 
     terms: list[PIRSDesignTerm] = [_term("intercept", "intercept", None, "constant_one", required=True, source="design_plan")]
     if outcome:
@@ -297,9 +331,11 @@ def build_pirs_design_plan(
     return PIRSDesignPlan(
         status=status,
         design_matrix_state="planned_only",
-        budget=str(budget or payload.get("budget") or "fast"),
+        budget=plan_budget,
         residual_mode=str(payload.get("residual_mode") or "in_sample"),
         family=_family(payload, offset),
+        spatial_effect_mode=spatial_mode,
+        spatial_effect=spatial_manifest,
         fold_scheme=_fold_scheme(payload),
         outcome_field_id=outcome,
         covariate_field_ids=covariates,

@@ -78,6 +78,19 @@ def _bool_count(df: pl.DataFrame, column: str) -> int:
     return int(df.filter(pl.col(column) == True).height)  # noqa: E712 - data-state comparison
 
 
+def _threshold_count(df: pl.DataFrame, column: str, op: str, threshold: float) -> int:
+    if column not in df.columns:
+        return 0
+    expr = pl.col(column).is_not_null()
+    if op == "lt":
+        expr = expr & (pl.col(column) < threshold)
+    elif op == "gte":
+        expr = expr & (pl.col(column) >= threshold)
+    else:
+        raise ValueError(f"unsupported threshold op: {op}")
+    return int(df.filter(expr).height)
+
+
 def _valid_sinasc(df: pl.DataFrame) -> pl.DataFrame:
     if "record_state" not in df.columns:
         return df
@@ -98,9 +111,9 @@ def _liveborn_death_filter(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _congenital_anomaly_count(df: pl.DataFrame) -> int:
-    if "congenital_anomaly_flag" not in df.columns:
-        return 0
-    return int(df.filter(pl.col("congenital_anomaly_flag") == True).height)  # noqa: E712
+    if "anomaly_positive" in df.columns:
+        return int(df.filter(pl.col("anomaly_positive") == True).height)  # noqa: E712
+    return 0
 
 
 def _assert_plausible_anomaly_rate(*, births_total: int, congenital_anomaly_births: int) -> None:
@@ -162,8 +175,8 @@ def summarize_maternal_child_linkage(
         municipalities_cod6=municipalities,
         municipalities_ibge_cod7=cod7s,
         births_total=int(sinasc_valid.height),
-        low_birth_weight_births=_bool_count(sinasc_valid, "low_birth_weight_flag"),
-        prematurity_births=_bool_count(sinasc_valid, "prematurity_flag"),
+        low_birth_weight_births=_threshold_count(sinasc_valid, "birth_weight_g", "lt", 2500),
+        prematurity_births=_threshold_count(sinasc_valid, "gestational_weeks", "lt", 37),
         congenital_anomaly_births=congenital_anomaly_births,
         infant_deaths=int(infant.height),
         neonatal_deaths=int(neonatal.height),

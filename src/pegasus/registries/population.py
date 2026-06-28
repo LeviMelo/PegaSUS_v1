@@ -18,6 +18,12 @@ class PopulationTensorScaleError(PopulationRegistryError):
     """Raised when a dense population tensor request exceeds the allowed scale."""
 
 
+class PopulationSolverUnavailableError(PopulationRegistryError):
+    """Raised when the registry names a solver band that has no executable backend."""
+
+    code = "population_solver_unavailable_for_scale"
+
+
 @dataclass(frozen=True)
 class PopulationSolverSpec:
     solver_id: str
@@ -86,14 +92,23 @@ POPULATION_SOLVERS: dict[str, PopulationSolverSpec] = {
         max_cells=DENSE_NATIONAL_CELL_THRESHOLD,
         status="legacy_identity",
     ),
-    "sim_informed_sparse_admm_scaffold_v1": PopulationSolverSpec(
-        solver_id="sim_informed_sparse_admm_scaffold_v1",
+    "sim_informed_sparse_admm_v1": PopulationSolverSpec(
+        solver_id="sim_informed_sparse_admm_v1",
         mode="sim_informed_denominator",
-        backend="sparse_admm_scaffold_blocked_feedback",
+        backend="sparse_admm_split_projection",
+        sparse_jacobian=True,
+        max_cells=250_000_000,
+        status="active_sparse_warning",
+        warning_code="sim_informed_population_feedback_risk",
+    ),
+    "state_space_smoother_reduced_v1": PopulationSolverSpec(
+        solver_id="state_space_smoother_reduced_v1",
+        mode="independent_denominator",
+        backend="state_space_smoother_reduced_rts",
         sparse_jacobian=True,
         max_cells=DENSE_NATIONAL_CELL_THRESHOLD,
-        status="legacy_warning_scaffold",
-        warning_code="sim_informed_population_feedback_risk",
+        status="active_reduced",
+        warning_code="reduced_population_state_space_path",
     ),
 }
 
@@ -119,6 +134,11 @@ def select_population_solver(*, mode: str, solver_id: str | None = None, n_cells
         spec = get_population_solver(solver_id)
         if spec.mode != mode:
             raise PopulationRegistryError(f"Solver {solver_id} has mode {spec.mode}, not requested mode {mode}.")
+        if "scaffold" in spec.status or "scaffold" in spec.backend:
+            raise PopulationSolverUnavailableError(
+                "population_solver_unavailable_for_scale: "
+                f"solver {solver_id} is a non-executable scaffold retained only for historical manifests."
+            )
         return spec
 
     candidates = [spec for spec in POPULATION_SOLVERS.values() if spec.mode == mode and spec.status.startswith("active")]

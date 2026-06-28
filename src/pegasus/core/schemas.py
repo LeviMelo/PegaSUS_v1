@@ -25,6 +25,7 @@ class TimeWindow(BaseModel):
 class UserIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    run_profile: Literal["core_vital", "contextual", "full"] = "core_vital"
     geography: GeographySelector
     time: TimeWindow
     health_seeds: list[str] = Field(default_factory=list)

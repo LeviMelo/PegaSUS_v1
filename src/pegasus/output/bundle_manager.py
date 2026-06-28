@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,33 @@ TABLE_KEYS = {
 
 JSON_KEYS = {"UserIntent", "RunConfig", "P_vector", "ReproducibilityManifest"}
 DIRECTORY_KEYS = {"Tables", "Maps"}
+PROFILE_NONEMPTY = {
+    "core_vital": {
+        "V_fields",
+        "E_DAG",
+        "Q_tensor",
+        "P_vector",
+        "UserIntent",
+        "VariableDictionary",
+        "RunConfig",
+        "ReproducibilityManifest",
+    },
+    "contextual": {
+        "V_fields",
+        "E_DAG",
+        "Q_tensor",
+        "P_vector",
+        "UserIntent",
+        "Warnings",
+        "ModelAssociations",
+        "Hypotheses",
+        "Tables",
+        "VariableDictionary",
+        "RunConfig",
+        "ReproducibilityManifest",
+    },
+    "full": set(OUTPUT_BUNDLE_FILES),
+}
 
 PRIMARY_KEYS = {
     "V_fields": "field_id",
@@ -92,6 +120,10 @@ def _normalize_variable_dictionary_row(row: dict[str, Any]) -> dict[str, Any]:
 def _normalize_model_assoc_row(row: dict[str, Any]) -> dict[str, Any]:
     rid = _clean_text(row.get("id") or row.get("model_id") or row.get("residual_id") or row.get("field_id") or "association")
     return {"id": rid, "status": _clean_text(row.get("status") or "recorded"), "warnings": _clean_text(row.get("warnings") or _json([]))}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _normalize_row(key: str, row: dict[str, Any]) -> dict[str, Any]:
@@ -193,6 +225,49 @@ class OutputBundleManager:
             else:
                 shutil.copy2(item, target)
 
+    def _artifact_nonempty_in_manager(self, key: str) -> bool:
+        if key in TABLE_KEYS:
+            return bool(self.tables.get(key))
+        if key in JSON_KEYS:
+            return bool(self.json_payloads.get(key))
+        if key in DIRECTORY_KEYS:
+            src = self.artifact_dirs.get(key)
+            return src is not None and src.exists() and any(src.iterdir())
+        return False
+
+    def _run_profile(self) -> str:
+        for key in ("UserIntent", "RunConfig", "ReproducibilityManifest"):
+            profile = self.json_payloads.get(key, {}).get("run_profile")
+            if profile:
+                return str(profile)
+        return "core_vital"
+
+    def _append_empty_by_profile_warnings(self) -> None:
+        run_profile = self._run_profile()
+        required = PROFILE_NONEMPTY.get(run_profile, PROFILE_NONEMPTY["core_vital"])
+        existing = self.tables.get("Warnings", [])
+        existing_ids = {str(row.get("warning_id")) for row in existing}
+        rows = list(existing)
+        for key in OUTPUT_BUNDLE_FILES:
+            if key in required or key == "Warnings":
+                continue
+            if self._artifact_nonempty_in_manager(key):
+                continue
+            warning_id = f"empty_by_profile::{run_profile}::{key}"
+            if warning_id in existing_ids:
+                continue
+            rows.append({
+                "warning_id": warning_id,
+                "field_id": "run",
+                "source": "output_profile",
+                "severity": "info",
+                "code": "empty_by_profile",
+                "message": f"{key} is empty because run_profile={run_profile} does not require it.",
+                "inherited_from": "[]",
+                "created_at": _now(),
+            })
+        self.tables["Warnings"] = rows
+
     def write_stage_workspace(self, workspace_dir: str | Path) -> Path:
         workspace = Path(workspace_dir)
         if workspace.exists():
@@ -210,6 +285,7 @@ class OutputBundleManager:
     def flush_to_disk(self, run_dir: str | Path | None = None) -> Path:
         final = Path(run_dir) if run_dir is not None else self.run_dir
         final.parent.mkdir(parents=True, exist_ok=True)
+        self._append_empty_by_profile_warnings()
         tmp = Path(tempfile.mkdtemp(prefix=f"{final.name}.phaseE.", dir=str(final.parent)))
         try:
             for key, rel in OUTPUT_BUNDLE_FILES.items():

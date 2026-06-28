@@ -21,6 +21,8 @@ def _simplex_projection(values: list[float], total: float) -> list[float]:
         if abs(total) > 1e-9:
             raise ValueError("Closure total cannot be satisfied without free cells.")
         return []
+    if total <= 1e-12:
+        return [0.0 for _ in values]
     ordered = sorted(values, reverse=True)
     cumulative = 0.0
     rho = 0

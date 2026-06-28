@@ -17,7 +17,8 @@ from pegasus.she.population.schema import (
     PopulationTensorResult,
 )
 from pegasus.she.population.sidra_anchor import load_sidra_population_total_anchor
-from pegasus.she.population.sparse_admm import solve_sparse_population
+from pegasus.she.population.sparse_admm import solve_population_admm, solve_sparse_population
+from pegasus.she.population.state_space import solve_population_state_space_smoother
 
 
 def solve_population_tensor_problem(
@@ -41,6 +42,14 @@ def solve_population_tensor_problem(
             problem, solver_id=solver.solver_id, max_iterations=max_iterations, tolerance=tolerance,
         )
         return result
+    if solver.backend.startswith("sparse_admm"):
+        result, _ = solve_population_admm(
+            problem, solver_id=solver.solver_id, max_iterations=max_iterations, tolerance=tolerance,
+        )
+        return result
+    if solver.backend.startswith("state_space_smoother"):
+        smoothed = solve_population_state_space_smoother(problem)
+        return smoothed.result
     raise ValueError(f"Solver {solver.solver_id} does not implement population optimization.")
 
 

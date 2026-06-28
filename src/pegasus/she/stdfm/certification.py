@@ -116,13 +116,13 @@ def certify_stdfm_metrics(
 
 def blocked_certification_row(*, field_id: str) -> STDFMCertificationRow:
     return STDFMCertificationRow(
-        certification_id=f"cert_pending::{field_id}",
+        certification_id=f"cert_invalid_support::{field_id}",
         field_id=field_id,
-        status="blocked_solver_pending",
+        status="blocked_invalid_support",
         denominator_uncertainty_declared=False,
         survey_uncertainty_declared=False,
         calibration_dataset_hash=None,
-        warnings=("stdfm_certification_required", "blocked_solver_pending"),
+        warnings=("stdfm_certification_required", "stdfm_invalid_support"),
     )
 
 

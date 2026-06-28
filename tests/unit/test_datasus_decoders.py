@@ -2,6 +2,7 @@ from pegasus.datasus.decoders import (
     clamp_bool,
     decode_count2,
     decode_physical_scalar,
+    decode_sih_age,
     decode_sim_idade,
     filter_cnpj,
 )
@@ -12,6 +13,17 @@ def test_decode_sim_idade_years():
     assert decoded.state == "valid"
     assert decoded.age_years == 74
     assert decoded.age_unit == "years"
+
+
+def test_decode_sih_age_uses_registry_unit_map_for_hours_and_zero_code():
+    hours = decode_sih_age("1", "24")
+    assert hours.state == "valid"
+    assert hours.age_unit == "hours"
+    assert hours.age_days == 1
+
+    ignored = decode_sih_age("0", "10")
+    assert ignored.state == "UnknownAgeUnit"
+    assert ignored.warning == "age_unit_missing"
 
 
 def test_clamp_bool_outlier_invalid_not_true():
@@ -25,6 +37,18 @@ def test_filter_cnpj_zero_nullified():
     decoded = filter_cnpj("00000000000000")
     assert decoded.cnpj is None
     assert decoded.state == "NullifiedZeroCNPJ"
+
+
+def test_filter_cnpj_rejects_bad_check_digits():
+    decoded = filter_cnpj("11222333000100")
+    assert decoded.cnpj is None
+    assert decoded.state == "InvalidCNPJDigits"
+
+
+def test_filter_cnpj_accepts_valid_check_digits():
+    decoded = filter_cnpj("11.222.333/0001-81")
+    assert decoded.cnpj == "11222333000181"
+    assert decoded.state == "ValidCNPJ"
 
 
 def test_decode_count2_preserves_semantics():

@@ -2,11 +2,11 @@ schema_version: "1.0"
 registry_version: "race_bridge_priors.v1.slice4b"
 created_at: "2026-06-10"
 updated_at: "2026-06-10"
-provenance: "Slice 4B smoke registry for downstream Bridge_R prior selection. The prior is a fixture for compiler validation and must not be interpreted as calibrated epidemiological truth."
+provenance: "Smoke registry for downstream Bridge_R local-pi posterior prior selection. The prior is a fixture for compiler validation and must not be interpreted as calibrated epidemiological truth."
 entries:
   - id: "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"
     status: "experimental"
-    description: "Smoke fixed-C dynamic-weight bridge from SIM administrative race/color to IBGE self-declared race axis."
+    description: "Smoke local-pi posterior bridge from SIM administrative race/color to IBGE self-declared race axis."
     warnings:
       - "fixture_prior_not_calibrated"
       - "posterior_fields_are_sensitivity_observers"
@@ -14,7 +14,7 @@ entries:
     source_system: "SIM-DO"
     source_axis: "SIM_ADMIN_RACACOR"
     target_axis: "IBGE_SELF_DECLARED_RACE"
-    mode: "fixedC_dynamic_weight"
+    mode: "localPi_posteriorC"
     prior_path: "config/priors/race_bridge/fixedC_sim_admin_to_ibge_selfdeclared_v1.json"
     enabled_for_compile: true
     region_scope:

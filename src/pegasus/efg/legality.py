@@ -86,6 +86,30 @@ def _specialized_semantics_ok(field: FieldNode) -> tuple[bool, list[str]]:
     return True, warnings
 
 
+def _high_dimensional_axes_ok(field: FieldNode) -> tuple[bool, list[str]]:
+    warnings: list[str] = []
+    support = field.support or {}
+    axes = field.axes or {}
+    source = {str(value).upper() for value in field.source or []}
+    is_sidra = "SIDRA" in source or str(support.get("source_system") or "").upper() == "SIDRA"
+    high_dimensional = bool(
+        support.get("high_dimensional")
+        or axes.get("high_dimensional")
+        or support.get("estimated_cells_raw", 0) and int(support.get("estimated_cells_raw") or 0) > 49900
+    )
+    if not is_sidra or not high_dimensional:
+        return True, warnings
+    bound = support.get("high_dimensional_bound")
+    if not isinstance(bound, dict):
+        return False, ["high_dimensional_sidra_missing_bounded_pushforward"]
+    status = str(bound.get("status") or "")
+    if status not in {"bounded", "not_required"}:
+        return False, [f"high_dimensional_sidra_unbounded:{status or 'missing_status'}"]
+    if status == "bounded":
+        warnings.append("high_dimensional_bounded_pushforward")
+    return True, warnings
+
+
 
 
 def _registry_root_for_evidence(registries: Any) -> str:
@@ -200,6 +224,11 @@ def evaluate_delta(
         if not specialized_ok:
             deltas["carrier"] = 0
             _append(failed, "carrier")
+        axes_ok, axes_warnings = _high_dimensional_axes_ok(parent)
+        warnings.extend(axes_warnings)
+        if not axes_ok:
+            deltas["axes"] = 0
+            _append(failed, "axes")
 
     if operator.name == EFGOperator.COUNT_MEASURE.value and parents:
         from pegasus.registries.events import primary_event_carriers

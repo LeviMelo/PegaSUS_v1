@@ -14,6 +14,7 @@ entries:
   - Bridge_R
   - Bridge_R_fixedC_dynamicW
   - Bridge_R_posteriorC
+  - Bridge_R_localPi_posteriorC
   required_metadata:
   - race_bridge_prior
   - posterior_uncertainty

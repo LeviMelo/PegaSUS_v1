@@ -17,6 +17,8 @@ from pegasus.registries.source_fields import (
     load_source_field_registry,
     normalize_source_system,
     registry_manifest as source_field_registry_manifest,
+    resolve_raw_source_field_entries,
+    resolve_raw_source_field_entry,
     resolve_source_field_entry,
     source_field_registry_summary,
 )
@@ -69,6 +71,11 @@ class SourceFieldSpec:
     matched_pattern: str | None = None
     registry_carrier: str | None = None
     decoder: str | None = None
+    raw_fields: tuple[str, ...] = ()
+    route: str | None = None
+    parser: str | None = None
+    output_key: str | None = None
+    source_column_name: str | None = None
 
     @property
     def column(self) -> str:
@@ -106,6 +113,11 @@ class SourceFieldSpec:
         payload["admissible_by_registry"] = self.admissible_by_registry
         payload["registry_reason"] = self.registry_reason
         payload["decoder"] = self.decoder
+        payload["raw_fields"] = list(self.raw_fields)
+        payload["route"] = self.route
+        payload["parser"] = self.parser
+        payload["output_key"] = self.output_key
+        payload["source_column_name"] = self.source_column_name
         return payload
 
 
@@ -199,6 +211,11 @@ def _spec_from_entry(entry: SourceFieldRegistryEntry) -> SourceFieldSpec:
         warning=warning,
         matched_pattern=entry.matched_pattern,
         decoder=entry.decoder,
+        raw_fields=_tuple(entry.raw_fields),
+        route=entry.route,
+        parser=entry.parser,
+        output_key=entry.output_key,
+        source_column_name=entry.source_column_name,
     )
 
 
@@ -231,6 +248,65 @@ def resolve_source_field(
         registry_backed=True,
         warnings=tuple(dict.fromkeys(warnings)),
     )
+
+
+def resolve_raw_source_field(
+    *,
+    source_system: str,
+    raw_column_name: str,
+    registry_root: str | Path = "config/registries",
+) -> SourceRegistryResolution:
+    """Resolve one raw source column to the canonical registry route."""
+
+    normalized = normalize_source_system(source_system)
+    entry = resolve_raw_source_field_entry(
+        source_system=normalized,
+        raw_column_name=raw_column_name,
+        registry_root=registry_root,
+    )
+    spec = _spec_from_entry(entry)
+    known = not _is_unknown_entry(entry)
+    warnings: list[str] = []
+    if spec.warning:
+        warnings.append(spec.warning)
+    return SourceRegistryResolution(
+        source_system=normalized,
+        column_name=raw_column_name,
+        spec=spec,
+        known=known,
+        registry_backed=True,
+        warnings=tuple(dict.fromkeys(warnings)),
+    )
+
+
+def resolve_raw_source_fields(
+    *,
+    source_system: str,
+    raw_column_name: str,
+    registry_root: str | Path = "config/registries",
+) -> tuple[SourceRegistryResolution, ...]:
+    normalized = normalize_source_system(source_system)
+    entries = resolve_raw_source_field_entries(
+        source_system=normalized,
+        raw_column_name=raw_column_name,
+        registry_root=registry_root,
+    )
+    resolutions: list[SourceRegistryResolution] = []
+    for entry in entries:
+        spec = _spec_from_entry(entry)
+        known = not _is_unknown_entry(entry)
+        warnings = [spec.warning] if spec.warning else []
+        resolutions.append(
+            SourceRegistryResolution(
+                source_system=normalized,
+                column_name=raw_column_name,
+                spec=spec,
+                known=known,
+                registry_backed=True,
+                warnings=tuple(dict.fromkeys(str(item) for item in warnings)),
+            )
+        )
+    return tuple(resolutions)
 
 
 def source_registry_hash(

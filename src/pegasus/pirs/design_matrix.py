@@ -23,6 +23,7 @@ DEFAULT_DESIGN_PLAN = Path("Tables") / "pirs_design_plan.json"
 DEFAULT_READINESS = Path("Tables") / "pirs_design_readiness.json"
 DEFAULT_MATRIX_MANIFEST = Path("Tables") / "pirs_design_matrix_manifest.json"
 DEFAULT_MATRIX = Path("Tables") / "pirs_design_matrix.parquet"
+DEFAULT_SUPPORT_INDEX = Path("Tables") / "support_index.parquet"
 MATRIX_GATE_KEY = "pirs_design_matrix_gate"
 JSON_ATTACH_TARGETS: tuple[str, ...] = (
     "RunConfig.json",
@@ -57,6 +58,12 @@ class MatrixFieldSpec:
             "column": self.column,
             "required": self.required,
         }
+
+
+def _safe_column_token(value: Any) -> str:
+    text = str(value).strip()
+    out = "".join(ch if ch.isalnum() else "_" for ch in text)
+    return out.strip("_") or "unknown"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -208,6 +215,85 @@ def _selected_field_specs(plan: Mapping[str, Any]) -> list[MatrixFieldSpec]:
     return specs
 
 
+def _spatial_effect_mode(plan: Mapping[str, Any]) -> str:
+    value = plan.get("spatial_effect_mode")
+    if value in (None, ""):
+        spatial = plan.get("spatial_effect")
+        if isinstance(spatial, Mapping):
+            value = spatial.get("mode")
+    return str(value or "none")
+
+
+def _support_rows(root: Path) -> list[dict[str, Any]]:
+    return _read_rows(root / DEFAULT_SUPPORT_INDEX)
+
+
+def _support_category(row: Mapping[str, Any], *, mode: str) -> str | None:
+    if mode == "UF_FE":
+        for key in ("uf", "state", "ibge_uf_cod2", "datasus_uf_prefix"):
+            value = row.get(key)
+            if value not in (None, ""):
+                return str(value)
+        for key in ("municipality", "municipality_cod6", "mun_residence_cod6", "mun_occurrence_cod6", "ibge_cod7"):
+            value = row.get(key)
+            if value not in (None, ""):
+                text = str(value)
+                return text[:2] if len(text) >= 2 else text
+    if mode == "municipality_FE":
+        for key in ("municipality", "municipality_cod6", "mun_residence_cod6", "mun_occurrence_cod6", "ibge_cod7"):
+            value = row.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return None
+
+
+def _add_fixed_effect_columns(
+    *,
+    matrix_rows: list[dict[str, Any]],
+    support_rows: Sequence[Mapping[str, Any]],
+    mode: str,
+) -> tuple[list[MatrixFieldSpec], list[str], dict[str, Any]]:
+    if mode not in {"UF_FE", "municipality_FE"}:
+        return [], [], {"mode": mode, "executed": mode == "none", "columns": []}
+    if not support_rows:
+        return [], [f"{mode.lower()}_requires_support_index"], {"mode": mode, "executed": False, "columns": []}
+
+    categories_by_row: list[str | None] = []
+    for row in matrix_rows:
+        try:
+            support = support_rows[int(row.get("row_id", -1))]
+        except (TypeError, ValueError, IndexError):
+            support = {}
+        categories_by_row.append(_support_category(support, mode=mode))
+    missing = sum(1 for value in categories_by_row if value in (None, ""))
+    if missing:
+        return [], [f"{mode.lower()}_support_category_missing:{missing}_rows"], {"mode": mode, "executed": False, "columns": []}
+    categories = sorted({str(value) for value in categories_by_row if value not in (None, "")})
+    if len(categories) <= 1:
+        return [], [f"{mode.lower()}_single_category_no_dummy_columns"], {
+            "mode": mode,
+            "executed": True,
+            "columns": [],
+            "baseline_category": categories[0] if categories else None,
+        }
+    baseline = categories[0]
+    columns: list[str] = []
+    specs: list[MatrixFieldSpec] = []
+    for category in categories[1:]:
+        column = f"spatial_{mode.lower()}_{_safe_column_token(category)}"
+        columns.append(column)
+        specs.append(MatrixFieldSpec(field_id=f"{mode}:{category}", role="spatial_effect", column=column, required=True))
+        for row, row_category in zip(matrix_rows, categories_by_row, strict=True):
+            row[column] = 1.0 if row_category == category else 0.0
+    return specs, [], {
+        "mode": mode,
+        "executed": True,
+        "columns": columns,
+        "baseline_category": baseline,
+        "category_count": len(categories),
+    }
+
+
 def _blocking_manifest(
     *,
     run_dir: Path,
@@ -264,6 +350,7 @@ def build_pirs_design_matrix_manifest(
     plan = dict(design_plan) if isinstance(design_plan, Mapping) else _load_json(design_plan_path)
     readiness = dict(readiness_manifest) if isinstance(readiness_manifest, Mapping) else _load_json(readiness_path)
     specs = _selected_field_specs(plan)
+    spatial_mode = _spatial_effect_mode(plan)
     reasons: list[str] = []
     if not specs:
         reasons.append("design_plan_has_no_selected_fields")
@@ -316,7 +403,6 @@ def build_pirs_design_matrix_manifest(
         for spec in specs:
             row[spec.column] = vectors[spec.field_id][i]
         matrix_rows.append(row)
-    columns = list(matrix_rows[0].keys()) if matrix_rows else ["row_id", "intercept"]
     if not matrix_rows:
         payload = _blocking_manifest(
             run_dir=root,
@@ -331,6 +417,38 @@ def build_pirs_design_matrix_manifest(
         )
         _write_json(manifest_path, payload)
         return payload
+    support_rows = _support_rows(root)
+    spatial_specs, spatial_reasons, spatial_manifest = _add_fixed_effect_columns(
+        matrix_rows=matrix_rows,
+        support_rows=support_rows,
+        mode=spatial_mode,
+    )
+    if spatial_mode == "ICAR":
+        spatial_manifest = {
+            "mode": "ICAR",
+            "executed": False,
+            "execution_stage": "model_execution_penalized_irls",
+            "adjacency_path": (plan.get("spatial_effect") or {}).get("adjacency_path")
+            if isinstance(plan.get("spatial_effect"), Mapping)
+            else None,
+        }
+    if spatial_reasons and spatial_mode in {"UF_FE", "municipality_FE"}:
+        payload = _blocking_manifest(
+            run_dir=root,
+            output_manifest=manifest_path,
+            output_matrix=matrix_path,
+            design_plan_path=design_plan_path,
+            readiness_path=readiness_path,
+            reasons=spatial_reasons,
+            plan=plan,
+            readiness=readiness,
+            field_specs=[*specs, *spatial_specs],
+        )
+        payload["spatial_effect"] = spatial_manifest
+        _write_json(manifest_path, payload)
+        return payload
+    specs = [*specs, *spatial_specs]
+    columns = list(matrix_rows[0].keys()) if matrix_rows else ["row_id", "intercept"]
     if write_matrix:
         _write_rows(matrix_path, matrix_rows)
     payload = {
@@ -355,6 +473,8 @@ def build_pirs_design_matrix_manifest(
         "family": plan.get("family"),
         "residual_mode": plan.get("residual_mode"),
         "fold_scheme": plan.get("fold_scheme"),
+        "spatial_effect_mode": spatial_mode,
+        "spatial_effect": spatial_manifest,
         "model_fit_state": "not_started",
         "residual_state": "not_started",
         "hsic_state": "not_started",

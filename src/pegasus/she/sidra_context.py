@@ -203,6 +203,13 @@ def build_sidra_context_fields(
             "stdfm_gate": bool(regime.stdfm_gate),
             "regime_reason": regime.reason,
             "projection": projection.metadata,
+            "high_dimensional": bool(projection.metadata.get("high_dimensional", False)),
+            "estimated_cells_raw": int(projection.metadata.get("estimated_cells_raw") or 0),
+            "high_dimensional_bound": projection.metadata.get("high_dimensional_bound") or {
+                "status": "not_required",
+                "reason": "sidra projection did not classify this field as high-dimensional",
+                "operator": "sidra_context_total_only_projection",
+            },
         }
         if stdfm_metadata is not None:
             support["stdfm"] = stdfm_metadata

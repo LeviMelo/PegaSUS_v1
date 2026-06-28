@@ -28,6 +28,19 @@ class MandatoryFieldContractError(ValueError):
     """Raised when an intent's ``mandatory_fields`` are not produced by the compiled EFG."""
 
 
+CORE_VITAL_PRECONDITION_TOKENS = {
+    "InfantMortality",
+    "NeonatalMortality",
+    "PostNeonatalMortality",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths",
+    "V_C01",
+    "V_C02",
+    "V_C03",
+}
+
+
 @dataclass(frozen=True)
 class CoreSeedSpec:
     seed_id: str
@@ -153,6 +166,13 @@ def enforce_mandatory_fields(
         "resolved_seed_count": len(resolved),
     }
     if unsatisfied:
+        run_profile = intent.get("run_profile", "core_vital") if isinstance(intent, dict) else getattr(intent, "run_profile", "core_vital")
+        if str(run_profile) == "core_vital" and set(unsatisfied) <= CORE_VITAL_PRECONDITION_TOKENS:
+            summary["blocked_preconditions"] = {
+                token: "preconditions_unmet_core_vital_requires_contextual_maternal_child_linkage"
+                for token in sorted(unsatisfied)
+            }
+            return summary
         raise MandatoryFieldContractError(
             f"EFG did not produce intent mandatory_fields {sorted(unsatisfied)}; "
             f"resolved core seeds: {sorted(resolved)}. Refusing a hollow compile success."

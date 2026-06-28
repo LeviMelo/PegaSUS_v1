@@ -1,12 +1,13 @@
 schema_version: '1.0'
-registry_version: v2.0
+registry_version: v3.0
 created_at: '2026-06-06'
-updated_at: '2026-06-13'
-provenance: Macro-Slice 27A model registry aligned to PIRS execution surfaces.
+updated_at: '2026-06-27'
+provenance: Registry reconciled with pegasus.compute.glm family support and MSD §6.2 planned family surface.
 entries:
-- id: pirs_ols_residual_model
+- id: glm_gaussian_identity
   status: active
-  family: gaussian_ols
+  family: gaussian_identity
+  residual_type: standardized
   required_artifacts:
   - pirs_design_matrix_manifest
   outputs:
@@ -14,11 +15,24 @@ entries:
   - fitted_values
   - residual_values
   warnings: []
-  description: Macro-Slice 27A canonical registry entry pirs_ols_residual_model from
-    model_registry.yaml.
-- id: pirs_poisson_offset_model
-  status: planned_contract
-  family: poisson_log_offset
+  description: Gaussian identity-link GLM for continuous outcomes.
+- id: glm_ols_compat
+  status: active
+  family: ols
+  residual_type: standardized
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - compatibility_alias_for_gaussian_identity
+  description: Backward-compatible OLS alias backed by the Gaussian identity GLM.
+- id: glm_poisson_log_offset
+  status: active
+  family: poisson_count_with_log_offset
+  residual_type: deviance
   required_artifacts:
   - pirs_design_matrix_manifest
   - denominator_offset
@@ -28,5 +42,177 @@ entries:
   - residual_values
   warnings:
   - requires_offset_contract
-  description: Macro-Slice 27A canonical registry entry pirs_poisson_offset_model
-    from model_registry.yaml.
+  description: Poisson count GLM with log exposure offset.
+- id: glm_negative_binomial
+  status: active
+  family: negative_binomial
+  residual_type: deviance
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  - denominator_offset
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - overdispersed_count_family
+  description: Negative-binomial count GLM selected for overdispersed counts.
+- id: glm_quasi_poisson
+  status: active
+  family: quasi_poisson
+  residual_type: pearson
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  - denominator_offset
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - quasi_likelihood_dispersion
+  description: Quasi-Poisson GLM for count outcomes with Pearson residual routing.
+- id: glm_hurdle_poisson
+  status: active
+  family: hurdle_poisson
+  residual_type: randomized_quantile
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  - denominator_offset
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - zero_inflated_count_family
+  description: Two-part hurdle Poisson model for zero-inflated counts.
+- id: glm_hurdle_nb
+  status: active
+  family: hurdle_nb
+  residual_type: randomized_quantile
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  - denominator_offset
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - zero_inflated_overdispersed_count_family
+  description: Two-part hurdle negative-binomial model for zero-inflated overdispersed counts.
+- id: glm_gamma
+  status: active
+  family: gamma
+  residual_type: deviance
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings: []
+  description: Gamma log-link GLM for positive continuous outcomes.
+- id: glm_sih_gamma_cost_component
+  status: active
+  family: sih_gamma_cost_component
+  residual_type: deviance
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - sih_cost_component_only
+  description: Gamma log-link GLM specialized for typed SIH cost components.
+- id: glm_binomial_proportion
+  status: active
+  family: binomial_proportion
+  residual_type: deviance
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - bounded_proportion_family
+  description: Logit GLM for bounded proportions.
+- id: glm_beta_binomial
+  status: active
+  family: beta_binomial
+  residual_type: pearson
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - overdispersed_proportion_family
+  - beta_binomial_intraclass_correlation_estimated
+  description: Overdispersed bounded-proportion model with beta-binomial variance and Pearson residual diagnostics.
+- id: glm_dirichlet
+  status: active
+  family: dirichlet
+  residual_type: ilr
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - simplex_softmax_mean_model
+  description: Simplex/compositional outcome model with softmax mean and ILR-compatible residual diagnostics.
+- id: glm_multinomial_logit
+  status: active
+  family: multinomial_logit
+  residual_type: deviance
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - multinomial_softmax_likelihood
+  description: Multinomial logit model for categorical or count-composition outcomes.
+- id: glm_lognormal
+  status: active
+  family: lognormal
+  residual_type: standardized
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - positive_support_required
+  description: Lognormal model for skewed positive outcomes.
+- id: glm_two_part_lognormal
+  status: active
+  family: two_part_lognormal
+  residual_type: randomized_quantile
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - zero_mass_two_part_family
+  description: Two-part lognormal model for zero-mass skewed outcomes.
+- id: glm_student_t
+  status: active
+  family: student_t
+  residual_type: standardized
+  required_artifacts:
+  - pirs_design_matrix_manifest
+  outputs:
+  - coefficients
+  - fitted_values
+  - residual_values
+  warnings:
+  - robust_iteratively_reweighted_t_kernel
+  description: Robust iteratively reweighted heavy-tail Gaussian kernel for Student-t-like residualization.

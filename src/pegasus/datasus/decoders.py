@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from pydantic import BaseModel, ConfigDict
 
 
@@ -156,6 +159,28 @@ def decode_sim_idade(raw: str | int | None) -> DecodedAge:
     )
 
 
+@lru_cache(maxsize=4)
+def _sih_age_unit_map(registry_root: str = "config/registries") -> dict[str, dict[str, Any]]:
+    path = Path(registry_root) / "composite_decoders.yaml"
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        payload = {}
+    for entry in payload.get("entries") or []:
+        if isinstance(entry, dict) and entry.get("id") == "Decode_SIH_AGE":
+            unit_map = entry.get("unit_map")
+            if isinstance(unit_map, dict):
+                return {str(k): dict(v) for k, v in unit_map.items() if isinstance(v, dict)}
+    return {
+        "0": {"unit": "ignored", "state": "UnknownAgeUnit", "warning": "age_unit_missing"},
+        "1": {"unit": "hours", "years_factor": 1 / (24 * 365.25), "days_factor": 1 / 24},
+        "2": {"unit": "days", "years_factor": 1 / 365.25, "days_factor": 1.0},
+        "3": {"unit": "months", "years_factor": 1 / 12, "days_factor": 30.4375},
+        "4": {"unit": "years", "years_factor": 1.0, "days_factor": 365.25},
+        "5": {"unit": "years_100_plus", "years_offset": 100.0, "days_factor": 365.25, "days_offset_years": 100.0},
+    }
+
+
 def decode_sih_age(cod_idade: str | int | None, idade: str | int | None) -> DecodedAge:
     raw_unit = None if cod_idade is None else str(cod_idade).strip()
     raw_age = None if idade is None else str(idade).strip()
@@ -181,18 +206,28 @@ def decode_sih_age(cod_idade: str | int | None, idade: str | int | None) -> Deco
         )
 
     m = int(raw_age)
-
-    # microdatasus/SIH codebooks vary by processing layer; keep this registry-replaceable.
-    # Conservative defaults: 2=days, 3=months, 4=years, 5=100+ years.
-    if raw_unit == "2":
-        return DecodedAge(age_years=m / 365.25, age_days=float(m), age_unit="days", raw_value=raw_age, state="valid")
-    if raw_unit == "3":
-        return DecodedAge(age_years=m / 12, age_days=30.4375 * m, age_unit="months", raw_value=raw_age, state="valid")
-    if raw_unit == "4":
-        return DecodedAge(age_years=float(m), age_days=365.25 * m, age_unit="years", raw_value=raw_age, state="valid")
-    if raw_unit == "5":
-        years = 100 + m
-        return DecodedAge(age_years=float(years), age_days=365.25 * years, age_unit="years_100_plus", raw_value=raw_age, state="valid")
+    unit_spec = _sih_age_unit_map().get(raw_unit)
+    if unit_spec is not None:
+        if unit_spec.get("state"):
+            return DecodedAge(
+                age_years=None,
+                age_days=None,
+                age_unit=str(unit_spec.get("unit") or "unknown"),
+                raw_value=raw_age,
+                state=str(unit_spec["state"]),
+                warning=str(unit_spec.get("warning") or "age_unit_missing"),
+            )
+        years_offset = float(unit_spec.get("years_offset") or 0.0)
+        years = years_offset + m * float(unit_spec.get("years_factor", 0.0))
+        days_offset_years = float(unit_spec.get("days_offset_years") or 0.0)
+        days = 365.25 * days_offset_years + m * float(unit_spec.get("days_factor", 0.0))
+        return DecodedAge(
+            age_years=years,
+            age_days=days,
+            age_unit=str(unit_spec.get("unit") or "unknown"),
+            raw_value=raw_age,
+            state="valid",
+        )
 
     return DecodedAge(
         age_years=None,
@@ -293,4 +328,22 @@ def filter_cnpj(raw: object) -> FilteredCNPJ:
     if not digits.isdigit():
         return FilteredCNPJ(cnpj=None, raw_value=raw_s, state="InvalidCNPJDigits", warning="invalid_cnpj_digits")
 
+    if not _valid_cnpj_check_digits(digits):
+        return FilteredCNPJ(cnpj=None, raw_value=raw_s, state="InvalidCNPJDigits", warning="invalid_cnpj_digits")
+
     return FilteredCNPJ(cnpj=digits, raw_value=raw_s, state="ValidCNPJ")
+
+
+def _valid_cnpj_check_digits(digits: str) -> bool:
+    if len(digits) != 14 or not digits.isdigit() or len(set(digits)) == 1:
+        return False
+
+    def check_digit(prefix: str, weights: tuple[int, ...]) -> str:
+        total = sum(int(digit) * weight for digit, weight in zip(prefix, weights, strict=True))
+        remainder = total % 11
+        value = 0 if remainder < 2 else 11 - remainder
+        return str(value)
+
+    first = check_digit(digits[:12], (5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2))
+    second = check_digit(digits[:12] + first, (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2))
+    return digits[-2:] == first + second

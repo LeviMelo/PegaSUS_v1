@@ -37,6 +37,11 @@ class SourceFieldRegistryEntry:
     registry_hash: str
     matched_pattern: str | None = None
     decoder: str | None = None
+    raw_fields: tuple[str, ...] = ()
+    route: str | None = None
+    parser: str | None = None
+    output_key: str | None = None
+    source_column_name: str | None = None
 
     def as_manifest(self) -> dict[str, Any]:
         return {
@@ -56,6 +61,11 @@ class SourceFieldRegistryEntry:
             "registry_hash": self.registry_hash,
             "matched_pattern": self.matched_pattern,
             "decoder": self.decoder,
+            "raw_fields": list(self.raw_fields),
+            "route": self.route,
+            "parser": self.parser,
+            "output_key": self.output_key,
+            "source_column_name": self.source_column_name,
         }
 
 
@@ -65,6 +75,7 @@ class SourceFieldRegistry:
     schema_version: str
     registry_hash: str
     entries: dict[tuple[str, str], SourceFieldRegistryEntry]
+    raw_routes: dict[tuple[str, str], tuple[SourceFieldRegistryEntry, ...]]
     patterns: tuple[tuple[str, re.Pattern[str], dict[str, Any]], ...]
     default_unknown: dict[str, Any]
 
@@ -89,6 +100,26 @@ class SourceFieldRegistry:
             registry_hash=self.registry_hash,
             matched_pattern=None,
         )
+
+    def resolve_raw_all(self, *, source_system: str, raw_column_name: str) -> tuple[SourceFieldRegistryEntry, ...]:
+        system = normalize_source_system(source_system)
+        raw = str(raw_column_name)
+        key = (system, raw.upper())
+        if key in self.raw_routes:
+            return self.raw_routes[key]
+        return (
+            _entry_from_spec(
+                source_system=system,
+                column_name=raw,
+                spec=self.default_unknown,
+                registry_hash=self.registry_hash,
+                matched_pattern=None,
+                source_column_name=raw,
+            ),
+        )
+
+    def resolve_raw(self, *, source_system: str, raw_column_name: str) -> SourceFieldRegistryEntry:
+        return self.resolve_raw_all(source_system=source_system, raw_column_name=raw_column_name)[0]
 
 
 def normalize_source_system(value: str) -> str:
@@ -115,7 +146,15 @@ def _list(value: Any) -> tuple[str, ...]:
     return (str(value),)
 
 
-def _entry_from_spec(*, source_system: str, column_name: str, spec: dict[str, Any], registry_hash: str, matched_pattern: str | None) -> SourceFieldRegistryEntry:
+def _entry_from_spec(
+    *,
+    source_system: str,
+    column_name: str,
+    spec: dict[str, Any],
+    registry_hash: str,
+    matched_pattern: str | None,
+    source_column_name: str | None = None,
+) -> SourceFieldRegistryEntry:
     return SourceFieldRegistryEntry(
         source_system=source_system,
         column_name=column_name,
@@ -133,6 +172,11 @@ def _entry_from_spec(*, source_system: str, column_name: str, spec: dict[str, An
         registry_hash=registry_hash,
         matched_pattern=matched_pattern,
         decoder=None if spec.get("decoder") is None else str(spec.get("decoder")),
+        raw_fields=_list(spec.get("raw_fields", [])),
+        route=None if spec.get("route") is None else str(spec.get("route")),
+        parser=None if spec.get("parser") is None else str(spec.get("parser")),
+        output_key=None if spec.get("output_key") is None else str(spec.get("output_key")),
+        source_column_name=source_column_name,
     )
 
 
@@ -172,6 +216,7 @@ def _load_source_field_registry_cached(registry_root: str, mtime: float) -> Sour
         raise SourceFieldRegistryError(f"source field registry is empty or invalid: {path}")
     default_unknown = dict(payload.get("default_unknown", {}) or {})
     entries: dict[tuple[str, str], SourceFieldRegistryEntry] = {}
+    raw_route_lists: dict[tuple[str, str], list[SourceFieldRegistryEntry]] = {}
     patterns: list[tuple[str, re.Pattern[str], dict[str, Any]]] = []
     for source_system, raw_system in source_systems.items():
         system = normalize_source_system(str(source_system))
@@ -189,6 +234,16 @@ def _load_source_field_registry_cached(registry_root: str, mtime: float) -> Sour
             )
             _validate_entry(entry, registry_root=registry_root)
             entries[(system, str(column_name))] = entry
+            for raw_field in entry.raw_fields:
+                raw_key = (system, str(raw_field).upper())
+                raw_route_lists.setdefault(raw_key, []).append(_entry_from_spec(
+                    source_system=system,
+                    column_name=str(column_name),
+                    spec=spec,
+                    registry_hash=registry_hash,
+                    matched_pattern=None,
+                    source_column_name=str(raw_field),
+                ))
         for pattern, spec in (raw_system.get("field_patterns", {}) or {}).items():
             if not isinstance(spec, dict):
                 raise SourceFieldRegistryError(f"field pattern spec must be a mapping: {source_system}.{pattern}")
@@ -204,6 +259,7 @@ def _load_source_field_registry_cached(registry_root: str, mtime: float) -> Sour
         schema_version=str(payload.get("schema_version", "1.0")),
         registry_hash=registry_hash,
         entries=entries,
+        raw_routes={key: tuple(value) for key, value in raw_route_lists.items()},
         patterns=tuple(patterns),
         default_unknown=default_unknown,
     )
@@ -219,6 +275,29 @@ def resolve_source_field_entry(*, source_system: str, column_name: str, registry
     # is called once per column per record during normalization; memoize it so a
     # whole-state normalize does O(distinct_columns) registry lookups, not O(cells).
     return _resolve_source_field_entry_cached(source_system, column_name, str(registry_root))
+
+
+@lru_cache(maxsize=8192)
+def _resolve_raw_source_field_entry_cached(source_system: str, raw_column_name: str, registry_root: str) -> SourceFieldRegistryEntry:
+    return load_source_field_registry(registry_root).resolve_raw(source_system=source_system, raw_column_name=raw_column_name)
+
+
+def resolve_raw_source_field_entry(
+    *,
+    source_system: str,
+    raw_column_name: str,
+    registry_root: str | Path = "config/registries",
+) -> SourceFieldRegistryEntry:
+    return _resolve_raw_source_field_entry_cached(source_system, raw_column_name, str(registry_root))
+
+
+def resolve_raw_source_field_entries(
+    *,
+    source_system: str,
+    raw_column_name: str,
+    registry_root: str | Path = "config/registries",
+) -> tuple[SourceFieldRegistryEntry, ...]:
+    return load_source_field_registry(registry_root).resolve_raw_all(source_system=source_system, raw_column_name=raw_column_name)
 
 
 def source_field_registry_summary(registry_root: str | Path = "config/registries") -> dict[str, Any]:
@@ -237,6 +316,7 @@ def source_field_registry_summary(registry_root: str | Path = "config/registries
         "schema_version": registry.schema_version,
         "registry_hash": registry.registry_hash,
         "entry_count": len(registry.entries),
+        "raw_route_count": sum(len(entries) for entries in registry.raw_routes.values()),
         "pattern_count": len(registry.patterns),
         "admissible_entry_count": admissible,
         "audit_or_excluded_entry_count": audit_only,
@@ -251,6 +331,11 @@ def registry_manifest(registry_root: str | Path = "config/registries") -> dict[s
         "schema_version": registry.schema_version,
         "registry_hash": registry.registry_hash,
         "entries": [entry.as_manifest() for entry in sorted(registry.entries.values(), key=lambda e: (e.source_system, e.column_name))],
+        "raw_routes": [
+            entry.as_manifest()
+            for routes in registry.raw_routes.values()
+            for entry in sorted(routes, key=lambda e: (e.source_system, e.source_column_name or "", e.column_name))
+        ],
         "patterns": [{"source_system": s, "pattern": p.pattern} for s, p, _ in registry.patterns],
         "default_unknown": registry.default_unknown,
     }

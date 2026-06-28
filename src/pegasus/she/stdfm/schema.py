@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 STDFMState = Literal[
-    "blocked_solver_pending",
     "blocked_invalid_support",
     "fitted",
     "failed",

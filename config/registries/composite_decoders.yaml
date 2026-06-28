@@ -1,9 +1,8 @@
 schema_version: '1.0'
-registry_version: v1.0
+registry_version: v2.0
 created_at: '2026-06-06'
-updated_at: '2026-06-06'
-provenance: Slice 0 scaffold registry for composite_decoders.yaml; not a calibrated
-  analytic registry.
+updated_at: '2026-06-27'
+provenance: Composite decoder registry for source structural decoders and unit maps.
 entries:
 - id: Decode_SIM_IDADE
   status: stable
@@ -12,6 +11,32 @@ entries:
 - id: Decode_SIH_AGE
   status: stable
   description: SIH age decoder using COD_IDADE.
+  unit_map:
+    '0':
+      unit: ignored
+      state: UnknownAgeUnit
+      warning: age_unit_missing
+    '1':
+      unit: hours
+      years_factor: 0.00011407945810502283
+      days_factor: 0.041666666666666664
+    '2':
+      unit: days
+      years_factor: 0.0027378507871321013
+      days_factor: 1.0
+    '3':
+      unit: months
+      years_factor: 0.08333333333333333
+      days_factor: 30.4375
+    '4':
+      unit: years
+      years_factor: 1.0
+      days_factor: 365.25
+    '5':
+      unit: years_100_plus
+      years_offset: 100.0
+      days_factor: 365.25
+      days_offset_years: 100.0
   warnings: []
 - id: Decode_PESO
   status: stable

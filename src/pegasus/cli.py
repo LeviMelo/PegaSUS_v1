@@ -259,8 +259,8 @@ def sidra_extract(
 def compile(
     intent: Path = typer.Option(..., "--intent"),
     run_dir: Path | None = typer.Option(None, "--run-dir"),
-    source_manifest: Path | None = typer.Option(None, "--source-manifest"),
-    require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
+    source_manifest: Path = typer.Option(..., "--source-manifest"),
+    require_materialized_external: bool = typer.Option(True, "--require-materialized-external"),
 ) -> None:
     try:
         result = run_compile(

@@ -1,6 +1,6 @@
 {
   "bridge_id": "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1",
-  "mode": "fixedC_dynamic_weight",
+  "mode": "localPi_posteriorC",
   "source_axis": "SIM_ADMIN_RACACOR",
   "target_axis": "IBGE_SELF_DECLARED_RACE",
   "source_categories": ["1", "2", "3", "4", "5"],

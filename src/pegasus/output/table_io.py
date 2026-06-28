@@ -25,6 +25,21 @@ def _table_from_rows(rows: list[dict[str, Any]], table_schema: pa.Schema | None 
     return pa.table({})
 
 
+def _schema_with_promoted_nulls(rows: list[dict[str, Any]], table_schema: pa.Schema) -> pa.Schema:
+    fields = []
+    for field in table_schema:
+        if not pa.types.is_null(field.type):
+            fields.append(field)
+            continue
+        values = [row.get(field.name) for row in rows if row.get(field.name) is not None]
+        if not values:
+            fields.append(field)
+            continue
+        inferred = pa.array(values).type
+        fields.append(pa.field(field.name, inferred, nullable=True, metadata=field.metadata))
+    return pa.schema(fields, metadata=table_schema.metadata)
+
+
 def read_rows(path: str | Path) -> list[dict[str, Any]]:
     """Read a Parquet table as row dictionaries through the storage boundary."""
     return read_table(path).to_pylist()
@@ -62,7 +77,7 @@ def write_rows_like(path: str | Path, rows: Iterable[dict[str, Any]]) -> Path:
     payload = _rows(rows)
     if not path.exists():
         return write_rows(path, payload)
-    table_schema_obj = schema(path)
+    table_schema_obj = _schema_with_promoted_nulls(payload, schema(path))
     write_table(path, _table_from_rows(payload, table_schema_obj))
     return path
 
@@ -79,6 +94,19 @@ def append_rows(path: str | Path, rows: Iterable[dict[str, Any]]) -> Path:
         return write_rows(path, payload)
     existing = read_rows(path)
     return write_rows_like(path, existing + payload)
+
+
+def append_replace_rows(path: str | Path, rows: Iterable[dict[str, Any]], *, id_column: str) -> Path:
+    """Append rows while replacing existing rows with matching ids."""
+    path = Path(path)
+    payload = _rows(rows)
+    if not payload:
+        return path
+    if not path.exists():
+        return write_rows(path, payload)
+    incoming_ids = {row.get(id_column) for row in payload}
+    kept = [row for row in read_rows(path) if row.get(id_column) not in incoming_ids]
+    return write_rows_like(path, kept + payload)
 
 
 def empty_like(path: str | Path) -> Path:

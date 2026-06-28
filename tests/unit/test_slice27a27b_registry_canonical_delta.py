@@ -155,3 +155,22 @@ def test_slice27b_delta_warnings_carry_registry_evidence() -> None:
     assert "registry_evidence_attached" in warnings
     assert "diagnostic_topology=sim_underlying_cause_causabas" in warnings
 
+
+def test_sidra_high_dimensional_field_requires_bounded_pushforward() -> None:
+    operator = OperatorSpec(name="raw_field", role="registry_evidence", params={})
+    sidra = _field(
+        field_id="sidra_highdim_context",
+        name="SIDRA high-dimensional context",
+        kind="context_gradient",
+        carrier="ContextCells",
+        unit="raw_sidra_value",
+        aggregation="additive",
+        source=["SIDRA"],
+        support={"high_dimensional": True, "estimated_cells_raw": 100000},
+        axes={"geography": "municipality", "time": "year", "occupation": "raw_sidra"},
+    )
+    result = evaluate_delta(parents=[sidra], operator=operator)
+    assert not result.legal
+    assert "axes" in result.failed_terms
+    assert "high_dimensional_sidra_missing_bounded_pushforward" in result.warnings
+

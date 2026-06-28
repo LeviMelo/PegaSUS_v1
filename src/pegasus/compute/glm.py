@@ -34,6 +34,12 @@ SUPPORTED_FAMILIES: frozenset[str] = frozenset(
         "gamma",
         "sih_gamma_cost_component",
         "binomial_proportion",
+        "beta_binomial",
+        "dirichlet",
+        "multinomial_logit",
+        "lognormal",
+        "two_part_lognormal",
+        "student_t",
     }
 )
 
@@ -49,12 +55,19 @@ RESIDUAL_TYPE_BY_FAMILY: dict[str, str] = {
     "gamma": "deviance",
     "sih_gamma_cost_component": "deviance",
     "binomial_proportion": "deviance",
+    "beta_binomial": "pearson",
+    "dirichlet": "ilr",
+    "multinomial_logit": "deviance",
+    "lognormal": "standardized",
+    "two_part_lognormal": "randomized_quantile",
+    "student_t": "standardized",
 }
 
 _COUNT_FAMILIES: frozenset[str] = frozenset(
     {"poisson_count_with_log_offset", "negative_binomial", "quasi_poisson", "hurdle_poisson", "hurdle_nb"}
 )
 _HURDLE_FAMILIES: frozenset[str] = frozenset({"hurdle_poisson", "hurdle_nb"})
+_SPECIAL_FAMILIES: frozenset[str] = frozenset({"lognormal", "two_part_lognormal", "student_t", "dirichlet", "multinomial_logit"})
 
 _EPS = 1e-9
 _ETA_CLAMP = 30.0
@@ -185,6 +198,8 @@ def _resolve_family(family: str, *, y: np.ndarray, nb_theta: float | None) -> _F
     if family == "negative_binomial":
         return _negative_binomial(nb_theta if nb_theta is not None else _estimate_nb_theta(y))
     if family == "binomial_proportion":
+        return _binomial()
+    if family == "beta_binomial":
         return _binomial()
     raise GLMError(f"unsupported_glm_family:{family}")
 
@@ -384,6 +399,314 @@ def _fit_hurdle(
     )
 
 
+def _fit_lognormal(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    prior_weights: np.ndarray | None,
+    term_names: Sequence[str] | None,
+    max_iter: int,
+    tol: float,
+) -> GLMResult:
+    y = np.asarray(y, dtype=float).ravel()
+    positive = y > 0
+    if int(positive.sum()) <= X.shape[1]:
+        raise GLMError("lognormal_insufficient_positive_support")
+    fit = fit_glm(
+        y=np.log(np.maximum(y[positive], _EPS)),
+        X=np.asarray(X, dtype=float)[positive],
+        family="gaussian_identity",
+        prior_weights=None if prior_weights is None else np.asarray(prior_weights, dtype=float).ravel()[positive],
+        term_names=term_names,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    eta = np.asarray(X, dtype=float) @ fit.coefficients
+    fitted = np.exp(eta + 0.5 * max(fit.dispersion, 0.0))
+    log_y = np.where(y > 0, np.log(np.maximum(y, _EPS)), np.nan)
+    resid = (log_y - eta) / math.sqrt(max(fit.dispersion, _EPS))
+    resid = np.where(np.isfinite(resid), resid, np.nan)
+    return GLMResult(
+        family="lognormal",
+        residual_type="standardized",
+        terms=fit.terms,
+        coefficients=fit.coefficients,
+        fitted=fitted,
+        linear_predictor=eta,
+        deviance_residuals=resid,
+        pearson_residuals=resid,
+        standardized_residuals=resid,
+        deviance=float(np.nansum(resid ** 2)),
+        dispersion=fit.dispersion,
+        n_iter=fit.n_iter,
+        converged=fit.converged,
+        warnings=["lognormal_positive_support"],
+    )
+
+
+def _fit_two_part_lognormal(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    prior_weights: np.ndarray | None,
+    term_names: Sequence[str] | None,
+    max_iter: int,
+    tol: float,
+) -> GLMResult:
+    y = np.asarray(y, dtype=float).ravel()
+    z = (y > 0).astype(float)
+    zero_fit = fit_glm(
+        y=z,
+        X=X,
+        family="binomial_proportion",
+        prior_weights=prior_weights,
+        term_names=term_names,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    pos_fit = _fit_lognormal(
+        y=y,
+        X=X,
+        prior_weights=prior_weights,
+        term_names=term_names,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    pi = 1.0 / (1.0 + np.exp(-_clamp_eta(X @ zero_fit.coefficients)))
+    fitted = pi * pos_fit.fitted
+    pearson = (y - fitted) / np.sqrt(np.maximum(fitted, _EPS))
+    return GLMResult(
+        family="two_part_lognormal",
+        residual_type="randomized_quantile",
+        terms=pos_fit.terms,
+        coefficients=pos_fit.coefficients,
+        fitted=fitted,
+        linear_predictor=pos_fit.linear_predictor,
+        deviance_residuals=pearson,
+        pearson_residuals=pearson,
+        standardized_residuals=pearson,
+        deviance=float(np.nansum(pearson ** 2)),
+        dispersion=float(np.nanvar(pearson)) if pearson.size else 1.0,
+        n_iter=max(zero_fit.n_iter, pos_fit.n_iter),
+        converged=zero_fit.converged and pos_fit.converged,
+        warnings=["two_part_lognormal_zero_mass"],
+        aux={"zero_coef": zero_fit.coefficients.tolist(), "positive_coef": pos_fit.coefficients.tolist()},
+        randomized_quantile_residuals=pearson,
+    )
+
+
+def _fit_student_t(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    prior_weights: np.ndarray | None,
+    term_names: Sequence[str] | None,
+    max_iter: int,
+    tol: float,
+) -> GLMResult:
+    y = np.asarray(y, dtype=float).ravel()
+    weights = np.ones_like(y) if prior_weights is None else np.asarray(prior_weights, dtype=float).ravel()
+    robust_weights = weights.copy()
+    fit = None
+    for _ in range(max_iter):
+        fit = fit_glm(
+            y=y,
+            X=X,
+            family="gaussian_identity",
+            prior_weights=robust_weights,
+            term_names=term_names,
+            max_iter=max_iter,
+            tol=tol,
+        )
+        resid = y - fit.fitted
+        scale = math.sqrt(max(fit.dispersion, _EPS))
+        standardized = resid / scale
+        next_weights = weights * np.minimum(1.0, 4.0 / np.maximum(np.abs(standardized), _EPS))
+        if float(np.max(np.abs(next_weights - robust_weights))) < tol:
+            robust_weights = next_weights
+            break
+        robust_weights = next_weights
+    if fit is None:
+        raise GLMError("student_t_fit_failed")
+    return GLMResult(
+        family="student_t",
+        residual_type="standardized",
+        terms=fit.terms,
+        coefficients=fit.coefficients,
+        fitted=fit.fitted,
+        linear_predictor=fit.linear_predictor,
+        deviance_residuals=fit.deviance_residuals,
+        pearson_residuals=fit.pearson_residuals,
+        standardized_residuals=fit.standardized_residuals,
+        deviance=fit.deviance,
+        dispersion=fit.dispersion,
+        n_iter=fit.n_iter,
+        converged=fit.converged,
+        warnings=["student_t_robust_weighted_gaussian"],
+        aux={"robust_weights": robust_weights.tolist()},
+    )
+
+
+def _softmax(eta: np.ndarray) -> np.ndarray:
+    eta = np.asarray(eta, dtype=float)
+    eta = np.clip(eta - np.max(eta, axis=1, keepdims=True), -_ETA_CLAMP, _ETA_CLAMP)
+    exp_eta = np.exp(eta)
+    return exp_eta / np.maximum(exp_eta.sum(axis=1, keepdims=True), _EPS)
+
+
+def _composition_matrix(y: np.ndarray) -> np.ndarray:
+    arr = np.asarray(y, dtype=float)
+    if arr.ndim == 1:
+        labels = arr.astype(int)
+        if labels.size == 0:
+            raise GLMError("empty_multinomial_response")
+        if np.any(labels < 0):
+            raise GLMError("multinomial_labels_must_be_nonnegative")
+        k = int(labels.max()) + 1
+        out = np.zeros((labels.size, k), dtype=float)
+        out[np.arange(labels.size), labels] = 1.0
+        return out
+    if arr.ndim != 2:
+        raise GLMError("composition_response_must_be_1d_labels_or_2d_matrix")
+    if arr.shape[1] < 2:
+        raise GLMError("composition_response_requires_at_least_two_parts")
+    if np.any(arr < 0):
+        raise GLMError("composition_response_contains_negative_parts")
+    row_sum = arr.sum(axis=1, keepdims=True)
+    if np.any(row_sum <= 0):
+        raise GLMError("composition_response_contains_empty_rows")
+    return arr / row_sum
+
+
+def _ilr_like_residual(y: np.ndarray, p: np.ndarray) -> np.ndarray:
+    y = np.clip(y, _EPS, 1.0)
+    p = np.clip(p, _EPS, 1.0)
+    log_y = np.log(y)
+    log_p = np.log(p)
+    clr_y = log_y - log_y.mean(axis=1, keepdims=True)
+    clr_p = log_p - log_p.mean(axis=1, keepdims=True)
+    return clr_y - clr_p
+
+
+def _fit_softmax_composition(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    family: str,
+    prior_weights: np.ndarray | None,
+    term_names: Sequence[str] | None,
+    max_iter: int,
+    tol: float,
+    learning_rate: float = 0.2,
+) -> GLMResult:
+    """Multinomial/Dirichlet-mean softmax model for categorical/simplex outcomes.
+
+    ``multinomial_logit`` consumes class labels or one-hot/count rows. ``dirichlet``
+    consumes non-negative composition rows and fits the mean on the simplex; residuals
+    are centered log-ratio differences, the ILR-compatible diagnostic surface required
+    by the MSD residual registry.
+    """
+    Y = _composition_matrix(y)
+    X = np.asarray(X, dtype=float)
+    if X.ndim != 2 or X.shape[0] != Y.shape[0]:
+        raise GLMError("design_matrix_shape_mismatch")
+    n, p = X.shape
+    k = Y.shape[1]
+    weights = np.ones(n, dtype=float) if prior_weights is None else np.asarray(prior_weights, dtype=float).ravel()
+    if weights.shape[0] != n:
+        raise GLMError("prior_weights_shape_mismatch")
+    B = np.zeros((p, k), dtype=float)
+    previous = math.inf
+    converged = False
+    ridge = 1e-6
+    for iteration in range(1, max_iter + 1):
+        P = _softmax(X @ B)
+        gradient = (X.T @ ((P - Y) * weights[:, None])) / max(float(weights.sum()), _EPS)
+        gradient += ridge * B
+        next_B = B - learning_rate * gradient
+        P_next = _softmax(X @ next_B)
+        nll = -float(np.sum(weights[:, None] * Y * np.log(np.clip(P_next, _EPS, 1.0)))) / max(float(weights.sum()), _EPS)
+        if abs(previous - nll) <= tol:
+            B = next_B
+            converged = True
+            break
+        if nll > previous and learning_rate > 1e-4:
+            learning_rate *= 0.5
+            continue
+        previous = nll
+        B = next_B
+    P = _softmax(X @ B)
+    resid_matrix = _ilr_like_residual(Y, P) if family == "dirichlet" else Y - P
+    residual = resid_matrix.reshape(-1)
+    deviance = -2.0 * float(np.sum(weights[:, None] * Y * np.log(np.clip(P, _EPS, 1.0))))
+    term_base = list(term_names) if term_names is not None else [f"x{i}" for i in range(p)]
+    terms = [f"{term}[part_{j}]" for term in term_base for j in range(k)]
+    return GLMResult(
+        family=family,
+        residual_type=RESIDUAL_TYPE_BY_FAMILY[family],
+        terms=terms,
+        coefficients=B.reshape(-1),
+        fitted=P.reshape(-1),
+        linear_predictor=(X @ B).reshape(-1),
+        deviance_residuals=residual,
+        pearson_residuals=residual,
+        standardized_residuals=residual,
+        deviance=deviance,
+        dispersion=float(np.mean(residual ** 2)) if residual.size else 0.0,
+        n_iter=iteration,
+        converged=converged,
+        warnings=[f"{family}_softmax_simplex_model"],
+        aux={"n_parts": k, "coefficient_shape": [p, k]},
+    )
+
+
+def _fit_beta_binomial(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    prior_weights: np.ndarray | None,
+    term_names: Sequence[str] | None,
+    max_iter: int,
+    tol: float,
+) -> GLMResult:
+    """Overdispersed binomial proportion with beta-binomial variance diagnostics."""
+    fit = fit_glm(
+        y=y,
+        X=X,
+        family="binomial_proportion",
+        prior_weights=prior_weights,
+        term_names=term_names,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    yy = np.clip(np.asarray(y, dtype=float).ravel(), 0.0, 1.0)
+    mu = np.clip(fit.fitted, _EPS, 1.0 - _EPS)
+    n_trials = np.ones_like(yy) if prior_weights is None else np.maximum(np.asarray(prior_weights, dtype=float).ravel(), 1.0)
+    raw_var = (yy - mu) ** 2
+    binom_var = mu * (1.0 - mu) / n_trials
+    denom = np.maximum(mu * (1.0 - mu) * np.maximum(n_trials - 1.0, 0.0) / n_trials, _EPS)
+    rho = float(np.clip(np.nanmean(np.maximum(raw_var - binom_var, 0.0) / denom), 0.0, 0.99))
+    beta_var = mu * (1.0 - mu) * (1.0 + (n_trials - 1.0) * rho) / n_trials
+    pearson = (yy - mu) / np.sqrt(np.maximum(beta_var, _EPS))
+    return GLMResult(
+        family="beta_binomial",
+        residual_type="pearson",
+        terms=fit.terms,
+        coefficients=fit.coefficients,
+        fitted=fit.fitted,
+        linear_predictor=fit.linear_predictor,
+        deviance_residuals=fit.deviance_residuals,
+        pearson_residuals=pearson,
+        standardized_residuals=pearson,
+        deviance=float(np.sum(pearson ** 2)),
+        dispersion=float(np.sum(pearson ** 2) / max(len(pearson) - len(fit.coefficients), 1)),
+        n_iter=fit.n_iter,
+        converged=fit.converged,
+        warnings=["beta_binomial_overdispersion_estimated"],
+        aux={"intraclass_correlation_rho": rho},
+    )
+
+
 def fit_glm(
     *,
     y: np.ndarray,
@@ -397,10 +720,56 @@ def fit_glm(
     nb_theta: float | None = None,
 ) -> GLMResult:
     """Fit a GLM by IRLS. NumPy-only, no silent family downgrades."""
+    if family in {"dirichlet", "multinomial_logit"}:
+        return _fit_softmax_composition(
+            y=y,
+            X=X,
+            family=family,
+            prior_weights=prior_weights,
+            term_names=term_names,
+            max_iter=max_iter,
+            tol=tol,
+        )
+    if family == "beta_binomial":
+        return _fit_beta_binomial(
+            y=y,
+            X=X,
+            prior_weights=prior_weights,
+            term_names=term_names,
+            max_iter=max_iter,
+            tol=tol,
+        )
     if family in _HURDLE_FAMILIES:
         return _fit_hurdle(
             y=y, X=X, family=family, offset=offset, prior_weights=prior_weights,
             term_names=term_names, max_iter=max_iter, tol=tol, nb_theta=nb_theta,
+        )
+    if family == "lognormal":
+        return _fit_lognormal(
+            y=y,
+            X=X,
+            prior_weights=prior_weights,
+            term_names=term_names,
+            max_iter=max_iter,
+            tol=tol,
+        )
+    if family == "two_part_lognormal":
+        return _fit_two_part_lognormal(
+            y=y,
+            X=X,
+            prior_weights=prior_weights,
+            term_names=term_names,
+            max_iter=max_iter,
+            tol=tol,
+        )
+    if family == "student_t":
+        return _fit_student_t(
+            y=y,
+            X=X,
+            prior_weights=prior_weights,
+            term_names=term_names,
+            max_iter=max_iter,
+            tol=tol,
         )
     y = np.asarray(y, dtype=float).ravel()
     X = np.asarray(X, dtype=float)
@@ -480,6 +849,111 @@ def fit_glm(
         dispersion=dispersion,
         n_iter=iteration,
         converged=converged,
+    )
+
+
+def fit_glm_penalized(
+    *,
+    y: np.ndarray,
+    X: np.ndarray,
+    family: str,
+    penalty: np.ndarray,
+    offset: np.ndarray | None = None,
+    prior_weights: np.ndarray | None = None,
+    term_names: Sequence[str] | None = None,
+    max_iter: int = 100,
+    tol: float = 1e-8,
+    nb_theta: float | None = None,
+) -> GLMResult:
+    """Fit a penalized GLM by IRLS.
+
+    The penalty is a positive-semidefinite precision matrix added to the IRLS
+    normal equations. This is used for ICAR/GMRF spatial effects, where the
+    random-effect block receives the graph Laplacian and ordinary covariates
+    receive zero penalty.
+    """
+    y = np.asarray(y, dtype=float).ravel()
+    X = np.asarray(X, dtype=float)
+    penalty = np.asarray(penalty, dtype=float)
+    if X.ndim != 2 or X.shape[0] != y.shape[0]:
+        raise GLMError("design_matrix_shape_mismatch")
+    n, p = X.shape
+    if penalty.shape != (p, p):
+        raise GLMError("penalty_matrix_shape_mismatch")
+    if n == 0:
+        raise GLMError("empty_design_matrix")
+    fam = _resolve_family(family, y=y, nb_theta=nb_theta)
+    offset_vec = np.zeros(n) if offset is None else np.asarray(offset, dtype=float).ravel()
+    weights0 = np.ones(n) if prior_weights is None else np.asarray(prior_weights, dtype=float).ravel()
+
+    if fam.link == "log":
+        mu = np.maximum(y, 0.0) + 0.1
+    elif fam.link == "logit":
+        mu = np.clip((weights0 * y + 0.5) / (weights0 + 1.0), _EPS, 1 - _EPS)
+    else:
+        mu = y.copy()
+    eta = fam.linkfun(mu) - (offset_vec if fam.uses_log_offset else 0.0)
+
+    ridge = np.eye(p) * 1e-10
+    beta = np.zeros(p)
+    converged = False
+    iteration = 0
+    for iteration in range(1, max_iter + 1):
+        mu_eta = np.maximum(np.abs(fam.mu_eta(eta + offset_vec)), _EPS) * np.sign(
+            fam.mu_eta(eta + offset_vec) + _EPS
+        )
+        mu = fam.linkinv(eta + offset_vec)
+        var = np.maximum(fam.variance(mu), _EPS)
+        w = weights0 * (mu_eta ** 2) / var
+        z = eta + (y - mu) / mu_eta
+        sw = np.sqrt(np.maximum(w, 0.0))
+        xw = X * sw[:, None]
+        zw = z * sw
+        lhs = xw.T @ xw + penalty + ridge
+        rhs = xw.T @ zw
+        try:
+            next_beta = np.linalg.solve(lhs, rhs)
+        except np.linalg.LinAlgError:
+            next_beta = np.linalg.pinv(lhs) @ rhs
+        next_eta = X @ next_beta
+        delta = float(np.max(np.abs(next_beta - beta))) if p else 0.0
+        beta = next_beta
+        eta = next_eta
+        if delta < tol:
+            converged = True
+            break
+
+    mu = fam.linkinv(eta + offset_vec)
+    unit_dev = np.maximum(fam.unit_deviance(y, mu), 0.0)
+    deviance = float(np.sum(weights0 * unit_dev))
+    dev_resid = np.sign(y - mu) * np.sqrt(weights0 * unit_dev)
+    var = np.maximum(fam.variance(mu), _EPS)
+    pearson = (y - mu) * np.sqrt(weights0) / np.sqrt(var)
+    # Effective degrees of freedom for penalized GLMs is trace(H); use the
+    # conservative unpenalized p count for dispersion to avoid overclaiming.
+    dof = max(n - p, 1)
+    dispersion = float(np.sum(pearson ** 2) / dof)
+    if family in {"gaussian_identity", "ols"}:
+        sd = math.sqrt(dispersion) if dispersion > 0 else 0.0
+        standardized = (y - mu) / sd if sd > 0 else (y - mu) * 0.0
+    else:
+        standardized = dev_resid
+
+    return GLMResult(
+        family=family,
+        residual_type=RESIDUAL_TYPE_BY_FAMILY.get(family, "deviance"),
+        terms=list(term_names) if term_names is not None else [f"x{i}" for i in range(p)],
+        coefficients=beta,
+        fitted=mu,
+        linear_predictor=eta + offset_vec,
+        deviance_residuals=dev_resid,
+        pearson_residuals=pearson,
+        standardized_residuals=standardized,
+        deviance=deviance,
+        dispersion=dispersion,
+        n_iter=iteration,
+        converged=converged,
+        warnings=["penalized_irls"],
     )
 
 
@@ -638,6 +1112,25 @@ def _predict_residuals(
         lam = np.exp(_clamp_eta(X @ count_coef + offset_vec))
         lower, upper = _hurdle_cdf_bounds(np.asarray(y, dtype=float).ravel(), pi, lam, theta)
         return randomized_quantile_residuals(lower, upper, seed=int(fit.aux.get("seed", 12345)))
+    if family in {"dirichlet", "multinomial_logit"}:
+        shape = fit.aux.get("coefficient_shape") or []
+        if len(shape) != 2:
+            raise GLMError("softmax_prediction_missing_coefficient_shape")
+        p, k = int(shape[0]), int(shape[1])
+        B = np.asarray(fit.coefficients, dtype=float).reshape(p, k)
+        Y = _composition_matrix(np.asarray(y, dtype=float))
+        P = _softmax(np.asarray(X, dtype=float) @ B)
+        residual = _ilr_like_residual(Y, P) if family == "dirichlet" else Y - P
+        return residual.reshape(-1)
+    if family == "beta_binomial":
+        fam = _resolve_family("binomial_proportion", y=y, nb_theta=None)
+        weights = np.ones(len(y)) if prior_weights is None else np.asarray(prior_weights, dtype=float).ravel()
+        eta = X @ fit.coefficients
+        mu = np.clip(fam.linkinv(eta + offset_vec), _EPS, 1.0 - _EPS)
+        rho = float(fit.aux.get("intraclass_correlation_rho") or 0.0)
+        yy = np.clip(np.asarray(y, dtype=float).ravel(), 0.0, 1.0)
+        beta_var = mu * (1.0 - mu) * (1.0 + (np.maximum(weights, 1.0) - 1.0) * rho) / np.maximum(weights, 1.0)
+        return (yy - mu) / np.sqrt(np.maximum(beta_var, _EPS))
     fam = _resolve_family(family, y=y, nb_theta=None)
     weights = np.ones(len(y)) if prior_weights is None else np.asarray(prior_weights, dtype=float).ravel()
     eta = X @ fit.coefficients

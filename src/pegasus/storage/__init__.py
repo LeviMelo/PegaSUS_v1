@@ -1,6 +1,7 @@
 """PegaSUS production storage boundary."""
 
 from pegasus.storage.materialization import (
+    append_replace,
     hash_table,
     read_table,
     row_count,
@@ -10,6 +11,7 @@ from pegasus.storage.materialization import (
 )
 
 __all__ = [
+    "append_replace",
     "hash_table",
     "read_table",
     "row_count",

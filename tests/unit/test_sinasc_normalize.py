@@ -23,10 +23,11 @@ def test_sinasc_fixture_normalization_preserves_decoder_states(tmp_path: Path):
     df = pl.read_parquet(out)
     assert "raw_json" in df.columns
     assert df.filter(pl.col("event_id") == "SINASC-DN0002")["birth_weight_g"].item() == 2400
-    assert df.filter(pl.col("event_id") == "SINASC-DN0002")["low_birth_weight_flag"].item() is True
+    assert "low_birth_weight_flag" not in df.columns
+    assert df.filter(pl.col("event_id") == "SINASC-DN0002")["birth_weight_state"].item() == "valid"
     assert df.filter(pl.col("event_id") == "SINASC-DN0004")["birth_weight_state"].item() == "missing"
     assert df.filter(pl.col("event_id") == "SINASC-DN0004")["gestational_age_state"].item() == "sentinel"
     assert df.filter(pl.col("event_id") == "SINASC-DN0001")["prenatal_consult_count"].item() == 7
     assert df.filter(pl.col("event_id") == "SINASC-DN0001")["prenatal_consult_raw_digits"].item() == "07"
-    assert df.filter(pl.col("event_id") == "SINASC-DN0003")["low_apgar5_flag"].item() is True
-    assert df.filter(pl.col("event_id") == "SINASC-DN0005")["advanced_maternal_age_flag"].item() is True
+    assert df.filter(pl.col("event_id") == "SINASC-DN0003")["apgar_5min"].item() == 6
+    assert df.filter(pl.col("event_id") == "SINASC-DN0005")["mother_age_years"].item() == 36

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_m
 from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
+from pegasus.efg.race_bridge import load_race_bridge_prior
 from pegasus.she.substrate import SourceArtifactRef, build_substrate_bundle, load_source_artifacts_from_manifest
 from pegasus.workflows.msd_inference import run_msd_inference_pipeline
 
@@ -30,7 +32,8 @@ def utc_stamp() -> str:
 def _load_intent(intent_path: Path) -> tuple[dict[str, Any], UserIntent]:
     payload = json.loads(intent_path.read_text(encoding="utf-8"))
     try:
-        return payload, UserIntent.model_validate(payload)
+        intent = UserIntent.model_validate(payload)
+        return intent.model_dump(mode="json"), intent
     except ValidationError as exc:
         raise ValueError(f"Invalid UserIntent file {intent_path}: {exc}") from exc
 
@@ -158,6 +161,8 @@ def _validate_compile_manifest_artifacts(
     artifacts: tuple[SourceArtifactRef, ...],
     *,
     include_cnes_sih: bool,
+    run_profile: str = "core_vital",
+    require_race_bridge_prior: bool = False,
 ) -> None:
     required: set[tuple[str, str]] = {
         ("SIM-DO", "processed_events"),
@@ -169,6 +174,10 @@ def _validate_compile_manifest_artifacts(
             ("CNES-ST", "processed_events"),
             ("SIH-RD", "processed_events"),
         })
+    if run_profile in {"contextual", "full"}:
+        required.add(("SIDRA", "context_facts"))
+    if require_race_bridge_prior:
+        required.add(("RACE-BRIDGE", "emission_prior"))
     available: dict[tuple[str, str], list[SourceArtifactRef]] = {}
     for artifact in artifacts:
         key = (artifact.source_system, artifact.artifact_role)
@@ -183,6 +192,17 @@ def _validate_compile_manifest_artifacts(
             continue
         if len(matches) < 1:
             raise ValueError(f"Production compile requires at least one {system}:{role} artifact; found {len(matches)}.")
+
+
+def _race_bridge_prior_artifact(artifacts: tuple[SourceArtifactRef, ...]) -> SourceArtifactRef | None:
+    return next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.source_system == "RACE-BRIDGE" and artifact.artifact_role == "emission_prior"
+        ),
+        None,
+    )
 
 
 def _population_tensor_mode_to_solver_mode(population_mode: str) -> str | None:
@@ -298,17 +318,45 @@ def _run_compile_impl(
     if race_bridge_plan.registry_path is not None and race_bridge_plan.registry_hash is not None:
         registry_hashes[str(race_bridge_plan.registry_path)] = race_bridge_plan.registry_hash
 
-    if compile_source_reality.compile_source_mode != "materialized_external":
-        raise ValueError(
-            "Production compile requires materialized_external source artifacts. "
-            "Development data builders must live outside src/pegasus production workflows."
-        )
-
     compile_manifest_path = data_root / "manifests" / "runs" / f"{run_id}.compile_manifest.json"
     if source_manifest is None:
-        raise ValueError("Production compile requires a source artifact manifest.")
+        raise ValueError("production compile requires --source-manifest")
     autonomous_artifacts = load_source_artifacts_from_manifest(source_manifest)
-    _validate_compile_manifest_artifacts(autonomous_artifacts, include_cnes_sih=include_cnes_sih)
+    _validate_compile_manifest_artifacts(
+        autonomous_artifacts,
+        include_cnes_sih=include_cnes_sih,
+        run_profile=intent.run_profile,
+        require_race_bridge_prior=race_bridge_plan.status == "planned",
+    )
+    if race_bridge_plan.status == "planned":
+        prior_artifact = _race_bridge_prior_artifact(autonomous_artifacts)
+        if prior_artifact is None:
+            raise ValueError("Race bridge compile requires a materialized RACE-BRIDGE:emission_prior artifact.")
+        if prior_artifact.provenance_mode != "materialized_external":
+            raise ValueError(
+                "Race bridge emission prior must be materialized_external; "
+                f"received {prior_artifact.provenance_mode!r}."
+            )
+        prior = load_race_bridge_prior(prior_artifact.path)
+        if prior.source_axis != race_bridge_plan.source_axis or prior.target_axis != race_bridge_plan.target_axis:
+            raise ValueError(
+                "Race bridge emission prior axis mismatch: "
+                f"plan={race_bridge_plan.source_axis}->{race_bridge_plan.target_axis}; "
+                f"prior={prior.source_axis}->{prior.target_axis}."
+            )
+        if str(prior.metadata.get("epistemic_status") or "").lower() in {"validation_fixture_only", "fixture", "synthetic_smoke_fixture"}:
+            raise ValueError("Race bridge emission prior is marked as fixture/validation-only and cannot be used for production compile.")
+        race_bridge_plan = replace(
+            race_bridge_plan,
+            bridge_id=prior.bridge_id,
+            prior_path=Path(prior_artifact.path),
+            prior_hash=prior_artifact.artifact_hash or prior.prior_hash,
+            warnings=[
+                *list(race_bridge_plan.warnings or []),
+                "race_bridge_prior_materialized_external",
+            ],
+        )
+        source_hashes["race_bridge_emission_prior"] = prior_artifact.artifact_hash or prior.prior_hash
 
     with telemetry.stage("datasus_manifest"):
         compile_manifest_path = _write_compile_manifest(
@@ -328,7 +376,11 @@ def _run_compile_impl(
             source_hashes[key] = digest
 
     with telemetry.stage("datasus_decode"):
-        source_hashes["source_manifest"] = sha256_file(Path(source_manifest))
+        source_hashes["source_manifest"] = (
+            sha256_file(Path(source_manifest))
+            if source_manifest is not None
+            else content_hash(compile_source_reality.as_manifest())
+        )
 
     telemetry.set_stage("sidra_metadata", "skipped", 0.0)
     telemetry.set_stage("sidra_plan", "skipped", 0.0)
@@ -388,6 +440,7 @@ def _run_compile_impl(
     cnes_sih_metadata: dict[str, Any] | None = domain_summaries.get("cnes_sih")
     population_tensor_metadata: dict[str, Any] | None = domain_summaries.get("population_tensor")
     race_bridge_metadata: dict[str, Any] | None = domain_summaries.get("race_bridge")
+    sidra_context_metadata: dict[str, Any] | None = domain_summaries.get("sidra_context")
 
     # MSD cutover: manual domain attachers are forbidden. CNES/SIH, maternal-child,
     # SIDRA denominators, population, and race bridge fields must be produced by
@@ -399,11 +452,23 @@ def _run_compile_impl(
     telemetry.set_stage("q_tensor", "success", 0.0)
     if population_tensor_metadata is None:
         telemetry.set_stage("population_solver", "skipped", 0.0)
-    telemetry.set_stage("stdfm", "skipped", 0.0)
+    stdfm_executed_count = int((sidra_context_metadata or {}).get("stdfm_executed_count") or 0)
+    sidra_context_field_count = int((sidra_context_metadata or {}).get("field_count") or 0)
+    if stdfm_executed_count > 0:
+        telemetry.set_stage("stdfm", "success", 0.0)
+    elif intent.run_profile in {"contextual", "full"} and sidra_context_field_count > 0:
+        telemetry.set_stage("stdfm", "skipped", 0.0)
+    else:
+        telemetry.set_stage("stdfm", "skipped", 0.0)
     skipped_reasons = {
         **compiler_stage_plan.skip_reason_map(),
-        "stdfm": "compile intent does not request latent-factor fitting",
     }
+    if intent.run_profile == "core_vital":
+        skipped_reasons["stdfm"] = "empty_by_profile: run_profile=core_vital does not require latent-factor fitting"
+    elif stdfm_executed_count == 0 and sidra_context_field_count > 0:
+        skipped_reasons["stdfm"] = "not_required_by_sidra_regime: context facts admitted without bounded-interpolate reconstruction"
+    elif stdfm_executed_count == 0:
+        skipped_reasons["stdfm"] = "blocked_no_sidra_context_fields: contextual/full profile requires materialized SIDRA context_facts"
     if population_tensor_metadata is None:
         skipped_reasons["population_solver"] = "official SIDRA anchor selected by intent"
     elif population_solver_manifest is not None:
@@ -434,6 +499,7 @@ def _run_compile_impl(
             "schema_version": "1.0",
             "compile_mode": "compile",
             "run_id": run_id,
+            "run_profile": intent.run_profile,
             "intent_path": str(intent_path),
             "data_root": str(data_root),
             "context_policy": intent.context_policy,
@@ -486,6 +552,7 @@ def _run_compile_impl(
         )
         manifest_extras = {
             "compile_mode": "compile",
+            "run_profile": intent.run_profile,
             "compile_manifest": str(compile_manifest_path),
             "intent_path": str(intent_path),
             "maternal_child_linkage": True,
@@ -514,6 +581,7 @@ def _run_compile_impl(
 
     final_extras = {
         "compile_mode": "compile",
+        "run_profile": intent.run_profile,
         "compile_manifest": str(compile_manifest_path),
         "intent_path": str(intent_path),
         "maternal_child_linkage": True,
@@ -575,31 +643,12 @@ def run_compile(
     source_manifest: str | Path | None = None,
     require_materialized_external: bool = False,
 ) -> dict[str, Any]:
-    # Single public compile boundary. The actual smoke compiler remains in
-    # _run_compile_impl(); this wrapper only attaches SHE substrate metadata
-    # when source artifact manifests are supplied.
-    result = _run_compile_impl(
+    # Single public compile boundary. All first-class bundle writes must happen
+    # inside _run_compile_impl() before OutputBundleManager.flush_to_disk().
+    return _run_compile_impl(
         intent_path=intent_path,
         run_dir=run_dir,
         data_root=data_root,
         source_manifest=source_manifest,
         require_materialized_external=require_materialized_external,
     )
-    if not isinstance(result, dict):
-        return result
-
-    run_path = result.get("run_dir")
-    if run_path is None:
-        result["substrate_gate"] = {
-            "status": "failed_nonfatal",
-            "reason": "compile_result_missing_run_dir",
-        }
-        return result
-
-    from pegasus.output.validate import validate_output_bundle as _validate_output_bundle
-    from pegasus.workflows.build_substrate import run_attach_substrate_to_run as _run_attach_substrate_to_run
-
-    substrate_summary = _run_attach_substrate_to_run(run_dir=run_path, source_manifest=source_manifest)
-    result["substrate_gate"] = substrate_summary
-    result["validation"] = _validate_output_bundle(run_dir=str(run_path))
-    return result

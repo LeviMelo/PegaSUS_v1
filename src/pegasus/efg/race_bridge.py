@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import numpy as np
 
 from pegasus.core.hashing import content_hash, sha256_file
 
@@ -19,6 +20,9 @@ ADMIN_RACE_LABELS = {
 }
 
 DEFAULT_TARGET_CATEGORIES = ["branca", "preta", "amarela", "parda", "indigena"]
+RACE_BRIDGE_BOOTSTRAP_REPLICATES = 200
+RACE_BRIDGE_MATRIX_CONCENTRATION = 250.0
+RACE_BRIDGE_PI_CONCENTRATION = 250.0
 
 
 class RaceBridgeValidationError(ValueError):
@@ -65,14 +69,16 @@ class RaceBridgePosterior:
     race_bridge_cv: float
     prior: RaceBridgePrior
     support: dict[str, Any]
+    bridge_mode: str = "posterior_simulation"
 
     def metadata(self) -> dict[str, Any]:
         return {
             "numerator_axis_source": self.prior.source_axis,
             "denominator_axis_target": self.prior.target_axis,
-            "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+            "bridge_operator": "Bridge_R_localPi_posteriorC",
             "emission_matrix_registry_version": self.prior.bridge_id,
             "bridge_mode": self.prior.mode,
+            "bridge_uncertainty_mode": self.bridge_mode,
             "missing_race_share": self.missing_share,
             "race_bridge_cv": self.race_bridge_cv,
             "sensitivity_width": self.sensitivity_width,
@@ -113,7 +119,7 @@ def validate_race_bridge_prior(payload: dict[str, Any], *, prior_hash: str | Non
 
     if not bridge_id:
         raise RaceBridgeValidationError("Bridge_R prior missing bridge_id.")
-    if mode != "fixedC_dynamic_weight":
+    if mode not in {"localPi_posteriorC", "fixedC_dynamic_weight"}:
         raise RaceBridgeValidationError(f"Unsupported Bridge_R mode: {mode!r}")
     if not source_axis or not target_axis:
         raise RaceBridgeValidationError("Bridge_R prior must declare source_axis and target_axis.")
@@ -206,19 +212,17 @@ def fixedc_dynamic_weight_bridge(counts: RaceBridgeCounts, prior: RaceBridgePrio
         if source not in prior.source_categories:
             raise RaceBridgeValidationError(f"Raw administrative race category not supported by prior: {source}")
 
-    posterior = {target: 0.0 for target in prior.target_categories}
-    for source, n in counts.raw_admin_counts.items():
-        row = prior.matrix[source]
-        for target, weight in row.items():
-            posterior[target] += float(n) * weight
+    local_pi = _local_target_pi(counts=counts, prior=prior)
+    crosswalk = _local_pi_crosswalk(prior=prior, local_pi=local_pi)
+    posterior = _bridge_with_crosswalk(counts.raw_admin_counts, crosswalk, prior)
+    if counts.missing_count:
+        for target in prior.target_categories:
+            posterior[target] += float(counts.missing_count) * local_pi[target]
 
-    # Width is deliberately conservative: explicit prior width plus unallocated missing-race share.
-    width = min(1.0, max(prior.sensitivity_width, counts.missing_share))
-    lower = {target: max(0.0, value * (1.0 - width)) for target, value in posterior.items()}
-    upper = {target: value * (1.0 + width) for target, value in posterior.items()}
-    mean = sum(posterior.values()) / len(posterior) if posterior else 0.0
-    variance = sum((value - mean) ** 2 for value in posterior.values()) / len(posterior) if posterior else 0.0
-    cv = math.sqrt(variance) / mean if mean > 0 else 0.0
+    draws = _posterior_bridge_draws(counts=counts, prior=prior, local_pi=local_pi)
+    lower, upper = _posterior_intervals(draws=draws, posterior=posterior, prior=prior)
+    cv = _posterior_draw_cv(draws=draws, prior=prior)
+    width = _sensitivity_width(posterior=posterior, lower=lower, upper=upper, prior=prior, missing_share=counts.missing_share)
 
     return RaceBridgePosterior(
         posterior_counts=posterior,
@@ -230,5 +234,226 @@ def fixedc_dynamic_weight_bridge(counts: RaceBridgeCounts, prior: RaceBridgePrio
         sensitivity_width=width,
         race_bridge_cv=cv,
         prior=prior,
-        support=counts.support,
+        support=dict(counts.support) | {
+            "bridge_operator": "Bridge_R_localPi_posteriorC",
+            "bridge_uncertainty_mode": "posterior_simulation",
+            "local_target_pi": local_pi,
+            "local_pi_source": _local_pi_source(counts.support),
+            "posterior_replicates": RACE_BRIDGE_BOOTSTRAP_REPLICATES,
+        },
+        bridge_mode="posterior_simulation",
     )
+
+
+def _apply_local_population_shares(
+    posterior: dict[str, float],
+    *,
+    counts: RaceBridgeCounts,
+    prior: RaceBridgePrior,
+) -> dict[str, float]:
+    shares = counts.support.get("target_population_shares") if isinstance(counts.support, dict) else None
+    if not isinstance(shares, dict) or not shares:
+        return posterior
+    clean = {target: max(float(shares.get(target, 0.0) or 0.0), 0.0) for target in prior.target_categories}
+    total_share = sum(clean.values())
+    total_count = sum(posterior.values())
+    if total_share <= 0 or total_count <= 0:
+        return posterior
+    normalized = {target: clean[target] / total_share for target in prior.target_categories}
+    bridged_total = sum(posterior.values())
+    return {target: bridged_total * normalized[target] for target in prior.target_categories}
+
+
+def _local_pi_source(support: dict[str, Any]) -> str:
+    shares = support.get("target_population_shares") if isinstance(support, dict) else None
+    return "declared_target_population_shares" if isinstance(shares, dict) and shares else "uniform_missing_local_calibration"
+
+
+def _local_target_pi(*, counts: RaceBridgeCounts, prior: RaceBridgePrior) -> dict[str, float]:
+    shares = counts.support.get("target_population_shares") if isinstance(counts.support, dict) else None
+    if isinstance(shares, dict) and shares:
+        clean = {target: max(float(shares.get(target, 0.0) or 0.0), 0.0) for target in prior.target_categories}
+    else:
+        clean = {target: 1.0 for target in prior.target_categories}
+    total = sum(clean.values())
+    if total <= 0:
+        clean = {target: 1.0 for target in prior.target_categories}
+        total = float(len(prior.target_categories))
+    return {target: clean[target] / total for target in prior.target_categories}
+
+
+def _local_pi_crosswalk(*, prior: RaceBridgePrior, local_pi: dict[str, float]) -> dict[str, dict[str, float]]:
+    """Return W[source][target] ∝ C[source,target] * local pi[target]."""
+    output: dict[str, dict[str, float]] = {}
+    for source in prior.source_categories:
+        weights = {
+            target: max(float(prior.matrix[source].get(target, 0.0)), 0.0) * max(float(local_pi.get(target, 0.0)), 0.0)
+            for target in prior.target_categories
+        }
+        total = sum(weights.values())
+        if total <= 0:
+            output[source] = dict(local_pi)
+        else:
+            output[source] = {target: weights[target] / total for target in prior.target_categories}
+    return output
+
+
+def _bridge_with_crosswalk(
+    raw_counts: dict[str, int],
+    crosswalk: dict[str, dict[str, float]],
+    prior: RaceBridgePrior,
+) -> dict[str, float]:
+    posterior = {target: 0.0 for target in prior.target_categories}
+    for source, n in raw_counts.items():
+        row = crosswalk[source]
+        for target, weight in row.items():
+            posterior[target] += float(n) * weight
+    return posterior
+
+
+def _bridge_once(raw_counts: dict[str, int], prior: RaceBridgePrior) -> dict[str, float]:
+    return _bridge_with_crosswalk(raw_counts, prior.matrix, prior)
+
+
+def _bootstrap_bridge_cv(*, counts: RaceBridgeCounts, prior: RaceBridgePrior) -> float:
+    observed_total = sum(max(int(v), 0) for v in counts.raw_admin_counts.values())
+    if observed_total <= 0:
+        return 0.0
+    source_categories = list(counts.raw_admin_counts)
+    probs = np.array([counts.raw_admin_counts[source] / observed_total for source in source_categories], dtype=float)
+    rng = np.random.default_rng(20260627)
+    totals_by_target = {target: [] for target in prior.target_categories}
+    for _ in range(RACE_BRIDGE_BOOTSTRAP_REPLICATES):
+        draw = rng.multinomial(observed_total, probs)
+        raw = {source: int(draw[idx]) for idx, source in enumerate(source_categories)}
+        posterior = _bridge_once(raw, prior)
+        for target, value in posterior.items():
+            totals_by_target[target].append(float(value))
+    cvs: list[float] = []
+    for values in totals_by_target.values():
+        if not values:
+            continue
+        mean = float(np.mean(values))
+        if mean <= 0:
+            continue
+        sd = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+        cvs.append(sd / mean)
+    return max(cvs) if cvs else 0.0
+
+
+def _dirichlet(alpha: list[float], rng: np.random.Generator) -> np.ndarray:
+    safe = np.array([max(float(x), 1e-6) for x in alpha], dtype=float)
+    return rng.dirichlet(safe)
+
+
+def _draw_prior_matrix(prior: RaceBridgePrior, rng: np.random.Generator) -> dict[str, dict[str, float]]:
+    concentration = float(prior.metadata.get("matrix_concentration", RACE_BRIDGE_MATRIX_CONCENTRATION))
+    matrix: dict[str, dict[str, float]] = {}
+    for source in prior.source_categories:
+        base = [max(float(prior.matrix[source].get(target, 0.0)), 0.0) for target in prior.target_categories]
+        draw = _dirichlet([concentration * value + 1e-3 for value in base], rng)
+        matrix[source] = {target: float(draw[idx]) for idx, target in enumerate(prior.target_categories)}
+    return matrix
+
+
+def _draw_local_pi(local_pi: dict[str, float], prior: RaceBridgePrior, rng: np.random.Generator) -> dict[str, float]:
+    concentration = float(prior.metadata.get("local_pi_concentration", RACE_BRIDGE_PI_CONCENTRATION))
+    draw = _dirichlet([concentration * local_pi[target] + 1e-3 for target in prior.target_categories], rng)
+    return {target: float(draw[idx]) for idx, target in enumerate(prior.target_categories)}
+
+
+def _posterior_bridge_draws(
+    *,
+    counts: RaceBridgeCounts,
+    prior: RaceBridgePrior,
+    local_pi: dict[str, float],
+) -> dict[str, list[float]]:
+    observed_total = sum(max(int(value), 0) for value in counts.raw_admin_counts.values())
+    rng = np.random.default_rng(20260628)
+    source_categories = list(prior.source_categories)
+    source_probs = np.array(
+        [max(int(counts.raw_admin_counts.get(source, 0)), 0) / observed_total for source in source_categories],
+        dtype=float,
+    ) if observed_total > 0 else np.array([1.0 / len(source_categories)] * len(source_categories), dtype=float)
+    draws = {target: [] for target in prior.target_categories}
+    for _ in range(RACE_BRIDGE_BOOTSTRAP_REPLICATES):
+        matrix_draw = _draw_prior_matrix(prior, rng)
+        pi_draw = _draw_local_pi(local_pi, prior, rng)
+        crosswalk = _local_pi_crosswalk(
+            prior=RaceBridgePrior(
+                bridge_id=prior.bridge_id,
+                mode=prior.mode,
+                source_axis=prior.source_axis,
+                target_axis=prior.target_axis,
+                source_categories=prior.source_categories,
+                target_categories=prior.target_categories,
+                matrix=matrix_draw,
+                sensitivity_width=prior.sensitivity_width,
+                metadata=prior.metadata,
+                prior_hash=prior.prior_hash,
+            ),
+            local_pi=pi_draw,
+        )
+        if observed_total > 0:
+            observed_draw = rng.multinomial(observed_total, source_probs)
+            raw_draw = {source: int(observed_draw[idx]) for idx, source in enumerate(source_categories)}
+        else:
+            raw_draw = {source: 0 for source in source_categories}
+        posterior = _bridge_with_crosswalk(raw_draw, crosswalk, prior)
+        if counts.missing_count:
+            missing_draw = rng.multinomial(int(counts.missing_count), np.array([pi_draw[target] for target in prior.target_categories]))
+            for idx, target in enumerate(prior.target_categories):
+                posterior[target] += float(missing_draw[idx])
+        for target, value in posterior.items():
+            draws[target].append(float(value))
+    return draws
+
+
+def _posterior_intervals(
+    *,
+    draws: dict[str, list[float]],
+    posterior: dict[str, float],
+    prior: RaceBridgePrior,
+) -> tuple[dict[str, float], dict[str, float]]:
+    lower: dict[str, float] = {}
+    upper: dict[str, float] = {}
+    width = max(float(prior.sensitivity_width), 0.0)
+    for target in prior.target_categories:
+        values = draws.get(target) or [posterior[target]]
+        lo = float(np.quantile(values, 0.025))
+        hi = float(np.quantile(values, 0.975))
+        # Conservative partial-identification widening over the declared credible set.
+        lower[target] = max(0.0, min(lo, posterior[target] * (1.0 - width)))
+        upper[target] = max(hi, posterior[target] * (1.0 + width))
+    return lower, upper
+
+
+def _posterior_draw_cv(*, draws: dict[str, list[float]], prior: RaceBridgePrior) -> float:
+    cvs: list[float] = []
+    for target in prior.target_categories:
+        values = draws.get(target) or []
+        if len(values) < 2:
+            continue
+        mean = float(np.mean(values))
+        if mean <= 0:
+            continue
+        sd = float(np.std(values, ddof=1))
+        cvs.append(sd / mean)
+    return max(cvs) if cvs else 0.0
+
+
+def _sensitivity_width(
+    *,
+    posterior: dict[str, float],
+    lower: dict[str, float],
+    upper: dict[str, float],
+    prior: RaceBridgePrior,
+    missing_share: float,
+) -> float:
+    widths: list[float] = [max(float(prior.sensitivity_width), float(missing_share))]
+    for target in prior.target_categories:
+        value = posterior.get(target, 0.0)
+        if value <= 0:
+            continue
+        widths.append(max(value - lower.get(target, value), upper.get(target, value) - value) / value)
+    return float(min(1.0, max(widths)))

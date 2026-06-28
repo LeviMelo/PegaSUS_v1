@@ -11,6 +11,7 @@ keep SHE exclusions out of the EFG admission surface.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from pegasus.core.hashing import content_hash
@@ -500,6 +501,99 @@ def _population_solver_materialized_fields(bundle: SubstrateBundle) -> list[Subs
     return out
 
 
+def _cnes_facility_stock_materialized_fields(bundle: SubstrateBundle) -> list[SubstrateMaterializedField]:
+    """Admit CNES-ST facility-period stock as a first-class Facilities count.
+
+    CNES-ST bed/capacity columns are marks over a facility registry row, not the
+    facility stock itself.  The core seed `CNESFacilitiesAll` therefore needs an
+    explicit source-artifact event count over the real CNES-ST processed table.
+    """
+
+    out: list[SubstrateMaterializedField] = []
+    for artifact in bundle.source_artifacts:
+        if artifact.source_system != "CNES-ST" or artifact.artifact_role != "processed_events":
+            continue
+        artifact_path = Path(artifact.path)
+        if not artifact_path.exists():
+            continue
+        try:
+            import polars as pl
+
+            frame = pl.read_parquet(artifact_path, n_rows=25)
+        except Exception:
+            continue
+        columns = set(frame.columns)
+        if "facility_id" not in columns and not any(col.startswith("cnpj_") for col in columns):
+            continue
+        support: dict[str, Any] = {
+            "support_kind": "source_artifact_event_count",
+            "source_system": "CNES-ST",
+            "artifact_path": str(artifact_path),
+            "source_columns": sorted(columns),
+            "facility_identifier_column": "facility_id" if "facility_id" in columns else None,
+            "row_count": None,
+        }
+        axes: dict[str, Any] = {}
+        if "mun_facility_cod6" in columns:
+            support["geography_column"] = "mun_facility_cod6"
+            axes["geography"] = "mun_facility_cod6"
+        elif "municipality_cod6" in columns:
+            support["geography_column"] = "municipality_cod6"
+            axes["geography"] = "municipality_cod6"
+        if "year" in columns:
+            support["time_column"] = "year"
+            axes["time"] = "year"
+        elif "competence_year" in columns:
+            support["time_column"] = "competence_year"
+            axes["time"] = "competence_year"
+        lineage = make_lineage(
+            parent_ids=[],
+            operator_type="count_measure",
+            operator_params={
+                "carrier": "Facilities",
+                "role": "source_event_count",
+                "source_system": "CNES-ST",
+                "artifact_path": str(artifact_path),
+                "facility_identifier_column": support.get("facility_identifier_column"),
+                "geography_column": support.get("geography_column"),
+                "time_column": support.get("time_column"),
+            },
+            registry_versions={
+                "CNES-ST": artifact.artifact_hash or artifact.source_manifest_hash or "unknown",
+                "cnes_facility_stock": "source_artifact_event_count_v1",
+            },
+            source_manifest_hashes=_unique([artifact.source_manifest_hash, artifact.artifact_hash]),
+            code_version="cnes_facility_stock_v1",
+        )
+        field = make_field_node(
+            name=f"CNES facility stock count {artifact_path.stem}",
+            kind="extensive_measure",
+            carrier="Facilities",
+            unit="counts",
+            support=support,
+            axes=axes,
+            aggregation="additive",
+            role=["source_event_count", "facility_stock", "source_field"],
+            source=["CNES-ST", str(artifact_path), support.get("facility_identifier_column") or "facility_record"],
+            operator="count_measure",
+            provenance=["SHE_SubstrateBundle", "source_normalized", "facility_registry", "CNES-ST"],
+            state="verified",
+            warnings=[],
+            lineage=lineage,
+            materialization_state="metadata_only",
+            path=None,
+            dashboard_safe=False,
+        ).model_copy(update={"id": f"cnes_facility_stock_{lineage_hash(lineage)[:24]}"})
+        out.append(SubstrateMaterializedField(
+            candidate_id=field.id,
+            field=field,
+            lineage_hash=lineage_hash(field.lineage),
+            materialization_reason="cnes_facility_stock_count",
+            warnings=(),
+        ))
+    return out
+
+
 def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializationResult:
     """Convert SHE-admissible substrate candidates into metadata-only FieldNodes.
 
@@ -514,6 +608,7 @@ def materialize_substrate_bundle(bundle: SubstrateBundle) -> SubstrateMaterializ
     fields_list.extend(_sidra_context_materialized_fields(bundle))
     fields_list.extend(_sidra_demographic_population_materialized_fields(bundle))
     fields_list.extend(_population_solver_materialized_fields(bundle))
+    fields_list.extend(_cnes_facility_stock_materialized_fields(bundle))
     fields = tuple(fields_list)
     excluded = tuple(_exclusion_manifest(exclusion) for exclusion in bundle.exclusions)
     payload = {

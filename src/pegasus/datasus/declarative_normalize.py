@@ -12,7 +12,7 @@ import importlib
 import re
 from typing import Any, Callable
 
-from pegasus.she.source_registry import resolve_source_field
+from pegasus.she.source_registry import resolve_raw_source_fields
 
 
 Decoder = Callable[[Any], Any]
@@ -108,6 +108,24 @@ def _declared_decoder(spec: Any) -> str | None:
     return _normalize_decoder_name(value)
 
 
+def _declared_transform(spec: Any) -> str | None:
+    route = _route(spec).lower()
+    parser = _spec_get(spec, "parser", "parser_name")
+    decoder = _spec_get(spec, "decoder", "decoder_name", "composite_decoder")
+    if route == "parse" and parser:
+        return _normalize_decoder_name(parser)
+    if decoder:
+        return _normalize_decoder_name(decoder)
+    if parser:
+        return _normalize_decoder_name(parser)
+    return None
+
+
+def _output_key(spec: Any) -> str | None:
+    value = _spec_get(spec, "output_key", "decoder_output_key", "value_key")
+    return None if value is None else str(value)
+
+
 def _parse_municipality(value: Any) -> tuple[str | None, str]:
     if value in {None, ""}:
         return None, "missing"
@@ -124,6 +142,92 @@ def _parse_icd10(value: Any) -> tuple[str | None, str]:
     return (text or None), ("parsed" if text else "missing")
 
 
+def _decode_registered_value(name: str, value: Any, spec: Any, *, column: str, row: dict[str, Any]) -> Any:
+    normalized = name.lower()
+    if normalized == "decode_physical_scalar":
+        axes = getattr(spec, "axes", {}) or {}
+        measure = str(axes.get("measure") or _canonical_name(spec, column))
+        if "birth_weight" in measure:
+            return _resolve_decoder_callable("decode_physical_scalar")(
+                value,
+                unit="grams",
+                lower=300,
+                upper=7000,
+                sentinels={"0", "9999"},
+            )
+        if "gestational" in measure:
+            return _resolve_decoder_callable("decode_physical_scalar")(
+                value,
+                unit="weeks",
+                lower=20,
+                upper=45,
+                sentinels={"0", "99"},
+            )
+        if "apgar" in measure:
+            return _resolve_decoder_callable("decode_physical_scalar")(
+                value,
+                unit="score",
+                lower=0,
+                upper=10,
+                sentinels={"99"},
+            )
+    if normalized == "decode_count2":
+        return _resolve_decoder_callable("decode_count2")(value, sentinels={"99"})
+    if normalized == "decode_sih_age":
+        cod_idade = row.get("COD_IDADE", row.get("CODIDADE"))
+        idade = row.get("IDADE", value)
+        return _resolve_decoder_callable("decode_sih_age")(cod_idade, idade)
+    if normalized == "filter_cnpj":
+        return _resolve_decoder_callable("filter_cnpj")(value)
+    if normalized == "parse_icd":
+        fn = _resolve_decoder_callable("parse_icd")
+        axes = getattr(spec, "axes", {}) or {}
+        role = str(axes.get("icd_topology_role") or "diagnostic_code")
+        return fn(value, topology_role=role, source_field=column)
+
+    decoder = _resolve_decoder_callable(name)
+    if decoder is None:
+        raise LookupError(f"unknown_decoder:{name}")
+    return decoder(value)
+
+
+def _decoded_state(decoded: Any) -> str:
+    for name in ("state", "parse_state"):
+        value = getattr(decoded, name, None)
+        if value is not None:
+            return str(value)
+    if isinstance(decoded, tuple) and len(decoded) >= 2:
+        return str(decoded[1])
+    return "decoded"
+
+
+def _decoded_warning(decoded: Any) -> str | None:
+    value = getattr(decoded, "warning", None)
+    if value:
+        return str(value)
+    warnings = getattr(decoded, "warnings", None)
+    if warnings:
+        return ";".join(str(item) for item in warnings)
+    return None
+
+
+def _decoded_value(decoded: Any, output_key: str | None) -> Any:
+    key = output_key or "value"
+    if hasattr(decoded, key):
+        return getattr(decoded, key)
+    if key == "value":
+        for fallback in ("normalized", "cnpj", "age_years", "value"):
+            if hasattr(decoded, fallback):
+                return getattr(decoded, fallback)
+    if isinstance(decoded, dict):
+        if key in decoded:
+            return decoded[key]
+        return decoded
+    if isinstance(decoded, tuple):
+        return decoded[0] if decoded else None
+    return decoded
+
+
 def _fallback_parse(value: Any, *, spec: Any) -> tuple[Any, str, str]:
     if value in {None, ""}:
         return None, "missing", "missingness_preserved"
@@ -132,8 +236,10 @@ def _fallback_parse(value: Any, *, spec: Any) -> tuple[Any, str, str]:
         str(_spec_get(spec, key) or "")
         for key in ("field_kind", "quality_role", "unit", "semantic_type", "axis", "carrier")
     ).lower()
+    axes = getattr(spec, "axes", {}) or {}
+    axes_text = " ".join(str(k) + " " + str(v) for k, v in axes.items()).lower()
 
-    if "municip" in kind or "geograph" in kind:
+    if "municip" in kind or "geograph" in kind or "municip" in axes_text or "geograph" in axes_text:
         parsed, state = _parse_municipality(value)
         return parsed, state, "municipality_parser"
 
@@ -144,11 +250,11 @@ def _fallback_parse(value: Any, *, spec: Any) -> tuple[Any, str, str]:
     return value, "valid", "preserve_mark"
 
 
-def _decode_value(*, source_system: str, column: str, value: Any, spec: Any) -> dict[str, Any]:
+def _decode_value(*, source_system: str, column: str, value: Any, spec: Any, row: dict[str, Any]) -> dict[str, Any]:
     canonical = _canonical_name(spec, column)
     route = _route(spec)
 
-    if route.lower() == "exclude" or not getattr(spec, "admissible", False):
+    if route.lower() == "exclude":
         return {
             "canonical_field": canonical,
             "value": None,
@@ -157,24 +263,24 @@ def _decode_value(*, source_system: str, column: str, value: Any, spec: Any) -> 
             "excluded": True,
         }
 
-    decoder_name = _declared_decoder(spec)
-    decoder = _resolve_decoder_callable(decoder_name)
-    if decoder is not None:
+    decoder_name = _declared_transform(spec)
+    if decoder_name is not None:
         try:
-            decoded = decoder(value)
+            decoded = _decode_registered_value(decoder_name, value, spec, column=column, row=row)
             return {
                 "canonical_field": canonical,
-                "value": decoded,
-                "state": "decoded",
-                "decoder": decoder_name or decoder.__name__,
+                "value": _decoded_value(decoded, _output_key(spec)),
+                "state": _decoded_state(decoded),
+                "decoder": decoder_name,
                 "excluded": False,
+                "warning": _decoded_warning(decoded),
             }
         except Exception as exc:
             return {
                 "canonical_field": canonical,
                 "value": None,
                 "state": "invalid",
-                "decoder": decoder_name or decoder.__name__,
+                "decoder": decoder_name,
                 "excluded": False,
                 "warning": f"decoder_failed:{type(exc).__name__}:{exc}",
             }
@@ -203,33 +309,38 @@ def normalize_record(
     }
 
     for column, value in row.items():
-        resolution = resolve_source_field(
+        resolutions = resolve_raw_source_fields(
             source_system=source_system,
-            column_name=str(column),
+            raw_column_name=str(column),
             registry_root=registry_root,
         )
-        spec = resolution.spec
-        decoded = _decode_value(
-            source_system=source_system,
-            column=str(column),
-            value=value,
-            spec=spec,
-        )
+        handled = False
+        for resolution in resolutions:
+            spec = resolution.spec
+            decoded = _decode_value(
+                source_system=source_system,
+                column=str(column),
+                value=value,
+                spec=spec,
+                row=row,
+            )
 
-        warnings = list(resolution.warnings or [])
-        if decoded.get("warning"):
-            warnings.append(str(decoded["warning"]))
+            warnings = list(resolution.warnings or [])
+            if decoded.get("warning"):
+                warnings.append(str(decoded["warning"]))
 
-        if decoded.get("excluded"):
-            out["_excluded_columns"].append(str(column))
+            if decoded.get("excluded"):
+                out["_warnings"].extend(warnings)
+                continue
+
+            handled = True
+            canonical = str(decoded["canonical_field"])
+            out[canonical] = decoded["value"]
+            out[f"{canonical}__state"] = decoded["state"]
+            out[f"{canonical}__decoder"] = decoded["decoder"]
             out["_warnings"].extend(warnings)
-            continue
-
-        canonical = str(decoded["canonical_field"])
-        out[canonical] = decoded["value"]
-        out[f"{canonical}__state"] = decoded["state"]
-        out[f"{canonical}__decoder"] = decoded["decoder"]
-        out["_warnings"].extend(warnings)
+        if not handled:
+            out["_excluded_columns"].append(str(column))
 
     out["_warnings"] = list(dict.fromkeys(str(item) for item in out["_warnings"]))
     return out

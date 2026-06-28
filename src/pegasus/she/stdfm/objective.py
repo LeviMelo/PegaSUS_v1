@@ -114,7 +114,6 @@ def stdfm_objective_pseudocode_contract() -> dict[str, Any]:
         "epsilon_stabilization": "variance and bounded-link denominators clamp at eps=1e-9",
         "warnings": [
             "stdfm_certification_required",
-            "blocked_solver_pending",
             "proportion_denominator_unknown",
             "stdfm_factor_instability",
         ],

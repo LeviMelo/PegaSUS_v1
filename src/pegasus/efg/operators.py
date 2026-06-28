@@ -269,6 +269,10 @@ def apply_operator(
         axes: dict[str, Any] = {}
         for item in parents:
             axes.update(item.axes)
+        if support.get("geography_column"):
+            axes["geography"] = str(support["geography_column"])
+        if support.get("time_column"):
+            axes["time"] = str(support["time_column"])
         # σ_C restriction (MSD §3.11): declare the ICD chapter/block stratification so
         # the physical executor groups counts within diagnostic strata rather than over
         # the whole event population. The restriction is what makes the diagnostic

@@ -58,3 +58,18 @@ def test_race_axis_mismatch_passes_after_bridge_provenance():
     )
 
     assert result.ok
+
+
+def test_race_axis_missing_on_one_operand_fails_closed():
+    numerator = _node("sim_admin", "Deaths", "counts", "administrative_death_declaration")
+    denominator = _node("pop_missing_axis", "Population", "person_years", None)
+
+    result = evaluate_declaration_compatibility(
+        numerator=numerator,
+        denominator=denominator,
+        operator=OperatorSpec(name="RN", role="mortality_rate"),
+    )
+
+    assert not result.ok
+    assert "declaration" in result.failed_terms
+    assert "race_axis_metadata_missing_fail_closed" in result.warnings

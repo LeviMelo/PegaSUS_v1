@@ -533,13 +533,16 @@ def _is_bridge_divergence(field: FieldNode) -> bool:
     )
 
 
-def _is_fixedc_race_bridge(field: FieldNode) -> bool:
+def _is_race_bridge(field: FieldNode) -> bool:
     support = _as_dict(field.support)
     params = _as_dict(field.lineage.operator_params)
     return (
         field.operator == "Bridge_R_fixedC_dynamic_weight"
+        or field.operator == "Bridge_R_localPi_posteriorC"
         or support.get("bridge_operator") == "Bridge_R_fixedC_dynamic_weight"
+        or support.get("bridge_operator") == "Bridge_R_localPi_posteriorC"
         or params.get("bridge_operator") == "Bridge_R_fixedC_dynamic_weight"
+        or params.get("bridge_operator") == "Bridge_R_localPi_posteriorC"
     )
 
 
@@ -585,7 +588,7 @@ def _fixedc_support_groups(df: pl.DataFrame) -> list[tuple[dict[str, Any], pl.Da
     return groups
 
 
-def _compute_fixedc_race_bridge_tensor(
+def _compute_race_bridge_tensor(
     field: FieldNode,
     parent: FieldNode,
     output_dir: Path,
@@ -645,17 +648,17 @@ def _compute_fixedc_race_bridge_tensor(
                 "sensitivity_width": float(posterior.sensitivity_width),
                 "prior_hash": prior.prior_hash,
                 "bridge_mode": prior.mode,
-                "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+                "bridge_operator": "Bridge_R_localPi_posteriorC",
                 "field_id": field.id,
                 "field_name": field.name,
-                "operator": "Bridge_R_fixedC_dynamic_weight",
+                "operator": "Bridge_R_localPi_posteriorC",
                 "bridge_metadata_json": json.dumps(metadata, sort_keys=True, default=str),
             })
 
     out = pl.DataFrame(rows) if rows else pl.DataFrame({
         "field_id": [field.id],
         "field_name": [field.name],
-        "operator": ["Bridge_R_fixedC_dynamic_weight"],
+        "operator": ["Bridge_R_localPi_posteriorC"],
         VALUE_COLUMN: [0.0],
         "lower_count": [0.0],
         "upper_count": [0.0],
@@ -664,7 +667,7 @@ def _compute_fixedc_race_bridge_tensor(
         "sensitivity_width": [prior.sensitivity_width],
         "prior_hash": [prior.prior_hash],
         "bridge_mode": [prior.mode],
-        "bridge_operator": ["Bridge_R_fixedC_dynamic_weight"],
+        "bridge_operator": ["Bridge_R_localPi_posteriorC"],
     })
     path, row_count = _write(output_dir / f"{field.id}.parquet", out)
     metadata = {
@@ -673,7 +676,7 @@ def _compute_fixedc_race_bridge_tensor(
         "sensitivity_width": max(summary_width) if summary_width else prior.sensitivity_width,
         "prior_hash": prior.prior_hash,
         "bridge_mode": prior.mode,
-        "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+        "bridge_operator": "Bridge_R_localPi_posteriorC",
         "raw_admin_counts_preserved": True,
         "missing_category_preserved": True,
     }
@@ -692,8 +695,8 @@ def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode]
         path, rows = _write(output_dir / f"{field.id}.parquet", out)
         return path, rows, None
 
-    if _is_fixedc_race_bridge(field):
-        return _compute_fixedc_race_bridge_tensor(field, parents_by_id[parent_ids[0]], output_dir)
+    if _is_race_bridge(field):
+        return _compute_race_bridge_tensor(field, parents_by_id[parent_ids[0]], output_dir)
 
     if _is_bridge_divergence(field) and len(parent_ids) == 2:
         p0 = _load_parent_tensor(parents_by_id[parent_ids[0]])

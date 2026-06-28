@@ -223,11 +223,14 @@ def _event_groups(
     groups: dict[tuple[str, str], list[FieldNode]] = {}
     for field in fields:
         artifact = field.support.get("artifact_path")
-        if not artifact or field.carrier not in countable:
+        carrier = field.carrier
+        if carrier == "FacilityCapacityVector" and "Facilities" in countable and "cnes_capacity_component" in set(field.role or []):
+            carrier = "Facilities"
+        if not artifact or carrier not in countable:
             continue
         if field.unit == "ICD10" or "diagnostic_topology" in field.role:
             continue
-        groups.setdefault((str(artifact), field.carrier), []).append(field)
+        groups.setdefault((str(artifact), carrier), []).append(field)
     return groups
 
 
@@ -280,8 +283,8 @@ def _append_race_bridge_fields(
     prior_hash = plan.get("prior_hash")
     params = {
         "bridge_id": plan.get("bridge_id"),
-        "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
-        "bridge_mode": plan.get("mode") or "fixedC_dynamic_weight",
+        "bridge_operator": "Bridge_R_localPi_posteriorC",
+        "bridge_mode": plan.get("mode") or "localPi_posterior",
         "source_axis": plan.get("source_axis"),
         "target_axis": plan.get("target_axis"),
         "prior_path": prior_path,
@@ -301,14 +304,14 @@ def _append_race_bridge_fields(
         **dict(parent.axes),
         "numerator_axis_source": plan.get("source_axis"),
         "denominator_axis_target": plan.get("target_axis"),
-        "bridge_operator": "Bridge_R_fixedC_dynamic_weight",
+        "bridge_operator": "Bridge_R_localPi_posteriorC",
         "emission_matrix_registry_version": prior_hash,
-        "bridge_mode": plan.get("mode") or "fixedC_dynamic_weight",
+        "bridge_mode": plan.get("mode") or "localPi_posterior",
         "missing_race_share": 0.0,
         "race_bridge_cv": 0.0,
         "sensitivity_width": 0.0,
         "race_axis_warning": "administrative_race_not_self_declared",
-        "bayesian_ecological_bridge_warning": "fixed_C_dynamic_weight_posterior",
+        "bayesian_ecological_bridge_warning": "local_pi_posterior_crosswalk",
         "prior_hash": prior_hash,
         "lower_count": 0.0,
         "upper_count": 0.0,
@@ -316,7 +319,7 @@ def _append_race_bridge_fields(
     }
     lineage = make_lineage(
         parent_ids=[parent.id],
-        operator_type="Bridge_R_fixedC_dynamic_weight",
+        operator_type="Bridge_R_localPi_posteriorC",
         operator_params=params,
         registry_versions={
             **dict(parent.lineage.registry_versions),
@@ -326,7 +329,7 @@ def _append_race_bridge_fields(
         code_version="slice28y_race_bridge_executor",
     )
     field = make_field_node(
-        name=f"SIM race bridge posterior count {plan.get('bridge_id') or 'fixedC'}",
+        name=f"SIM race bridge posterior count {plan.get('bridge_id') or 'localPi'}",
         kind="bridge_module",
         carrier=parent.carrier,
         unit="counts",
@@ -335,7 +338,7 @@ def _append_race_bridge_fields(
         aggregation="additive",
         role=["race_bridge_posterior", "self_aligned_race_estimate", "source_field"],
         source=list(dict.fromkeys([*list(parent.source or []), "RaceBridgePrior", str(prior_path or "")])),
-        operator="Bridge_R_fixedC_dynamic_weight",
+        operator="Bridge_R_localPi_posteriorC",
         provenance=list(dict.fromkeys([*list(parent.provenance or []), "BayesianEcologicalRaceBridge"])),
         state="warning",
         warnings=["race_bridge_posterior_not_raw_epidemiological_observation"],
@@ -346,7 +349,7 @@ def _append_race_bridge_fields(
     ).model_copy(update={"id": f"SIMRaceBridgePosteriorCount_{lineage_hash(lineage)[:24]}"})
     fields.append(field)
     operator = OperatorSpec(
-        name="Bridge_R_fixedC_dynamic_weight",
+        name="Bridge_R_localPi_posteriorC",
         role="race_bridge_posterior",
         output_kind="bridge_module",
         params=params,
@@ -363,7 +366,7 @@ def _field_domain_summaries(fields: Iterable[FieldNode], constraints: dict[str, 
         race_support = race_fields[0].support if race_fields else {}
         summaries["race_bridge"] = {
             "bridge_id": plan.get("bridge_id") if isinstance(plan, dict) else race_support.get("bridge_id"),
-            "mode": (plan.get("mode") if isinstance(plan, dict) else race_support.get("bridge_mode")) or "fixedC_dynamic_weight",
+            "mode": (plan.get("mode") if isinstance(plan, dict) else race_support.get("bridge_mode")) or "localPi_posteriorC",
             "prior_hash": plan.get("prior_hash") if isinstance(plan, dict) else race_support.get("prior_hash"),
             "source_axis": plan.get("source_axis") if isinstance(plan, dict) else race_support.get("source_axis"),
             "target_axis": plan.get("target_axis") if isinstance(plan, dict) else race_support.get("target_axis"),
@@ -413,6 +416,34 @@ def _field_domain_summaries(fields: Iterable[FieldNode], constraints: dict[str, 
                 "generic_sih_cost_blocked": True,
                 "diagnostic_topology_preserved": True,
             },
+        }
+    sidra_context_fields = [field for field in field_list if field.operator == "sidra_context_field"]
+    if sidra_context_fields:
+        stdfm_fields = [field for field in sidra_context_fields if isinstance(field.support, dict) and field.support.get("stdfm") is not None]
+        latent_fields = [field for field in sidra_context_fields if field.kind == "latent_context"]
+        bound_fields = [
+            field
+            for field in sidra_context_fields
+            if ((field.support or {}).get("high_dimensional_bound") or {}).get("status") == "bounded"
+        ]
+        summaries["sidra_context"] = {
+            "schema_version": "1.0",
+            "source_systems": ["SIDRA"],
+            "attach_stage": "she_build",
+            "field_count": len(sidra_context_fields),
+            "context_gradient_count": len([field for field in sidra_context_fields if field.kind == "context_gradient"]),
+            "latent_context_count": len(latent_fields),
+            "stdfm_executed_count": len(stdfm_fields),
+            "stdfm_certified_count": len([
+                field for field in stdfm_fields
+                if (((field.support or {}).get("stdfm") or {}).get("certification") or {}).get("status") in {"verified", "fragile"}
+            ]),
+            "high_dimensional_bounded_count": len(bound_fields),
+            "projection_matrix_ids": sorted({
+                str((field.support or {}).get("projection", {}).get("projection_matrix_id") or "")
+                for field in sidra_context_fields
+                if (field.support or {}).get("projection", {}).get("projection_matrix_id")
+            }),
         }
     return summaries
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -142,3 +143,27 @@ def write_facts_parquet(
     facts_to_frame(facts).write_parquet(output_path)
     return output_path
 
+
+def normalize_fixture_json_to_facts(
+    *,
+    input_path: str | Path,
+    output_path: str | Path,
+    table_id: str,
+    unit_by_variable: dict[str, str | None] | None = None,
+) -> Path:
+    """Normalize a checked-in flat SIDRA fixture JSON file to facts parquet."""
+    input_path = Path(input_path)
+    payload = input_path.read_bytes()
+    records = json.loads(payload.decode("utf-8"))
+    if not isinstance(records, list):
+        raise ValueError("SIDRA fixture JSON must contain a list of flat records.")
+    fixture_hash = hashlib.sha256(payload).hexdigest()
+    facts = normalize_flat_records_to_facts(
+        records,
+        table_id=table_id,
+        request_hash=f"fixture_request:{fixture_hash}",
+        metadata_hash=f"fixture_metadata:{fixture_hash}",
+        unit_by_variable=unit_by_variable,
+        fetched_at="fixture",
+    )
+    return write_facts_parquet(facts, output_path=output_path)

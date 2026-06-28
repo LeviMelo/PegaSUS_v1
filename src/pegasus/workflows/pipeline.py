@@ -44,6 +44,7 @@ from pegasus.source_artifacts.contracts import (
     inspect_source_artifact,
     write_source_artifact_manifest,
 )
+from pegasus.registries.race_bridge import RaceBridgeRegistryError, select_compile_race_bridge_prior
 from pegasus.workflows.compile import run_compile
 
 
@@ -416,7 +417,9 @@ def _acquire_sidra_population_strata(
 
 def _compendium_enabled(intent: UserIntent) -> bool:
     disabled = {"no_sidra_compendium", "disable_sidra_compendium"}
-    return not (set(intent.context_policy) & disabled)
+    if set(intent.context_policy) & disabled:
+        return False
+    return intent.run_profile in {"contextual", "full"}
 
 
 def _selected_compendium_tables() -> tuple[Any, ...]:
@@ -555,6 +558,34 @@ def _acquire_sidra_compendium_context(
     }
 
 
+def _race_bridge_prior_artifact(
+    *,
+    intent: UserIntent,
+    municipality_cod6: str | None,
+) -> dict[str, Any] | None:
+    if intent.race_tensor_mode != "downstream_bridge":
+        return None
+    if municipality_cod6 is None:
+        raise LivePipelineError("downstream race bridge live pipeline requires a municipality cod6 scope")
+    try:
+        entry = select_compile_race_bridge_prior(municipality_cod6=municipality_cod6)
+        prior = entry.load_prior()
+    except RaceBridgeRegistryError as exc:
+        raise LivePipelineError(f"Race bridge prior selection failed: {exc}") from exc
+    if str(prior.metadata.get("epistemic_status") or "").lower() in {"validation_fixture_only", "fixture", "synthetic_smoke_fixture"}:
+        raise LivePipelineError(
+            "Configured race bridge prior is validation-only. A calibrated materialized "
+            "RACE-BRIDGE emission prior is required for a production live run."
+        )
+    return inspect_source_artifact(
+        path=entry.prior_path,
+        source_system="RACE-BRIDGE",
+        artifact_role="emission_prior",
+        provenance_mode="materialized_external",
+        source_manifest_hash=entry.registry_hash,
+    )
+
+
 def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
     """Offline resolution of acquisition parameters from intent — no network, no R.
 
@@ -630,6 +661,12 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
             "single_period_policy": "direct_or_cross_sectional_only",
             "latent_context_policy": "dashboard_unsafe_by_default",
         },
+        "race_bridge_prior": {
+            "required": intent.race_tensor_mode == "downstream_bridge",
+            "source_system": "RACE-BRIDGE" if intent.race_tensor_mode == "downstream_bridge" else None,
+            "artifact_role": "emission_prior" if intent.race_tensor_mode == "downstream_bridge" else None,
+            "fixture_policy": "validation-only priors are rejected by live pipeline and compile",
+        },
         "municipality_filter_codes": list(intent.geography.codes),
     }
 
@@ -650,6 +687,11 @@ def run_live_pipeline(
     uf = _resolve_uf(intent)
     systems = _resolve_systems(intent)
     years = _years_token(intent)
+    municipality_cod6: str | None = None
+    if intent.geography.codes:
+        from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
+
+        municipality_cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
 
     if dry_run:
         return LivePipelineResult(
@@ -678,6 +720,7 @@ def run_live_pipeline(
         intent=intent, uf=uf, data_root=data_root,
         metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
     )
+    race_prior_artifact = _race_bridge_prior_artifact(intent=intent, municipality_cod6=municipality_cod6)
     sidra_artifacts = [
         sidra_artifact,
         *([sidra_strata_artifact] if sidra_strata_artifact is not None else []),
@@ -689,7 +732,7 @@ def run_live_pipeline(
     manifest_dir.mkdir(parents=True, exist_ok=True)
     combined_manifest_path = manifest_dir / f"live_{Path(intent_path).stem}_{intent_hash[:8]}.source_manifest.json"
     write_source_artifact_manifest(
-        artifacts=[*datasus_artifacts, *sidra_artifacts],
+        artifacts=[*datasus_artifacts, *sidra_artifacts, *([race_prior_artifact] if race_prior_artifact is not None else [])],
         output=combined_manifest_path,
     )
 

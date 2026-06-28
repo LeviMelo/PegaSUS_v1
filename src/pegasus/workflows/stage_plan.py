@@ -148,6 +148,7 @@ def build_compile_stage_plan(
     mandatory_fields = _lower_set(_intent_value(intent, "mandatory_fields", []))
     budget = _intent_value(intent, "budget", None)
     geo_mode = str(_intent_value(intent, "geo_mode", "native") or "native")
+    run_profile = str(_intent_value(intent, "run_profile", "core_vital") or "core_vital")
     population_mode = str(_intent_value(intent, "population_mode", "") or "")
     tensor_mode = population_tensor_mode or None
     population_requested = bool(
@@ -156,6 +157,8 @@ def build_compile_stage_plan(
         or "include_population_tensor" in context_policy
     )
     stdfm_requested = bool(
+        run_profile in {"contextual", "full"}
+        or
         _contains_any(context_policy, ("stdfm", "latent", "sidra_context"))
         or _contains_any(mandatory_fields, ("stdfm", "latent"))
     )
@@ -192,7 +195,7 @@ def build_compile_stage_plan(
         _stage(
             stage_id="stdfm",
             requested=stdfm_requested,
-            request_source="intent.context_policy/mandatory_fields" if stdfm_requested else "latent_context_not_requested",
+            request_source="intent.run_profile" if run_profile in {"contextual", "full"} else ("intent.context_policy/mandatory_fields" if stdfm_requested else "latent_context_not_requested"),
             required_for_level3=stdfm_requested,
             can_execute=stdfm_requested,
             skip_reason="intent does not request ST-DFM latent-factor fitting",

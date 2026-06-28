@@ -57,12 +57,29 @@ def _bool_count(df: pl.DataFrame, column: str) -> int:
     return int(df.filter(pl.col(column) == True).height)  # noqa: E712 - explicit data-state comparison
 
 
+def _threshold_count(df: pl.DataFrame, column: str, op: str, threshold: float) -> int:
+    if column not in df.columns:
+        return 0
+    expr = pl.col(column).is_not_null()
+    if op == "lt":
+        expr = expr & (pl.col(column) < threshold)
+    elif op == "gte":
+        expr = expr & (pl.col(column) >= threshold)
+    else:
+        raise ValueError(f"unsupported threshold op: {op}")
+    return int(df.filter(expr).height)
+
+
+def _code_count(df: pl.DataFrame, column: str, value: str) -> int:
+    if column not in df.columns:
+        return 0
+    return int(df.filter(pl.col(column).cast(pl.Utf8) == value).height)
 
 
 def _congenital_anomaly_count(df: pl.DataFrame) -> int:
-    if "congenital_anomaly_flag" not in df.columns:
-        return 0
-    return int(df.filter(pl.col("congenital_anomaly_flag") == True).height)  # noqa: E712
+    if "anomaly_positive" in df.columns:
+        return int(df.filter(pl.col("anomaly_positive") == True).height)  # noqa: E712
+    return 0
 
 
 def _assert_plausible_anomaly_rate(*, births_total: int, congenital_anomaly_births: int) -> None:
@@ -116,16 +133,16 @@ def summarize_maternal_child_events(
         years=years,
         municipalities_cod6=municipalities,
         births_total=int(valid.height),
-        low_birth_weight_births=_bool_count(valid, "low_birth_weight_flag"),
-        prematurity_births=_bool_count(valid, "prematurity_flag"),
-        cesarean_births=_bool_count(valid, "cesarean_flag"),
+        low_birth_weight_births=_threshold_count(valid, "birth_weight_g", "lt", 2500),
+        prematurity_births=_threshold_count(valid, "gestational_weeks", "lt", 37),
+        cesarean_births=_code_count(valid, "delivery_mode_code", "2"),
         congenital_anomaly_births=congenital_anomaly_births,
-        low_apgar5_births=_bool_count(valid, "low_apgar5_flag"),
-        adolescent_mother_births=_bool_count(valid, "adolescent_mother_flag"),
-        advanced_maternal_age_births=_bool_count(valid, "advanced_maternal_age_flag"),
-        insufficient_prenatal_births=_bool_count(valid, "insufficient_prenatal_flag"),
+        low_apgar5_births=_threshold_count(valid, "apgar_5min", "lt", 7),
+        adolescent_mother_births=_threshold_count(valid, "mother_age_years", "lt", 20),
+        advanced_maternal_age_births=_threshold_count(valid, "mother_age_years", "gte", 35),
+        insufficient_prenatal_births=_threshold_count(valid, "prenatal_consult_count", "lt", 7),
         birth_weight_missing_or_invalid=_state_not_valid_count(valid, "birth_weight_state"),
         gestational_age_missing_or_invalid=_state_not_valid_count(valid, "gestational_age_state"),
-        apgar_missing_or_invalid=_state_not_valid_count(valid, "apgar5_state"),
+        apgar_missing_or_invalid=_state_not_valid_count(valid, "apgar_5min_state"),
         race_missing_or_ignored=race_missing,
     )

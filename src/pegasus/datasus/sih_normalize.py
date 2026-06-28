@@ -198,64 +198,20 @@ def normalize_sih_rd_events(*, input_path: str | Path, output_path: str | Path, 
     Hospital admissions: competence year, residence cod6, principal diagnosis,
     in-hospital death flag, length of stay, and the four distinct economic cost
     components (VAL_SH/SP/UTI/TOT) kept separate per §2.4.2 (not pooled)."""
-    from pegasus.datasus.normalize import _cod6, _icd_norm, _icd_parse_state, _raw
-
     df = _read_table(input_path)
-    icd = _icd_norm(_raw(df, "DIAG_PRINC"))
-    morte = _raw(df, "MORTE").str.strip_chars()
-    cod_idade = _raw(df, "COD_IDADE").str.strip_chars()
-    idade = _raw(df, "IDADE").str.strip_chars().cast(pl.Float64, strict=False)
-    age_years = (
-        pl.when(cod_idade == "2").then(idade / 365.25)
-        .when(cod_idade == "3").then(idade / 12.0)
-        .when(cod_idade == "4").then(idade)
-        .when(cod_idade == "5").then(100.0 + idade)
-        .otherwise(None)
-    )
-    age_days = (
-        pl.when(cod_idade == "2").then(idade)
-        .when(cod_idade == "3").then(30.4375 * idade)
-        .when(cod_idade == "4").then(365.25 * idade)
-        .when(cod_idade == "5").then(365.25 * (100.0 + idade))
-        .otherwise(None)
-    )
-    age_unit = (
-        pl.when(cod_idade == "2").then(pl.lit("days"))
-        .when(cod_idade == "3").then(pl.lit("months"))
-        .when(cod_idade == "4").then(pl.lit("years"))
-        .when(cod_idade == "5").then(pl.lit("years_100_plus"))
-        .otherwise(pl.lit("unknown"))
-    )
-    out = df.with_row_index("_row").with_columns(
-        pl.format("sih_{}_{}", pl.col("_row"), pl.lit(source_manifest_hash[:8])).alias("admission_id"),
-        pl.lit("SIH-RD").alias("source_system"),
-        _raw(df, "ANO_CMPT").str.strip_chars().cast(pl.Int64, strict=False).alias("admission_year"),
-        _cod6(_raw(df, "MUNIC_RES")).alias("mun_residence_cod6"),
-        age_years.alias("age_years"),
-        age_days.alias("age_days"),
-        age_unit.alias("age_unit"),
-        _raw(df, "SEXO").str.strip_chars().alias("sex"),
-        _raw(df, "RACA_COR").str.strip_chars().alias("race_color_billing"),
-        pl.lit("sih_billing_race_color").alias("race_axis_type"),
-        icd.alias("principal_icd_norm"),
-        _icd_parse_state(icd).alias("principal_icd_parse_state"),
-        pl.when(morte == "1").then(1).when(morte == "0").then(0).otherwise(None).alias("death_flag"),
-        _raw(df, "QT_DIARIAS").str.strip_chars().cast(pl.Float64, strict=False).alias("stay_length_days"),
-        _raw(df, "VAL_SH").cast(pl.Float64, strict=False).alias("hospital_service_cost_real"),
-        _raw(df, "VAL_SP").cast(pl.Float64, strict=False).alias("professional_service_cost_real"),
-        _raw(df, "VAL_UTI").cast(pl.Float64, strict=False).alias("icu_cost_real"),
-        _raw(df, "VAL_TOT").cast(pl.Float64, strict=False).alias("total_admission_cost_real"),
-        pl.lit(source_manifest_hash).alias("source_manifest_hash"),
-    )
-    canonical = [
-        "admission_id", "source_system", "admission_year", "mun_residence_cod6",
-        "age_years", "age_days", "age_unit", "sex", "race_color_billing", "race_axis_type",
-        "principal_icd_norm", "principal_icd_parse_state", "death_flag", "stay_length_days",
-        "hospital_service_cost_real", "professional_service_cost_real", "icu_cost_real",
-        "total_admission_cost_real", "source_manifest_hash",
+    records = [
+        normalize_sih_rd_record(row, source_manifest_hash=source_manifest_hash)
+        for row in df.to_dicts()
     ]
-    out = out.select(canonical)
+    out = pl.DataFrame(records, infer_schema_length=None)
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out.write_parquet(out_path)
-    return {"row_count": out.height, "output_path": str(out_path), "column_count": len(out.columns), "columns": out.columns}
+    return {
+        "row_count": out.height,
+        "output_path": str(out_path),
+        "column_count": len(out.columns),
+        "columns": out.columns,
+        "deaths": int(out.get_column("death_flag").cast(pl.Int64, strict=False).fill_null(0).sum()) if out.height else 0,
+        "cost_components": list(COST_COMPONENTS),
+    }

@@ -12,12 +12,40 @@ from pegasus.output.source_reality_guard import materialized_external_semantic_e
 
 REQUIRED_V_FIELDS_COLUMNS = {"field_id", "name", "kind", "carrier", "unit", "aggregation", "role", "source", "support_json", "axes_json", "operator", "provenance", "state", "dashboard_safe", "warnings", "lineage_hash", "registry_hash", "materialization_state", "path"}
 REQUIRED_E_DAG_COLUMNS = {"edge_id", "parent_field_id", "child_field_id", "operator", "operator_params_json", "registry_versions_json", "created_at"}
-REQUIRED_Q_TENSOR_COLUMNS = {"field_id", "n_events", "n_denom", "n_eff", "cov_S", "cov_T", "missingness", "zero_inflation", "denom_fragility", "provenance_risk", "state", "dashboard_safe", "warnings", "computed_at", "q_schema_version"}
+REQUIRED_Q_TENSOR_COLUMNS = {"field_id", "n_events", "n_denom", "n_eff", "cov_S", "cov_T", "missingness", "zero_inflation", "denom_fragility", "cv", "moran_i", "temporal_roughness", "spatial_entropy", "provenance_risk", "state", "dashboard_safe", "warnings", "computed_at", "q_schema_version"}
 OPTIONAL_RACE_Q_COLUMNS = {"race_axis_source", "race_axis_target", "missing_race_share", "race_bridge_cv", "sensitivity_width", "bridge_mode"}
 REQUIRED_VARIABLE_DICTIONARY_COLUMNS = {"field_id", "display_name", "technical_name", "definition", "estimand_label", "source_systems", "carrier", "unit", "support_description", "axis_description", "provenance_description", "state", "dashboard_safe", "interpretation_warning"}
 FIELD_REFERENCE_COLUMNS = {"field_id", "parent_field_id", "child_field_id", "outcome_field_id", "covariate_field_id", "residual_field_id"}
 RACE_BRIDGE_POSTERIOR_KEYS = {"numerator_axis_source", "denominator_axis_target", "bridge_operator", "emission_matrix_registry_version", "bridge_mode", "missing_race_share", "race_bridge_cv", "sensitivity_width", "race_axis_warning", "bayesian_ecological_bridge_warning", "prior_hash", "lower_count", "upper_count"}
 RUN_CONFIG_RACE_BRIDGE_KEYS = {"bridge_id", "mode", "prior_hash", "source_axis", "target_axis", "missing_race_share", "sensitivity_width", "race_bridge_cv", "raw_admin_counts_preserved", "missing_category_preserved", "attach_stage"}
+RUN_PROFILES = {"core_vital", "contextual", "full"}
+PROFILE_NONEMPTY = {
+    "core_vital": {
+        "V_fields",
+        "E_DAG",
+        "Q_tensor",
+        "P_vector",
+        "UserIntent",
+        "VariableDictionary",
+        "RunConfig",
+        "ReproducibilityManifest",
+    },
+    "contextual": {
+        "V_fields",
+        "E_DAG",
+        "Q_tensor",
+        "P_vector",
+        "UserIntent",
+        "Warnings",
+        "ModelAssociations",
+        "Hypotheses",
+        "Tables",
+        "VariableDictionary",
+        "RunConfig",
+        "ReproducibilityManifest",
+    },
+    "full": set(OUTPUT_BUNDLE_FILES),
+}
 
 def _read(path: Path):
     return read_table(path)
@@ -31,6 +59,14 @@ def _column_values(table, column: str) -> list[Any]:
 
 def _nonnull(values: list[Any]) -> set[Any]:
     return {value for value in values if value is not None and value != ""}
+
+
+def _run_profile_from_payloads(user_intent: dict[str, Any], run_config: dict[str, Any], manifest: dict[str, Any]) -> str:
+    profile = user_intent.get("run_profile") or run_config.get("run_profile") or manifest.get("run_profile") or "core_vital"
+    profile = str(profile)
+    if profile not in RUN_PROFILES:
+        return "invalid"
+    return profile
 
 
 def _load_json_file(path: Path, *, errors: list[str], name: str) -> Any:
@@ -95,6 +131,14 @@ def _validate_manifest_and_config(*, root: Path, errors: list[str], warnings: li
         manifest = {}
     if not isinstance(p_vector, (dict, list)):
         errors.append("P_vector.json must be a JSON object or list")
+    profile = _run_profile_from_payloads(user_intent, run_config, manifest)
+    if profile == "invalid":
+        errors.append("run_profile must be one of core_vital, contextual, full")
+    else:
+        for name, payload in [("UserIntent.json", user_intent), ("RunConfig.json", run_config), ("ReproducibilityManifest.json", manifest)]:
+            declared = payload.get("run_profile") if isinstance(payload, dict) else None
+            if declared is not None and str(declared) != profile:
+                errors.append(f"{name} run_profile disagrees with bundle profile {profile}: {declared}")
     compile_mode = run_config.get("compile_mode") or manifest.get("compile_mode")
     is_compile_run = bool(compile_mode)
     source_hashes = manifest.get("source_hashes")
@@ -187,7 +231,7 @@ def _validate_race_bridge_contract(*, root: Path, v, q, run_config: dict[str, An
             absent = sorted(RACE_BRIDGE_POSTERIOR_KEYS - set(axes))
             if absent:
                 errors.append(f"race bridge posterior field missing metadata keys: {fid} {absent}")
-            if axes.get("bridge_operator") != "Bridge_R_fixedC_dynamic_weight":
+            if axes.get("bridge_operator") != "Bridge_R_localPi_posteriorC":
                 errors.append(f"race bridge posterior field has wrong bridge_operator: {fid} {axes.get('bridge_operator')}")
             sensitivity = float(axes.get("sensitivity_width") or 0.0)
             if row.get("dashboard_safe") == "True" and sensitivity > 0.05:
@@ -381,7 +425,56 @@ def _validate_inference_invariants(*, hypotheses, model_assoc, residual_assoc, b
         errors.append("ModelAssociations has fitted models but ResidualAssociations is empty (no residuals materialized)")
 
 
-def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], budget: str, errors: list[str], warnings: list[str]) -> None:
+def _first_class_artifact_nonempty(root: Path, key: str) -> bool:
+    path = root / OUTPUT_BUNDLE_FILES[key]
+    if key in {"Tables", "Maps"}:
+        return path.is_dir() and any(path.iterdir())
+    if path.suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return bool(payload)
+        if isinstance(payload, list):
+            return len(payload) > 0
+        return payload is not None
+    table = _read(path)
+    return bool(getattr(table, "num_rows", 0))
+
+
+def _empty_by_profile_keys(warnings_table) -> set[str]:
+    if "code" not in warnings_table.column_names:
+        return set()
+    rows = warnings_table.to_pylist()
+    keys: set[str] = set()
+    for row in rows:
+        if row.get("code") != "empty_by_profile":
+            continue
+        message = str(row.get("message") or "")
+        warning_id = str(row.get("warning_id") or "")
+        for key in OUTPUT_BUNDLE_FILES:
+            if key in message or key in warning_id:
+                keys.add(key)
+    return keys
+
+
+def _validate_profile_nonempty_contract(*, root: Path, run_profile: str, warnings_table, errors: list[str]) -> None:
+    required = PROFILE_NONEMPTY.get(run_profile)
+    if required is None:
+        errors.append(f"unsupported run_profile for output profile validation: {run_profile}")
+        return
+    declared_empty = _empty_by_profile_keys(warnings_table)
+    for key in OUTPUT_BUNDLE_FILES:
+        try:
+            nonempty = _first_class_artifact_nonempty(root, key)
+        except Exception as exc:
+            errors.append(f"could not inspect first-class artifact {key}: {exc}")
+            continue
+        if key in required and not nonempty:
+            errors.append(f"{key} is empty but run_profile={run_profile} requires it to be non-empty")
+        if key not in required and key != "Warnings" and not nonempty and key not in declared_empty:
+            errors.append(f"{key} is empty under run_profile={run_profile} without an empty_by_profile warning")
+
+
+def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], budget: str, run_profile: str, errors: list[str], warnings: list[str]) -> None:
     try:
         v = _read(root / "V_fields.parquet")
         q = _read(root / "Q_tensor.parquet")
@@ -401,6 +494,7 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
     _require_columns(table_name="E_DAG", actual=set(edges.column_names), required=REQUIRED_E_DAG_COLUMNS, errors=errors)
     _require_columns(table_name="Q_tensor", actual=set(q.column_names), required=REQUIRED_Q_TENSOR_COLUMNS, errors=errors)
     _require_columns(table_name="VariableDictionary", actual=set(vd.column_names), required=REQUIRED_VARIABLE_DICTIONARY_COLUMNS, errors=errors)
+    _validate_profile_nonempty_contract(root=root, run_profile=run_profile, warnings_table=warnings_table, errors=errors)
     if q.num_rows == 0:
         errors.append("Q_tensor is empty")
     v_ids = _nonnull(_column_values(v, "field_id"))
@@ -509,5 +603,6 @@ def validate_output_bundle(*, run_dir: str, schema_registry: OutputSchemaRegistr
         return OutputValidationResult(ok=False, errors=errors, warnings=warnings)
     user_intent, run_config, manifest = _validate_manifest_and_config(root=root, errors=errors, warnings=warnings)
     budget = str((user_intent or {}).get("budget") or run_config.get("budget") or "fast")
-    _validate_parquet_contracts(root=root, run_config=run_config, manifest=manifest, budget=budget, errors=errors, warnings=warnings)
+    run_profile = _run_profile_from_payloads(user_intent, run_config, manifest)
+    _validate_parquet_contracts(root=root, run_config=run_config, manifest=manifest, budget=budget, run_profile=run_profile, errors=errors, warnings=warnings)
     return OutputValidationResult(ok=not errors, errors=errors, warnings=warnings)

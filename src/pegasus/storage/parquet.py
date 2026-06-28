@@ -82,3 +82,22 @@ def hash_table(path: str | Path) -> str:
     for batch in table.to_batches(max_chunksize=8192):
         digest.update(json.dumps(batch.to_pylist(), sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"))
     return digest.hexdigest()
+
+
+def append_replace(
+    path: str | Path,
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    id_column: str,
+) -> Path:
+    """Append rows to a parquet table, replacing existing rows with matching ids."""
+    target = Path(path)
+    incoming = [dict(row) for row in rows]
+    if not incoming:
+        return target
+    if not target.exists():
+        return write_table(target, incoming)
+    existing = read_table(target).to_pylist()
+    incoming_ids = {row.get(id_column) for row in incoming}
+    kept = [row for row in existing if row.get(id_column) not in incoming_ids]
+    return write_table(target, kept + incoming, schema_policy="preserve")

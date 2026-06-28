@@ -43,7 +43,9 @@ def resolve_compile_source_reality(
     require_materialized_external: bool = False,
 ) -> CompileSourceReality:
     if source_manifest is None:
-        raise CompileSourceRealityError("compile requires a source artifact manifest")
+        raise CompileSourceRealityError(
+            "production compile requires an explicit materialized_external source artifact manifest"
+        )
 
     manifest_path = Path(source_manifest)
     validation = validate_source_artifact_manifest(
@@ -69,7 +71,7 @@ def resolve_compile_source_reality(
         source_artifact_count=int(summary["source_artifact_count"]),
         source_systems=tuple(summary["source_systems"]),
         artifact_roles=tuple(summary["artifact_roles"]),
-        require_materialized_external=bool(require_materialized_external),
+        require_materialized_external=True,
         production_candidate=True,
         validation_warnings=tuple(summary.get("warnings", []) or []),
     )

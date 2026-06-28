@@ -509,7 +509,15 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
         pl.lit("RN").alias("operator"),
     ])
     path, rows = _write(output_dir / f"{field.id}.parquet", out)
-    return path, rows, {"denom_fragility": combined_fragility}
+    # Report the realized numerator/denominator totals so the Q-tensor (MSD §3.12)
+    # carries the true event/denominator counts for this ratio rather than 0/None.
+    num_total = float(n.select(pl.col("value_numerator").sum()).item() or 0.0)
+    den_total = float(d.select(pl.col("value_denominator").sum()).item() or 0.0)
+    return path, rows, {
+        "denom_fragility": combined_fragility,
+        "n_events": num_total,
+        "n_denom": den_total if den_total > 0 else None,
+    }
 
 
 

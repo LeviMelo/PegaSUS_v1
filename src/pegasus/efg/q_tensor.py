@@ -106,9 +106,37 @@ def _spatial_entropy(values: list[float]) -> float | None:
     return float(entropy / max_entropy) if max_entropy > 0 else 0.0
 
 
-def _moran_proxy(values: list[float]) -> float | None:
-    del values
-    return None
+def _moran_contiguity(values: list[float]) -> float | None:
+    """Moran's I under a 1-D rook-contiguity weight over the tensor cell order.
+
+    A best-effort spatial-autocorrelation estimate used when no explicit
+    municipality adjacency matrix is supplied to the Q-tensor (MSD §3.12): cells
+    adjacent in the provided ordering are treated as neighbours (w_ij = 1 for
+    |i - j| = 1, symmetric). This is the standard Moran's I statistic
+
+        I = (N / W) * (Σ_i Σ_j w_ij (x_i - x̄)(x_j - x̄)) / Σ_i (x_i - x̄)²
+
+    specialized to chain contiguity. It is an ordering proxy, not a
+    geography-aware Moran's I; callers should record the proxy provenance.
+    Returns None when undefined (fewer than 3 cells or zero variance).
+    """
+    n = len(values)
+    if n < 3:
+        return None
+    mean = sum(values) / n
+    deviations = [v - mean for v in values]
+    denom = sum(d * d for d in deviations)
+    if denom <= 0:
+        return None
+    cross = 0.0
+    weight_total = 0.0
+    for i in range(n - 1):
+        # Symmetric chain contiguity contributes both (i, i+1) and (i+1, i).
+        cross += 2.0 * deviations[i] * deviations[i + 1]
+        weight_total += 2.0
+    if weight_total <= 0:
+        return None
+    return float((n / weight_total) * (cross / denom))
 
 
 def _moran_corrected_n_eff(n_events: float | None, moran_i: float | None) -> float | None:
@@ -142,10 +170,18 @@ def compute_q_state(
     moran_i = field.support.get("moran_i")
     temporal_roughness = field.support.get("temporal_roughness")
     spatial_entropy = field.support.get("spatial_entropy")
+    q_warnings = list(field.warnings or [])
     if values:
         cv = cv if cv is not None else _cv(values)
         temporal_roughness = temporal_roughness if temporal_roughness is not None else _temporal_roughness(values)
         spatial_entropy = spatial_entropy if spatial_entropy is not None else _spatial_entropy(values)
+        if moran_i is None:
+            moran_i = _moran_contiguity(values)
+            if moran_i is not None:
+                # Honest provenance: this Moran's I is an ordering-contiguity proxy,
+                # not a geography-aware statistic (no adjacency matrix supplied).
+                q_warnings.append("moran_i_ordering_contiguity_proxy")
+        # n_eff reflects the spatial-autocorrelation correction (MSD §3.12).
         n_eff = _moran_corrected_n_eff(float(len(values)), moran_i)
     elif n_eff is not None:
         n_eff = _moran_corrected_n_eff(float(n_eff), moran_i)
@@ -183,7 +219,7 @@ def compute_q_state(
         bridge_mode=None,
         state=state,
         dashboard_safe=False if state != FieldState.verified else field.dashboard_safe,
-        warnings=field.warnings,
+        warnings=q_warnings,
         computed_at=_now(),
         q_schema_version="1.0",
     )

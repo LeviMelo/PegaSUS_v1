@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict
+
+
+class DecodedField(BaseModel):
+    """Generic decoder result carrying a value plus an explicit MSD §2.3 state.
+
+    Used by the registry-driven declarative normalizer for single-column decoders
+    (dates, hours, municipality codes, facility codes, administrative race, plain
+    integers) so that the declarative engine's generic ``value``/``state``
+    extraction works uniformly without per-decoder special-casing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    value: Any = None
+    state: str = "missing"
+    raw_value: str | None = None
+    warning: str | None = None
 
 
 class DecodedAge(BaseModel):
@@ -296,10 +313,15 @@ def clamp_bool(raw: object) -> DecodedBoolean:
         return DecodedBoolean(value=1, raw_value=raw_s, state="ValidTrue")
 
     try:
-        parsed = int(float(raw_s.replace(",", ".")))
+        f = float(raw_s.replace(",", "."))
     except ValueError:
         return DecodedBoolean(value=None, raw_value=raw_s, state="UnparseableFlag", warning="unparseable_flag")
 
+    # Non-integer floats ("1.5", "0.7") are not valid boolean codes.
+    if f != int(f):
+        return DecodedBoolean(value=None, raw_value=raw_s, state="UnparseableFlag", warning="unparseable_flag")
+
+    parsed = int(f)
     if parsed not in {0, 1}:
         return DecodedBoolean(value=None, raw_value=raw_s, state="InvalidFlagState", warning="boolean_flag_outlier")
 
@@ -347,3 +369,177 @@ def _valid_cnpj_check_digits(digits: str) -> bool:
     first = check_digit(digits[:12], (5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2))
     second = check_digit(digits[:12] + first, (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2))
     return digits[-2:] == first + second
+
+
+# ---------------------------------------------------------------------------
+# Registry-driven single-column decoders (SHE-NORM-01 Path A).
+#
+# These are dispatched by name from declarative_normalize.py via the source
+# field registry. Each returns a DecodedField so the declarative engine extracts
+# value/state uniformly. They are the single source of truth for these decodes —
+# the vectorized normalizers no longer re-implement them inline (XCUT-02).
+# ---------------------------------------------------------------------------
+
+# DATASUS sentinel date encodings that mean "no real date" rather than a value.
+_INVALID_DATE_TOKENS = {
+    "",
+    "0",
+    "00000000",
+    "0000-00-00",
+    "00/00/0000",
+    "99999999",
+    "9999-99-99",
+    "99/99/9999",
+}
+_DATE_FORMATS = ("%d%m%Y", "%Y%m%d", "%d/%m/%Y", "%Y-%m-%d")
+
+
+def decode_datasus_date(raw: Any) -> DecodedField:
+    """Decode a DATASUS date (typically DDMMYYYY) to an ISO ``YYYY-MM-DD`` string.
+
+    Preserves MSD §2.3 states: ``missing`` for blank/sentinel, ``invalid`` for a
+    present-but-unparseable token, ``valid`` otherwise.
+    """
+    if _none_or_blank(raw):
+        return DecodedField(value=None, state="missing", raw_value=None if raw is None else str(raw))
+    text = str(raw).strip()
+    if text.upper() in _INVALID_DATE_TOKENS:
+        return DecodedField(value=None, state="missing", raw_value=text)
+    for fmt in _DATE_FORMATS:
+        try:
+            iso = datetime.strptime(text, fmt).date().isoformat()
+            return DecodedField(value=iso, state="valid", raw_value=text)
+        except ValueError:
+            continue
+    return DecodedField(value=None, state="invalid", raw_value=text, warning="unparseable_date")
+
+
+def decode_datasus_hour(raw: Any) -> DecodedField:
+    """Decode a DATASUS hour field (HHMM or HH) to ``HH:MM:00``."""
+    if _none_or_blank(raw):
+        return DecodedField(value=None, state="missing", raw_value=None if raw is None else str(raw))
+    text = str(raw).strip()
+    digits = re.sub(r"\D", "", text)
+    if digits == "":
+        return DecodedField(value=None, state="missing", raw_value=text)
+    if len(digits) <= 2:
+        hour, minute = int(digits), 0
+    else:
+        padded = digits.zfill(4)
+        hour, minute = int(padded[:2]), int(padded[2:4])
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return DecodedField(value=None, state="invalid", raw_value=text, warning="hour_out_of_range")
+    return DecodedField(value=f"{hour:02d}:{minute:02d}:00", state="valid", raw_value=text)
+
+
+def decode_municipality_cod6(raw: Any) -> DecodedField:
+    """Decode a municipality code to its 6-digit DATASUS form (cod6).
+
+    A 7-digit IBGE code is truncated to its 6-digit prefix. The cod6→cod7
+    crosswalk is applied separately by the assembler (it is a genuine derivation,
+    not a single-column decode).
+    """
+    if _none_or_blank(raw):
+        return DecodedField(value=None, state="missing", raw_value=None if raw is None else str(raw))
+    text = str(raw).strip()
+    digits = re.sub(r"\D", "", text)
+    cod6: str | None = None
+    if len(digits) == 6:
+        cod6 = digits
+    elif len(digits) == 7:
+        cod6 = digits[:6]
+    else:
+        return DecodedField(value=None, state="invalid", raw_value=text, warning="municipality_code_length")
+    # DATASUS "município ignorado" sentinel: a valid UF prefix followed by 0000
+    # (e.g. 270000 for Alagoas). A real municipality sequence is never 0000, so this
+    # is a missingness state per MSD §2.3, not a geography stratum.
+    if cod6[2:] == "0000":
+        return DecodedField(value=None, state="ignored_municipality", raw_value=text, warning="municipality_ignored_sentinel")
+    return DecodedField(value=cod6, state="valid", raw_value=text)
+
+
+def decode_facility_code(raw: Any) -> DecodedField:
+    """Decode a CNES facility code, nulling all-zero/blank sentinels."""
+    if _none_or_blank(raw):
+        return DecodedField(value=None, state="missing", raw_value=None if raw is None else str(raw))
+    text = str(raw).strip()
+    digits = re.sub(r"\D", "", text)
+    if digits == "" or set(digits) == {"0"}:
+        return DecodedField(value=None, state="missing", raw_value=text)
+    return DecodedField(value=digits, state="valid", raw_value=text)
+
+
+def decode_race_admin(raw: Any) -> DecodedField:
+    """Decode an administrative race/color code (DATASUS RACACOR family).
+
+    Codes 1–5 are valid administrative categories; ``9``/``99`` are the explicit
+    "unknown" sentinel (kept distinct from missing per §2.3). The code itself is
+    preserved as the value; the state carries the missingness classification.
+    """
+    if _none_or_blank(raw):
+        return DecodedField(value=None, state="missing", raw_value=None if raw is None else str(raw))
+    text = str(raw).strip()
+    code = re.sub(r"\D", "", text)
+    if code in {"9", "99"}:
+        return DecodedField(value=code, state="unknown", raw_value=text)
+    if code in {"1", "2", "3", "4", "5"}:
+        return DecodedField(value=code, state="valid", raw_value=text)
+    if code == "":
+        return DecodedField(value=None, state="missing", raw_value=text)
+    return DecodedField(value=code, state="invalid", raw_value=text, warning="race_code_outlier")
+
+
+def decode_datasus_sex(raw: Any) -> DecodedField:
+    """Decode a DATASUS SEXO code with explicit MSD §2.3 missingness states.
+
+    Single source of truth for sex decoding across SIM-DO / SINASC / SIH-RD:
+    1→male, 2→female (valid); 9→unknown; blank→missing; anything else→invalid.
+    """
+    if _none_or_blank(raw):
+        return DecodedField(value=None, state="missing", raw_value=None if raw is None else str(raw))
+    text = str(raw).strip()
+    code = re.sub(r"\D", "", text)
+    if code == "1":
+        return DecodedField(value="male", state="valid", raw_value=text)
+    if code == "2":
+        return DecodedField(value="female", state="valid", raw_value=text)
+    if code == "9":
+        return DecodedField(value=None, state="unknown", raw_value=text)
+    if code == "":
+        return DecodedField(value=None, state="missing", raw_value=text)
+    return DecodedField(value=None, state="invalid", raw_value=text, warning="sex_code_outlier")
+
+
+def canonical_scalar_state(decoded: "DecodedScalar") -> str:
+    """Map decode_physical_scalar's audit state vocabulary to the canonical MSD §2.3
+    states used by the SINASC/SIH/CNES substrate outputs and the EFG legality layer.
+
+    valid→valid; blank→missing; declared sentinel→sentinel; out-of-range or
+    unparseable→invalid. This keeps decode_physical_scalar the single source of the
+    bounds/sentinel/parse *logic* (SHE-NORM-01 / XCUT-02) while preserving the
+    explicit five-state §2.3 contract downstream consumers depend on.
+    """
+    if decoded.state == "valid":
+        return "valid"
+    if decoded.warning == "sentinel_scalar":
+        return "sentinel"
+    if decoded.state == "MissingScalar":
+        return "missing"
+    return "invalid"
+
+
+def decode_integer(raw: Any) -> DecodedField:
+    """Decode a plain non-negative-or-signed integer mark, preserving sign.
+
+    Non-integer floats (e.g. ``"3.5"``) are ``invalid``; blanks are ``missing``.
+    """
+    if _none_or_blank(raw):
+        return DecodedField(value=None, state="missing", raw_value=None if raw is None else str(raw))
+    text = str(raw).strip()
+    try:
+        f = float(text.replace(",", "."))
+    except ValueError:
+        return DecodedField(value=None, state="invalid", raw_value=text, warning="unparseable_integer")
+    if f != int(f):
+        return DecodedField(value=None, state="invalid", raw_value=text, warning="non_integer_value")
+    return DecodedField(value=int(f), state="valid", raw_value=text)

@@ -79,10 +79,15 @@ def _int_nonnegative(value: Any) -> tuple[int | None, str]:
     raw = _clean(value)
     if raw is None:
         return None, "missing"
-    digits = _digits(raw)
-    if digits is None:
+    # Parse via float to preserve sign information. _digits() strips "-" and
+    # would silently convert "-5" → 5 (capacity fields cannot be negative).
+    try:
+        f = float(raw.replace(",", "."))
+    except ValueError:
         return None, "invalid"
-    parsed = int(digits)
+    if f != int(f):
+        return None, "invalid"
+    parsed = int(f)
     return (parsed, "valid") if parsed >= 0 else (None, "invalid")
 
 

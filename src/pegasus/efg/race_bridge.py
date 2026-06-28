@@ -70,14 +70,18 @@ class RaceBridgePosterior:
     prior: RaceBridgePrior
     support: dict[str, Any]
     bridge_mode: str = "posterior_simulation"
+    effective_bridge_mode: str = "localPi_posteriorC"
 
     def metadata(self) -> dict[str, Any]:
         return {
             "numerator_axis_source": self.prior.source_axis,
             "denominator_axis_target": self.prior.target_axis,
-            "bridge_operator": "Bridge_R_localPi_posteriorC",
+            "bridge_operator": f"Bridge_R_{self.effective_bridge_mode}",
             "emission_matrix_registry_version": self.prior.bridge_id,
-            "bridge_mode": self.prior.mode,
+            # Report the mode actually exercised: localPi_posteriorC only when a
+            # local self-declared composition was supplied; otherwise the fast
+            # fixedC_dynamic_weight path (uniform local prior ⇒ W = C). MSD §4.5.3/§4.6.
+            "bridge_mode": self.effective_bridge_mode,
             "bridge_uncertainty_mode": self.bridge_mode,
             "missing_race_share": self.missing_share,
             "race_bridge_cv": self.race_bridge_cv,
@@ -224,6 +228,12 @@ def fixedc_dynamic_weight_bridge(counts: RaceBridgeCounts, prior: RaceBridgePrio
     cv = _posterior_draw_cv(draws=draws, prior=prior)
     width = _sensitivity_width(posterior=posterior, lower=lower, upper=upper, prior=prior, missing_share=counts.missing_share)
 
+    # Effective mode: localPi only when a local self-declared composition was
+    # actually supplied; otherwise the uniform local prior reduces W to C exactly
+    # (the fast fixedC_dynamic_weight path). MSD §4.5.3/§4.6.
+    has_local_pi = _local_pi_source(counts.support) == "declared_target_population_shares"
+    effective_mode = "localPi_posteriorC" if has_local_pi else "fixedC_dynamic_weight"
+
     return RaceBridgePosterior(
         posterior_counts=posterior,
         lower_counts=lower,
@@ -242,26 +252,8 @@ def fixedc_dynamic_weight_bridge(counts: RaceBridgeCounts, prior: RaceBridgePrio
             "posterior_replicates": RACE_BRIDGE_BOOTSTRAP_REPLICATES,
         },
         bridge_mode="posterior_simulation",
+        effective_bridge_mode=effective_mode,
     )
-
-
-def _apply_local_population_shares(
-    posterior: dict[str, float],
-    *,
-    counts: RaceBridgeCounts,
-    prior: RaceBridgePrior,
-) -> dict[str, float]:
-    shares = counts.support.get("target_population_shares") if isinstance(counts.support, dict) else None
-    if not isinstance(shares, dict) or not shares:
-        return posterior
-    clean = {target: max(float(shares.get(target, 0.0) or 0.0), 0.0) for target in prior.target_categories}
-    total_share = sum(clean.values())
-    total_count = sum(posterior.values())
-    if total_share <= 0 or total_count <= 0:
-        return posterior
-    normalized = {target: clean[target] / total_share for target in prior.target_categories}
-    bridged_total = sum(posterior.values())
-    return {target: bridged_total * normalized[target] for target in prior.target_categories}
 
 
 def _local_pi_source(support: dict[str, Any]) -> str:

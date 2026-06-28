@@ -49,6 +49,15 @@ class PopulationSolverSpec:
 SOLVER_REGISTRY_VERSION = "population_solver_registry_v3"
 DENSE_NATIONAL_CELL_THRESHOLD = 10_000_000
 
+# Solver ids that existed in earlier registry versions as non-executable scaffolds.
+# They are intentionally absent from POPULATION_SOLVERS, but an explicit request for
+# one must produce the typed §2.8.12 refusal (SHE-POP-02 step 4) — a clear
+# "unavailable for scale" abort rather than a generic "unknown solver" error — so
+# callers never silently downgrade onto a backend that cannot run.
+RETIRED_SCAFFOLD_SOLVERS: frozenset[str] = frozenset({
+    "sim_informed_sparse_admm_scaffold_v1",
+})
+
 POPULATION_SOLVERS: dict[str, PopulationSolverSpec] = {
     "projected_gradient_small_v1": PopulationSolverSpec(
         solver_id="projected_gradient_small_v1",
@@ -131,6 +140,12 @@ def get_population_solver(solver_id: str) -> PopulationSolverSpec:
 
 def select_population_solver(*, mode: str, solver_id: str | None = None, n_cells: int | None = None) -> PopulationSolverSpec:
     if solver_id is not None:
+        if solver_id in RETIRED_SCAFFOLD_SOLVERS:
+            raise PopulationSolverUnavailableError(
+                "population_solver_unavailable_for_scale: "
+                f"solver {solver_id} is a retired non-executable scaffold; no executable backend "
+                "is registered for this band. Refusing to silently downgrade."
+            )
         spec = get_population_solver(solver_id)
         if spec.mode != mode:
             raise PopulationRegistryError(f"Solver {solver_id} has mode {spec.mode}, not requested mode {mode}.")

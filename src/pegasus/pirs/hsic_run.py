@@ -226,10 +226,16 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
     null_used = "disabled"
     state = "verified"
     bootstrap_adjustment: dict[str, Any] | None = None
-    if n_eff < min_support:
+    # MSD §6.7: HSIC disabled when n_eff < 100 (hard gate). min_support is an
+    # additional caller-supplied floor; 100 is the unconditional MSD threshold.
+    _effective_min = max(min_support, 100)
+    if n_eff < _effective_min:
         mode = "disabled"
         state = "blocked"
-        warnings.append("hsic_disabled_insufficient_support")
+        if n_eff < min_support:
+            warnings.append("hsic_disabled_insufficient_support")
+        else:
+            warnings.append("hsic_disabled_n_eff_below_100")
     else:
         # Real non-linear centered-kernel HSIC (RBF), not the prior linear
         # Pearson^2 stand-in that was mislabelled "exact_linear" HSIC.
@@ -263,9 +269,6 @@ def _scan_row(*, residual_field_id: str, model_id: str | None, covariate_field_i
         else:
             null_used = "unrestricted_iid_permutation"
             warnings.append("hsic_null_unrestricted_iid_permutation")
-        if n_eff < 100:
-            state = "fragile"
-            warnings.append("hsic_descriptive_small_support")
         # Deep-budget bootstrap-adjusted nonlinear score (MSD §6.6.2): D* = E_b[D_b]/(SD_b+ε)
         # over parametric residual replicates, aligned to this scan's support slice.
         if budget == "deep" and bootstrap_replicates is not None:

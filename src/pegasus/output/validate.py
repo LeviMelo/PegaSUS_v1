@@ -415,8 +415,9 @@ def _validate_inference_invariants(*, hypotheses, model_assoc, residual_assoc, b
                 f"standard/deep HSIC consumed in-sample residuals — MSD §10 hard-abort: {row.get('hypothesis_id')}"
             )
         elif budget in {"standard", "deep"} and "in_sample_backfill" in rmode:
-            warnings.append(
-                f"standard/deep HSIC residual mode includes in-sample backfill rows: {row.get('hypothesis_id')}"
+            # Backfill rows ARE in-sample residuals — same §10 violation.
+            errors.append(
+                f"standard/deep HSIC residual mode includes in-sample backfill — MSD §10 hard-abort: {row.get('hypothesis_id')}"
             )
     # A fitted model must have materialized residuals (the residual linkage lives
     # in ResidualAssociations, not in the ModelAssociations canonical schema).

@@ -9,7 +9,7 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.datasus.decoders import decode_sih_age
+from pegasus.datasus.decoders import decode_datasus_sex, decode_sih_age, filter_cnpj
 from pegasus.datasus.icd_parser import parse_icd
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7
 
@@ -72,14 +72,18 @@ def _mun(value: Any) -> tuple[str | None, str | None, str]:
     digits = _digits(value)
     if digits is None:
         return None, None, "missing"
-    if len(digits) == 6:
-        try:
-            return digits, datasus_cod6_to_ibge_cod7(digits, strict=True), "datasus_cod6"
-        except Exception:
-            return digits, None, "unmapped_datasus_cod6"
+    cod6 = digits if len(digits) == 6 else (digits[:6] if len(digits) == 7 else None)
+    if cod6 is None:
+        return None, None, "invalid"
+    # DATASUS "município ignorado" sentinel (UF + 0000) is missingness, not geography.
+    if cod6[2:] == "0000":
+        return None, None, "ignored_municipality"
     if len(digits) == 7:
-        return digits[:6], digits, "ibge_cod7"
-    return None, None, "invalid"
+        return cod6, digits, "ibge_cod7"
+    try:
+        return cod6, datasus_cod6_to_ibge_cod7(cod6, strict=True), "datasus_cod6"
+    except Exception:
+        return cod6, None, "unmapped_datasus_cod6"
 
 
 def _number(value: Any) -> tuple[float | None, str, str | None]:
@@ -96,6 +100,12 @@ def _number(value: Any) -> tuple[float | None, str, str | None]:
 def _int_nonnegative(value: Any) -> tuple[int | None, str]:
     number, state, _ = _number(value)
     return (int(number), state) if number is not None else (None, state)
+
+
+def _decode_sex(value: Any) -> tuple[str | None, str]:
+    """Decode DATASUS SEXO via the shared single-authority decoder (§2.3)."""
+    decoded = decode_datasus_sex(value)
+    return decoded.value, decoded.state
 
 
 def _death_flag(value: Any) -> tuple[bool | None, str]:
@@ -139,6 +149,15 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
         costs[col] = value
         cost_states[col] = state
         cost_raw[col] = raw
+    sex_value, sex_st = _decode_sex(row.get("SEXO"))
+    # Movement geography (MUNIC_MOV) — where the admission was processed; distinct
+    # from residence (MUNIC_RES). Required by the §5.9 FacilityFlow bridge.
+    mov6, mov7, mov_state = _mun(row.get("MUNIC_MOV") or row.get("MUNIC_MOVI") or row.get("mun_movement"))
+    # Hospital corporate linkage (CGC_HOSP) — §2.4.0.5 CNPJ gate; required by the
+    # FacilityFlow many-to-many guard.
+    hospital_cnpj = filter_cnpj(row.get("CGC_HOSP") or row.get("hospital_cnpj"))
+    facility_cnes = _clean(row.get("CNES") or row.get("facility_code"))
+    manager_cnpj = filter_cnpj(row.get("CNPJ_MANT") or row.get("GESTOR_CPF") or row.get("maintainer_cnpj"))
     admission_id = _clean(row.get("AIH") or row.get("N_AIH") or row.get("admission_id")) or _stable_hash(raw_payload)[:16]
     record_state = "valid"
     if admission_year is None or cod6 is None or principal.parse_state in {"missing", "blank", "unparseable", "invalid"}:
@@ -154,11 +173,20 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
         "mun_residence_cod6": cod6,
         "mun_residence_cod7": cod7,
         "municipality_code_state": mun_state,
+        "mun_movement_cod6": mov6,
+        "mun_movement_cod7": mov7,
+        "mun_movement_state": mov_state,
+        "facility_cnes": facility_cnes,
+        "hospital_cnpj": hospital_cnpj.cnpj,
+        "hospital_cnpj_state": hospital_cnpj.state,
+        "maintainer_cnpj": manager_cnpj.cnpj,
+        "maintainer_cnpj_state": manager_cnpj.state,
         "age_days": age.age_days,
         "age_years": age.age_years,
         "age_unit": age.age_unit,
         "age_state": age.state,
-        "sex": _clean(row.get("SEXO")),
+        "sex": sex_value,
+        "sex_state": sex_st,
         "race_color_billing": _clean(row.get("RACA_COR")),
         "race_axis_type": "sih_billing_race_color",
         "principal_icd_raw": principal.raw,

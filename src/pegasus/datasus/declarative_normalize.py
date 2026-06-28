@@ -142,6 +142,58 @@ def _parse_icd10(value: Any) -> tuple[str | None, str]:
     return (text or None), ("parsed" if text else "missing")
 
 
+def _sim_cause_chain_decode(row: dict[str, Any]) -> dict[str, Any]:
+    """Compound decoder for SIM-DO LINHAA–D causal chain (MSD §2.5.2.2)."""
+    import json as _json
+    from pegasus.datasus.icd_parser import parse_icd as _parse_icd
+
+    raw: dict[str, str] = {}
+    norm: dict[str, str | None] = {}
+    states: dict[str, str] = {}
+    for pos, col in (("A", "LINHAA"), ("B", "LINHAB"), ("C", "LINHAC"), ("D", "LINHAD")):
+        v = str(row[col]).strip() if row.get(col) is not None else None
+        if not v:
+            continue
+        raw[pos] = v
+        parsed = _parse_icd(v, topology_role="sim_causal_chain", source_field=col, position=pos)
+        norm[pos] = parsed.normalized
+        states[pos] = parsed.parse_state
+
+    return {
+        "cause_chain_raw": _json.dumps(raw, ensure_ascii=False, sort_keys=True),
+        "cause_chain_norm": _json.dumps(norm, ensure_ascii=False, sort_keys=True),
+        "cause_chain_parse_states": _json.dumps(states, ensure_ascii=False, sort_keys=True),
+    }
+
+
+def _sim_associated_decode(row: dict[str, Any]) -> dict[str, Any]:
+    """Compound decoder for SIM-DO LINHAII associated conditions (MSD §2.5.2.3)."""
+    import json as _json
+    from pegasus.datasus.icd_parser import parse_icd as _parse_icd
+
+    v = str(row["LINHAII"]).strip() if row.get("LINHAII") is not None else None
+    if not v:
+        return {
+            "associated_conditions_raw": None,
+            "associated_conditions_norm": None,
+            "associated_conditions_parse_states": None,
+        }
+    parsed = _parse_icd(v, topology_role="sim_associated_condition", source_field="LINHAII")
+    return {
+        "associated_conditions_raw": v,
+        "associated_conditions_norm": parsed.normalized,
+        "associated_conditions_parse_states": parsed.parse_state,
+    }
+
+
+def _decode_sex_value(value: Any) -> dict[str, Any]:
+    """Decode DATASUS SEXO via the shared single-authority decoder (§2.3)."""
+    from pegasus.datasus.decoders import decode_datasus_sex
+
+    decoded = decode_datasus_sex(value)
+    return {"value": decoded.value, "state": decoded.state}
+
+
 def _decode_registered_value(name: str, value: Any, spec: Any, *, column: str, row: dict[str, Any]) -> Any:
     normalized = name.lower()
     if normalized == "decode_physical_scalar":
@@ -184,6 +236,14 @@ def _decode_registered_value(name: str, value: Any, spec: Any, *, column: str, r
         axes = getattr(spec, "axes", {}) or {}
         role = str(axes.get("icd_topology_role") or "diagnostic_code")
         return fn(value, topology_role=role, source_field=column)
+    # Compound multi-raw-field decoders that require full row context.
+    if normalized == "decode_sim_cause_chain":
+        return _sim_cause_chain_decode(row)
+    if normalized == "decode_sim_associated":
+        return _sim_associated_decode(row)
+    # Sex decoder — returns {"value": ..., "state": ...} dict (not a dataclass).
+    if normalized in {"decode_sex", "decode_datasus_sex"}:
+        return _decode_sex_value(value)
 
     decoder = _resolve_decoder_callable(name)
     if decoder is None:
@@ -229,6 +289,11 @@ def _decoded_value(decoded: Any, output_key: str | None) -> Any:
 
 
 def _fallback_parse(value: Any, *, spec: Any) -> tuple[Any, str, str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned == "" or cleaned.upper() in {"NA", "NAN", "NULL", "NONE"}:
+            return None, "missing", "missingness_preserved"
+        value = cleaned
     if value in {None, ""}:
         return None, "missing", "missingness_preserved"
 
@@ -267,6 +332,31 @@ def _decode_value(*, source_system: str, column: str, value: Any, spec: Any, row
     if decoder_name is not None:
         try:
             decoded = _decode_registered_value(decoder_name, value, spec, column=column, row=row)
+            # Compound decoders return a plain dict of {canonical_field: value}.
+            # Propagate each entry directly instead of treating the dict as one value.
+            if isinstance(decoded, dict) and not hasattr(decoded, "state"):
+                if "value" in decoded and "state" in decoded:
+                    # Single-output decoder that returned a {value, state} dict
+                    # (e.g. decode_sex). Honor output_key so a *_state canonical
+                    # field receives the state, not the value.
+                    okey = _output_key(spec)
+                    chosen = decoded[okey] if okey in decoded else decoded.get("value")
+                    return {
+                        "canonical_field": canonical,
+                        "value": chosen,
+                        "state": decoded.get("state", "decoded"),
+                        "decoder": decoder_name,
+                        "excluded": False,
+                    }
+                # Multi-output compound decoder: emit a special marker carrying all fields.
+                return {
+                    "canonical_field": canonical,
+                    "value": None,
+                    "state": "compound",
+                    "decoder": decoder_name,
+                    "excluded": False,
+                    "_compound": decoded,
+                }
             return {
                 "canonical_field": canonical,
                 "value": _decoded_value(decoded, _output_key(spec)),
@@ -334,11 +424,21 @@ def normalize_record(
                 continue
 
             handled = True
+            out["_warnings"].extend(warnings)
+
+            # Compound decoders emit multiple canonical fields at once.
+            compound = decoded.get("_compound")
+            if compound:
+                for field_name, field_value in compound.items():
+                    out[field_name] = field_value
+                    out[f"{field_name}__state"] = "compound_decoded"
+                    out[f"{field_name}__decoder"] = decoded["decoder"]
+                continue
+
             canonical = str(decoded["canonical_field"])
             out[canonical] = decoded["value"]
             out[f"{canonical}__state"] = decoded["state"]
             out[f"{canonical}__decoder"] = decoded["decoder"]
-            out["_warnings"].extend(warnings)
         if not handled:
             out["_excluded_columns"].append(str(column))
 

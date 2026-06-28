@@ -13,6 +13,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from pegasus.core.io_utils import atomic_replace
 from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
 from pegasus.storage import write_table
 
@@ -301,8 +302,8 @@ class OutputBundleManager:
                 old = final.parent / f"{final.name}.pre_phaseE"
                 if old.exists():
                     shutil.rmtree(old)
-                os.replace(final, old)
-            os.replace(tmp, final)
+                atomic_replace(final, old)
+            atomic_replace(tmp, final)
             if old is not None and old.exists():
                 shutil.rmtree(old, ignore_errors=True)
             self.run_dir = final

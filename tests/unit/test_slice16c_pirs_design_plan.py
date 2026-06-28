@@ -86,4 +86,8 @@ def test_slice16c_spatial_selector_precedence() -> None:
         moran_i=0.30,
     )
     assert icar.mode == "ICAR"
-    assert "icar_execution_not_implemented_descriptive_association_only" in icar.warnings
+    # ICAR is implemented as a penalized-IRLS GMRF (model_execution._icar_design /
+    # _crossfit_icar_residuals), so the selector no longer gates to descriptive-only;
+    # it requires a declared municipality adjacency artifact to execute (PIRS-SPAT-01,
+    # plan option (a) was implemented rather than the option (b) descriptive fallback).
+    assert "icar_requires_declared_municipality_adjacency" in icar.warnings

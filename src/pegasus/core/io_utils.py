@@ -5,9 +5,30 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
+
+
+def atomic_replace(src: Path | str, dst: Path | str, *, attempts: int = 10, base_delay: float = 0.05) -> None:
+    """os.replace with a bounded retry on transient Windows file locks.
+
+    On Windows, antivirus/indexer real-time scanning briefly opens a freshly
+    written temp file, so the atomic rename can raise PermissionError (WinError 5)
+    even though the operation is valid. Retry with backoff before giving up so a
+    long multi-stage compile is not aborted by a transient lock.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as exc:  # pragma: no cover - platform/timing dependent
+            last_exc = exc
+            time.sleep(base_delay * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
 
 
 def _compact(value: Any) -> str:
@@ -41,7 +62,7 @@ def _write_json(path: Path | str, payload: Mapping[str, Any] | list[Any]) -> Pat
         default=str
     )
     tmp_path.write_text(text, encoding="utf-8")
-    os.replace(tmp_path, path_obj)
+    atomic_replace(tmp_path, path_obj)
     return path_obj
 
 

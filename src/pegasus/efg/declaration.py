@@ -104,14 +104,19 @@ def evaluate_declaration_compatibility(
         return DeclarationResult(ok=True, failed_terms=[], warnings=[])
 
     if numerator_race is None or denominator_race is None:
+        # Exactly one operand declares a race axis and the other does not. This is
+        # the dangerous incommensurability case: a race-stratified operand cannot
+        # be combined with one whose race semantics are unknown. Fail closed
+        # (EFG-DECL-02, MSD §4.3). The metadata-missing warning is always emitted;
+        # the unverifiable warning is added when the declared operand additionally
+        # required an explicit axis.
+        warnings = ["race_axis_metadata_missing_fail_closed"]
+        if numerator_requires_race_axis or denominator_requires_race_axis:
+            warnings.append("race_axis_declaration_unverifiable")
         return DeclarationResult(
             ok=False,
             failed_terms=["declaration"],
-            warnings=[
-                "race_axis_declaration_unverifiable"
-                if numerator_requires_race_axis or denominator_requires_race_axis
-                else "race_axis_metadata_missing_fail_closed"
-            ],
+            warnings=warnings,
             reason=(
                 f"Race-axis metadata missing for RN declaration: "
                 f"numerator={numerator_race}; denominator={denominator_race}."

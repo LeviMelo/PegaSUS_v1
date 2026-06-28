@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from pegasus.datasus.declarative_normalize import normalize_sim_do_record as _registry_normalize_sim_do_record, normalize_sinasc_record as _registry_normalize_sinasc_record
+from pegasus.datasus.decoders import (
+    DecodedScalar,
+    canonical_scalar_state,
+    decode_count2,
+    decode_datasus_sex,
+    decode_physical_scalar,
+)
 
 import hashlib
 import json
@@ -77,11 +84,15 @@ def municipality_codes(value: Any) -> tuple[str | None, str | None, str]:
     digits = _digits(value)
     if digits is None:
         return None, None, "missing"
-    if len(digits) == 6:
-        return digits, None, "datasus_cod6"
+    cod6 = digits if len(digits) == 6 else (digits[:6] if len(digits) == 7 else None)
+    if cod6 is None:
+        return None, None, "invalid"
+    # DATASUS "município ignorado" sentinel (UF + 0000) is missingness, not geography.
+    if cod6[2:] == "0000":
+        return None, None, "ignored_municipality"
     if len(digits) == 7:
-        return digits[:6], digits, "ibge_cod7"
-    return None, None, "invalid"
+        return cod6, digits, "ibge_cod7"
+    return cod6, None, "datasus_cod6"
 
 
 def int_or_none(value: Any) -> int | None:
@@ -115,37 +126,35 @@ def decode_count_preserve_leading_zero(
     return value_int, "valid", digits
 
 
+# The three perinatal scalar decoders below now delegate to the shared
+# decode_physical_scalar (the single bounds/sentinel/parse authority, SHE-NORM-01 /
+# XCUT-02) and translate its audit state vocabulary to the canonical MSD §2.3 states
+# via canonical_scalar_state. The clinical-threshold flag (third tuple element) is a
+# convenience for the run-summary counters only — it is NOT emitted as a SHE column
+# (threshold indicators belong to the EFG, SHE-SINASC-01).
+def _scalar(value: Any, *, lower: float, upper: float, sentinels: set[str]) -> DecodedScalar:
+    return decode_physical_scalar(value, unit="scalar", lower=lower, upper=upper, sentinels=sentinels)
+
+
 def decode_birth_weight(value: Any) -> tuple[int | None, str, bool | None]:
-    weight = int_or_none(value)
-    if weight is None:
-        return None, "missing", None
-    if weight in {0, 9999}:
-        return None, "sentinel", None
-    if weight < 300 or weight > 7000:
-        return None, "invalid", None
-    return weight, "valid", weight < 2500
+    d = _scalar(value, lower=300, upper=7000, sentinels={"0", "00", "000", "0000", "9999"})
+    state = canonical_scalar_state(d)
+    weight = int(d.value) if d.value is not None else None
+    return weight, state, (weight < 2500 if weight is not None else None)
 
 
 def decode_gestational_age(value: Any) -> tuple[int | None, str, bool | None]:
-    weeks = int_or_none(value)
-    if weeks is None:
-        return None, "missing", None
-    if weeks in {0, 99}:
-        return None, "sentinel", None
-    if weeks < 20 or weeks > 45:
-        return None, "invalid", None
-    return weeks, "valid", weeks < 37
+    d = _scalar(value, lower=20, upper=45, sentinels={"0", "00", "99"})
+    state = canonical_scalar_state(d)
+    weeks = int(d.value) if d.value is not None else None
+    return weeks, state, (weeks < 37 if weeks is not None else None)
 
 
 def decode_apgar(value: Any) -> tuple[int | None, str, bool | None]:
-    score = int_or_none(value)
-    if score is None:
-        return None, "missing", None
-    if score == 99:
-        return None, "sentinel", None
-    if score < 0 or score > 10:
-        return None, "invalid", None
-    return score, "valid", score < 7
+    d = _scalar(value, lower=0, upper=10, sentinels={"99"})
+    state = canonical_scalar_state(d)
+    score = int(d.value) if d.value is not None else None
+    return score, state, (score < 7 if score is not None else None)
 
 
 def decode_delivery_mode(value: Any) -> tuple[str | None, str, bool | None]:
@@ -170,6 +179,12 @@ def decode_race(value: Any) -> tuple[str | None, str]:
     if code == "9":
         return None, "ignored_sentinel"
     return code, "invalid"
+
+
+def decode_sex(value: Any) -> tuple[str | None, str]:
+    """Decode SINASC SEXO via the shared single-authority sex decoder (§2.3)."""
+    d = decode_datasus_sex(value)
+    return d.value, d.state
 
 
 def decode_anomaly_flag(value: Any) -> tuple[bool | None, str]:
@@ -270,6 +285,14 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
         anomaly_code, anomaly_code_state, anomaly_positive = normalize_anomaly_icd(row.get("CODANOMAL"), anomaly_flag)
         newborn_race, newborn_race_state = decode_race(row.get("RACACOR"))
         maternal_race, maternal_race_state = decode_race(row.get("RACACORMAE"))
+        newborn_sex, newborn_sex_state = decode_sex(row.get("SEXO"))
+        # Reproductive history — decode_count2 preserves sentinel/state semantics
+        # (MSD §2.4.3); int_or_none would lose the 99-sentinel and missing/invalid.
+        live_children = decode_count2(row.get("QTDFILVIVO"), sentinels={"99"})
+        deceased_children = decode_count2(row.get("QTDFILMORT"), sentinels={"99"})
+        prior_pregnancies = decode_count2(row.get("QTDGESTANT"), sentinels={"99"})
+        prior_vaginal = decode_count2(row.get("QTDPARTNOR"), sentinels={"99"})
+        prior_cesarean = decode_count2(row.get("QTDPARTCES"), sentinels={"99"})
         event_key = _clean(row.get("NUMERODN")) or f"{idx}_{source_manifest_hash[:8]}"
         records.append(
             {
@@ -286,7 +309,8 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
                 "mun_birth_state": birth_state,
                 "mother_age_years": mother_age,
                 "maternal_birth_date": _clean(row.get("DTNASCMAE")),
-                "newborn_sex": {"1": "male", "2": "female"}.get(_digits(row.get("SEXO")) or "", "unknown"),
+                "newborn_sex": newborn_sex,
+                "newborn_sex_state": newborn_sex_state,
                 "newborn_race_admin": newborn_race,
                 "newborn_race_state": newborn_race_state,
                 "maternal_race_admin": maternal_race,
@@ -306,11 +330,16 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
                 "prenatal_consult_state": prenatal_state,
                 "prenatal_consult_raw_digits": prenatal_raw,
                 "prenatal_visit_group": _clean(row.get("CONSULTAS")),
-                "live_children_count": int_or_none(row.get("QTDFILVIVO")),
-                "deceased_children_count": int_or_none(row.get("QTDFILMORT")),
-                "prior_pregnancy_count": int_or_none(row.get("QTDGESTANT")),
-                "prior_vaginal_delivery_count": int_or_none(row.get("QTDPARTNOR")),
-                "prior_cesarean_delivery_count": int_or_none(row.get("QTDPARTCES")),
+                "live_children_count": live_children.value,
+                "live_children_state": live_children.state,
+                "deceased_children_count": deceased_children.value,
+                "deceased_children_state": deceased_children.state,
+                "prior_pregnancy_count": prior_pregnancies.value,
+                "prior_pregnancy_state": prior_pregnancies.state,
+                "prior_vaginal_delivery_count": prior_vaginal.value,
+                "prior_vaginal_delivery_state": prior_vaginal.state,
+                "prior_cesarean_delivery_count": prior_cesarean.value,
+                "prior_cesarean_delivery_state": prior_cesarean.state,
                 "anomaly_flag": anomaly_flag,
                 "anomaly_flag_state": anomaly_flag_state,
                 "anomaly_icd_code": anomaly_code,

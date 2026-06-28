@@ -13,7 +13,7 @@ from pegasus.efg.align import align_fields
 from pegasus.efg.bridges import bridge_summary, plan_bridge_candidates
 from pegasus.efg.core_seed import build_core_seed_set, core_seed_summary
 from pegasus.efg.declaration import OperatorSpec
-from pegasus.efg.core_seed_registry import enforce_mandatory_fields, resolve_core_seeds
+from pegasus.efg.core_seed_registry import core_seed_specs, enforce_mandatory_fields, resolve_core_seeds
 from pegasus.efg.diagnostic_strata import (
     ICD_AXIS_BY_LEVEL,
     diagnostic_columns_by_event,
@@ -916,10 +916,35 @@ def _build_efg_base(
     # Named core-seed binding + mandatory_fields enforcement (MSD §3.10): bind canonical
     # V_* / count seed ids to produced fields and fail loudly if the intent's
     # mandatory_fields are not realized.
-    domain_summary_payload["core_seed_resolution"] = resolve_core_seeds(compressed, registry_root=root)
+    seed_resolution = resolve_core_seeds(compressed, registry_root=root)
+    domain_summary_payload["core_seed_resolution"] = seed_resolution
     domain_summary_payload["mandatory_field_contract"] = enforce_mandatory_fields(
         intent, compressed, registry_root=root
     )
+    # Surface the MSD §3.10 named core-seed surface: set each bound field's display
+    # `name` to its canonical seed name (SIMDeathsAll, SINASCLiveBirthsAll, …) so the
+    # named V_core fields are discoverable in V_fields / VariableDictionary. The
+    # content-addressed `field_id` is preserved untouched, so lineage, edges, and
+    # precompression are unaffected (this is a display alias, not a field rename).
+    if seed_resolution:
+        _spec_by_seed = {spec.seed_id: spec for spec in core_seed_specs(registry_root=root)}
+        _canonical_name_by_fid: dict[str, str] = {}
+        for seed_id, fid in seed_resolution.items():
+            spec = _spec_by_seed.get(seed_id)
+            if spec is not None and fid and fid not in _canonical_name_by_fid:
+                # Prefer the descriptive composite alias (e.g. SIMCrudeMortalitySIDRAOfficial)
+                # over the short MSD shorthand (CrudeMortality) as the public display name —
+                # it is the unambiguous, source-qualified name intents declare in
+                # mandatory_fields and consumers query by. Seeds without an alias keep their
+                # already-descriptive name (e.g. SIMDeathsAll).
+                _canonical_name_by_fid[fid] = spec.aliases[0] if spec.aliases else spec.name
+        if _canonical_name_by_fid:
+            compressed = tuple(
+                field.model_copy(update={"name": _canonical_name_by_fid[field.id]})
+                if field.id in _canonical_name_by_fid
+                else field
+                for field in compressed
+            )
     payload = {
         "substrate_id": substrate.substrate_id,
         "field_ids": [field.id for field in compressed],

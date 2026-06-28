@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from pegasus.datasus.declarative_normalize import normalize_sim_do_record as _registry_normalize_sim_do_record, normalize_sinasc_record as _registry_normalize_sinasc_record
+from pegasus.datasus.declarative_normalize import (
+    normalize_record,
+    normalize_sim_do_record as _registry_normalize_sim_do_record,
+    normalize_sinasc_record as _registry_normalize_sinasc_record,
+)
 
 import hashlib
 import json
@@ -11,12 +15,7 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.datasus.decoders import (
-    decode_count2,
-    decode_physical_scalar,
-    decode_sim_idade,
-)
-from pegasus.datasus.icd_parser import parse_icd
+from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7
 
 
 SIM_DO_NORMALIZED_COLUMNS = [
@@ -32,6 +31,7 @@ SIM_DO_NORMALIZED_COLUMNS = [
     "age_unit",
     "raw_age_code",
     "sex",
+    "sex_state",
     "race_color_admin",
     "race_axis_type",
     "race_missingness_state",
@@ -227,6 +227,14 @@ def _race_state(value: Any) -> tuple[str | None, str]:
     return text, "valid"
 
 
+def _decode_sex(value: Any) -> tuple[str | None, str]:
+    """Decode DATASUS SEXO via the shared single-authority decoder (§2.3)."""
+    from pegasus.datasus.decoders import decode_datasus_sex
+
+    decoded = decode_datasus_sex(value)
+    return decoded.value, decoded.state
+
+
 def _int_or_none(value: Any) -> int | None:
     text = _clean_str(value)
     if text is None:
@@ -305,149 +313,75 @@ def _icd_parse_state(norm_expr: pl.Expr) -> pl.Expr:
     )
 
 
-def _normalize_icd_cell(value: Any, *, role: str, source_field: str, position: str | None = None) -> tuple[str | None, str]:
-    parsed = parse_icd(
-        None if value is None else str(value),
-        topology_role=role,
-        source_field=source_field,
-        position=position,
-    )
-    return parsed.normalized, parsed.parse_state
+def _cod7_from_cod6(cod6: Any) -> str | None:
+    """IBGE cod7 crosswalk of a decoded cod6 — a derivation, not a raw decode."""
+    if not cod6:
+        return None
+    try:
+        return datasus_cod6_to_ibge_cod7(str(cod6), strict=False)
+    except Exception:
+        return None
 
 
-def _sim_chain(row: dict[str, Any]) -> tuple[str, str, str]:
-    raw: dict[str, str] = {}
-    norm: dict[str, str | None] = {}
-    states: dict[str, str] = {}
-    for pos, column in (("A", "LINHAA"), ("B", "LINHAB"), ("C", "LINHAC"), ("D", "LINHAD")):
-        value = _clean_str(row.get(column))
-        if value is None:
-            continue
-        raw[pos] = value
-        parsed_norm, parsed_state = _normalize_icd_cell(
-            value,
-            role="sim_causal_chain",
-            source_field=column,
-            position=pos,
-        )
-        norm[pos] = parsed_norm
-        states[pos] = parsed_state
-    return _json(raw), _json(norm), _json(states)
+def _assemble_sim_do_record(
+    registry_out: dict[str, Any],
+    raw_row: dict[str, Any],
+    *,
+    idx: int,
+    source_manifest_hash: str,
+) -> dict[str, Any]:
+    """Project registry-routed canonical fields into the SIM-DO output schema and
+    compute the genuinely-derived fields that are not single-column decodes.
 
+    The Source Field Registry (config/registries/source_fields.yaml) is the sole
+    authority for raw→canonical routing and decoding (SHE-NORM-01 Path A): this
+    assembler copies the registry's decode result and only adds identifiers,
+    year, the age-provenance preference, the cod7 crosswalk, reporting delay, and
+    hashes. It never re-decodes a raw column."""
+    out: dict[str, Any] = {column: None for column in SIM_DO_NORMALIZED_COLUMNS}
 
-def _sim_associated(row: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
-    value = _clean_str(row.get("LINHAII"))
-    if value is None:
-        return None, None, None
-    parsed_norm, parsed_state = _normalize_icd_cell(
-        value,
-        role="sim_associated_condition",
-        source_field="LINHAII",
-    )
-    return value, parsed_norm, parsed_state
+    # 1. Registry-routed canonical values (the authoritative decode result).
+    for column in SIM_DO_NORMALIZED_COLUMNS:
+        if column in registry_out:
+            out[column] = registry_out[column]
 
+    # 2. Derived identifiers and provenance.
+    out["event_id"] = f"sim_{idx}_{source_manifest_hash[:8]}"
+    out["source_system"] = "SIM-DO"
+    out["source_manifest_hash"] = source_manifest_hash
+    out["raw_record_hash"] = _stable_hash(raw_row)
+    out["processed_record_hash"] = _stable_hash({k: v for k, v in raw_row.items() if k != "raw_json"})
 
-def _sim_record(row: dict[str, Any], *, idx: int, source_manifest_hash: str) -> dict[str, Any]:
-    death_date = _parse_datasus_date(row.get("DTOBITO"))
-    birth_date = _parse_datasus_date(row.get("DTNASC"))
-    idade = decode_sim_idade(row.get("IDADE"))
+    # 3. Year is a derivation of the decoded death date (fallback to raw ANO).
+    death_date = out.get("death_date")
+    out["year"] = _year_from_date(death_date, raw_row.get("ANO"))
+
+    # 4. Age: prefer the exact date difference when both dates resolved, else keep
+    #    the registry decode_sim_idade result (MSD §2.4.1 age provenance).
+    birth_date = out.get("birth_date")
     date_age_days = _days_between(birth_date, death_date)
     if date_age_days is not None and date_age_days >= 0:
-        age_source = "date_difference"
-        age_days = float(date_age_days)
-        age_years = age_days / 365.25
+        out["age_source"] = "date_difference"
+        out["age_days"] = float(date_age_days)
+        out["age_years"] = date_age_days / 365.25
     else:
-        age_source = "IDADE"
-        age_days = idade.age_days
-        age_years = idade.age_years
-    res6, res7 = _mun_codes(row.get("CODMUNRES"))
-    occ6, occ7 = _mun_codes(row.get("CODMUNOCOR"))
-    facility, facility_state = _facility_code(row.get("CODESTAB"))
-    race, race_state = _race_state(row.get("RACACOR"))
-    underlying = parse_icd(
-        None if row.get("CAUSABAS") is None else str(row.get("CAUSABAS")),
-        topology_role="sim_underlying_cause",
-        source_field="CAUSABAS",
-    )
-    chain_raw, chain_norm, chain_states = _sim_chain(row)
-    assoc_raw, assoc_norm, assoc_state = _sim_associated(row)
-    certificate_date = _parse_datasus_date(row.get("DTATESTADO"))
-    investigation_date = _parse_datasus_date(row.get("DTINVESTIG"))
-    weight = decode_physical_scalar(
-        row.get("PESO"),
-        unit="grams",
-        lower=300,
-        upper=7000,
-        sentinels={"0000", "9999"},
-    )
-    living = decode_count2(row.get("QTDFILVIVO"), sentinels={"99"})
-    deceased = decode_count2(row.get("QTDFILMORT"), sentinels={"99"})
-    out = {column: None for column in SIM_DO_NORMALIZED_COLUMNS}
-    out.update(
-        {
-            "event_id": f"sim_{idx}_{source_manifest_hash[:8]}",
-            "source_system": "SIM-DO",
-            "year": _year_from_date(death_date, row.get("ANO")),
-            "death_date": death_date,
-            "death_hour": _parse_hour(row.get("HORAOBITO")),
-            "birth_date": birth_date,
-            "age_source": age_source,
-            "age_days": age_days,
-            "age_years": age_years,
-            "age_unit": idade.age_unit,
-            "raw_age_code": None if row.get("IDADE") is None else str(row.get("IDADE")).strip(),
-            "sex": {"1": "male", "2": "female"}.get(str(row.get("SEXO")).strip() if row.get("SEXO") is not None else "", "unknown"),
-            "race_color_admin": race,
-            "race_axis_type": "administrative_death_declaration",
-            "race_missingness_state": race_state,
-            "mun_residence_cod6": res6,
-            "mun_residence_cod7": res7,
-            "mun_occurrence_cod6": occ6,
-            "mun_occurrence_cod7": occ7,
-            "place_of_death": _clean_str(row.get("LOCOCOR")),
-            "facility_code": facility,
-            "facility_code_state": facility_state,
-            "underlying_icd_raw": underlying.raw,
-            "underlying_icd_norm": underlying.normalized,
-            "underlying_icd_parse_state": underlying.parse_state,
-            "cause_chain_raw": chain_raw,
-            "cause_chain_norm": chain_norm,
-            "cause_chain_parse_states": chain_states,
-            "associated_conditions_raw": assoc_raw,
-            "associated_conditions_norm": assoc_norm,
-            "associated_conditions_parse_states": assoc_state,
-            "death_type": _clean_str(row.get("TIPOBITO")),
-            "fetal_or_liveborn_status_source": _clean_str(row.get("TIPOBITO")),
-            "maternal_age_years": _int_or_none(row.get("IDADEMAE")),
-            "maternal_education_legacy": _clean_str(row.get("ESCMAE")),
-            "maternal_education_2010": _clean_str(row.get("ESCMAE2010")),
-            "maternal_occupation_cbo": _clean_str(row.get("OCUPMAE")),
-            "maternal_living_children_count": living.value,
-            "maternal_deceased_children_count": deceased.value,
-            "pregnancy_type": _clean_str(row.get("GRAVIDEZ")),
-            "gestational_weeks_death": _int_or_none(row.get("SEMAGESTAC")),
-            "gestational_age_group_death": _clean_str(row.get("GESTACAO")),
-            "delivery_type_death_context": _clean_str(row.get("PARTO")),
-            "death_timing_relative_to_delivery": _clean_str(row.get("OBITOPARTO")),
-            "birth_weight_death_context_grams": int(weight.value) if weight.value is not None else None,
-            "death_during_pregnancy": _clean_str(row.get("OBITOGRAV")),
-            "death_during_puerperium": _clean_str(row.get("OBITOPUERP")),
-            "medical_assistance": _clean_str(row.get("ASSISTMED")),
-            "exam_performed": _clean_str(row.get("EXAME")),
-            "surgery_performed": _clean_str(row.get("CIRURGIA")),
-            "autopsy_performed": _clean_str(row.get("NECROPSIA")),
-            "svo_iml_municipality": _clean_str(row.get("COMUNSVOIM")),
-            "certificate_date": certificate_date,
-            "reporting_delay": _days_between(death_date, certificate_date),
-            "investigation_status": _clean_str(row.get("TPPOS")),
-            "investigation_date": investigation_date,
-            "cause_altered": _clean_str(row.get("CAUSABAS_O")),
-            "raw_record_hash": _stable_hash(row),
-            "processed_record_hash": _stable_hash({k: v for k, v in row.items() if k != "raw_json"}),
-            "source_manifest_hash": source_manifest_hash,
-        }
-    )
+        out["age_source"] = "IDADE"
+
+    # 5. cod7 is the IBGE crosswalk of the decoded cod6 (a derivation, not a decode).
+    out["mun_residence_cod7"] = _cod7_from_cod6(out.get("mun_residence_cod6"))
+    out["mun_occurrence_cod7"] = _cod7_from_cod6(out.get("mun_occurrence_cod6"))
+
+    # 6. Constant axis tag + cross-field reporting delay.
+    out["race_axis_type"] = "administrative_death_declaration"
+    out["reporting_delay"] = _days_between(death_date, out.get("certificate_date"))
+
+    # 7. birth_weight is decoded as a float scalar; the schema column is integer grams.
+    bw = out.get("birth_weight_death_context_grams")
+    out["birth_weight_death_context_grams"] = int(bw) if bw is not None else None
+
     return out
+
+
 
 
 def normalize_sim_do_events(
@@ -456,20 +390,25 @@ def normalize_sim_do_events(
     output_path: str | Path,
     source_manifest_hash: str,
 ) -> dict[str, Any]:
-    """Real vectorized SIM-DO raw→canonical SHE decoder (MSD §2.4.0/§2.4.1).
+    """Registry-driven SIM-DO raw→canonical SHE normalizer (MSD §2.4.0/§2.4.1).
 
-    Replaces the previous per-row registry-routed path, which looked up *raw*
-    DATASUS column names in a registry keyed by *canonical* names, matched
-    nothing, and emitted 60 canonical columns that were 100% null. Here every
-    canonical field is computed by a Polars expression over the raw columns,
-    using the registered composite decoders (e.g. SIM IDADE) — fast and real."""
+    SHE-NORM-01 Path A: this batch function is a thin wrapper over the single
+    registry-driven record normalizer (`normalize_record`, via the Source Field
+    Registry). The registry is the sole authority for raw→canonical routing and
+    decoder dispatch; `_assemble_sim_do_record` only projects to the output
+    schema and computes genuinely-derived fields (year, age provenance, cod7
+    crosswalk, reporting delay, hashes). No raw column is decoded twice."""
     input_path = Path(input_path)
     output_path = Path(output_path)
     df = _read_table(input_path)
-    n = df.height
 
     records = [
-        _sim_record(row, idx=idx, source_manifest_hash=source_manifest_hash)
+        _assemble_sim_do_record(
+            normalize_record(row, source_system="SIM-DO"),
+            row,
+            idx=idx,
+            source_manifest_hash=source_manifest_hash,
+        )
         for idx, row in enumerate(df.to_dicts())
     ]
     out = pl.DataFrame(records, infer_schema_length=None).select(SIM_DO_NORMALIZED_COLUMNS)

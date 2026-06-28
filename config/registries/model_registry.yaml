@@ -138,7 +138,7 @@ entries:
   - bounded_proportion_family
   description: Logit GLM for bounded proportions.
 - id: glm_beta_binomial
-  status: active
+  status: active_reduced
   family: beta_binomial
   residual_type: pearson
   required_artifacts:
@@ -150,9 +150,14 @@ entries:
   warnings:
   - overdispersed_proportion_family
   - beta_binomial_intraclass_correlation_estimated
-  description: Overdispersed bounded-proportion model with beta-binomial variance and Pearson residual diagnostics.
+  - reduced_fits_binomial_mean_with_overdispersion_approximation
+  description: >
+    Overdispersed bounded-proportion model. Fits a binomial-mean GLM, then estimates
+    an intraclass correlation (rho) via method-of-moments and applies it to Pearson
+    residuals. Not a full beta-binomial maximum-likelihood fit; marked active_reduced
+    accordingly.
 - id: glm_dirichlet
-  status: active
+  status: active_reduced
   family: dirichlet
   residual_type: ilr
   required_artifacts:
@@ -163,9 +168,13 @@ entries:
   - residual_values
   warnings:
   - simplex_softmax_mean_model
-  description: Simplex/compositional outcome model with softmax mean and ILR-compatible residual diagnostics.
+  - reduced_softmax_approximation_not_full_dirichlet_concentration
+  description: >
+    Simplex/compositional outcome model using softmax mean parameterization. Not a
+    full Dirichlet concentration MLE; concentration/precision parameters are not
+    estimated. Marked active_reduced.
 - id: glm_multinomial_logit
-  status: active
+  status: active_reduced
   family: multinomial_logit
   residual_type: deviance
   required_artifacts:
@@ -176,7 +185,10 @@ entries:
   - residual_values
   warnings:
   - multinomial_softmax_likelihood
-  description: Multinomial logit model for categorical or count-composition outcomes.
+  - reduced_softmax_approximation
+  description: >
+    Multinomial logit model using softmax parameterization. Shares implementation with
+    glm_dirichlet. Marked active_reduced pending full multinomial likelihood.
 - id: glm_lognormal
   status: active
   family: lognormal
@@ -204,7 +216,7 @@ entries:
   - zero_mass_two_part_family
   description: Two-part lognormal model for zero-mass skewed outcomes.
 - id: glm_student_t
-  status: active
+  status: active_reduced
   family: student_t
   residual_type: standardized
   required_artifacts:
@@ -215,4 +227,8 @@ entries:
   - residual_values
   warnings:
   - robust_iteratively_reweighted_t_kernel
-  description: Robust iteratively reweighted heavy-tail Gaussian kernel for Student-t-like residualization.
+  - reduced_iteratively_reweighted_gaussian_not_full_t_likelihood
+  description: >
+    Robust iteratively reweighted model using Huber/t-like weights. Does not maximize
+    a full Student-t log-likelihood with estimated degrees-of-freedom. Marked
+    active_reduced pending proper df/scale estimation.

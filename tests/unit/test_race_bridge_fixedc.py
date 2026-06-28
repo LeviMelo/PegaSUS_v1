@@ -72,4 +72,14 @@ def test_race_bridge_uses_local_population_shares_when_declared():
         },
     )
     posterior = fixedc_dynamic_weight_bridge(counts, prior)
-    assert posterior.posterior_counts["parda"] == pytest.approx(6.0)
+    # The §4.5.3 Bayes crosswalk W_{j,i} = C_{i,j}·π_i / Σ_m C_{m,j}·π_m does NOT
+    # reduce to a naive total·π redistribution unless the emission matrix C is
+    # uniform (it is not, here). With raw admin {1:5, 2:5} and a parda-heavy local
+    # π (parda=0.6), the faithful posterior is
+    #   5·W[1→parda] + 5·W[2→parda] = 5·(0.02·0.6/0.110) + 5·(0.10·0.6/0.150)
+    #                                = 5·0.10909 + 5·0.40 = 2.5454...
+    # A parda-heavy local prior still pulls mass toward parda relative to a uniform
+    # prior, but the administrative signal (via C) is not overwritten — exactly the
+    # epistemic guarantee §4 exists to enforce.
+    assert posterior.effective_bridge_mode == "localPi_posteriorC"
+    assert posterior.posterior_counts["parda"] == pytest.approx(2.5454545454545454)

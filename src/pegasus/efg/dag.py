@@ -594,6 +594,19 @@ def _build_efg_base(
             available_demographic_axes |= (set(node.axes) & DEMOGRAPHIC_AXES)
 
     count_nodes: list[FieldNode] = []
+    # Intent-level spatial aggregation (MSD §3.7): coarsen all event-count geography to
+    # a denser IBGE region so sparse outcomes accumulate per-cell. Threaded into every
+    # count operator's params so numerator/denominator/restricted counts aggregate
+    # consistently (the RN/divergence joins then operate on the same region cells).
+    _geo_agg_raw = (intent.get("geography_aggregation") if isinstance(intent, dict)
+                    else getattr(intent, "geography_aggregation", None))
+    geo_agg = str(_geo_agg_raw) if _geo_agg_raw and str(_geo_agg_raw) != "municipality" else None
+
+    def _count_params(**params: Any) -> dict[str, Any]:
+        if geo_agg:
+            params["geography_aggregation"] = geo_agg
+        return params
+
     strata_levels = requested_icd_levels(intent)
     diagnostic_columns = diagnostic_columns_by_event(roots)
     # Geo/time parent context per primary event carrier, reused to build σ-restricted
@@ -610,11 +623,11 @@ def _build_efg_base(
             name=EFGOperator.COUNT_MEASURE.value,
             role="event_count",
             output_kind="extensive_measure",
-            params={
-                "artifact_path": artifact,
-                "carrier": carrier,
-                "name": f"{count_parents[0].source[0]}.{Path(artifact).stem}.count",
-            },
+            params=_count_params(
+                artifact_path=artifact,
+                carrier=carrier,
+                name=f"{count_parents[0].source[0]}.{Path(artifact).stem}.count",
+            ),
         )
         child = expand(operator, count_parents)
         if child is not None:
@@ -632,15 +645,15 @@ def _build_efg_base(
                     name=EFGOperator.COUNT_MEASURE.value,
                     role="cause_specific_event_count",
                     output_kind="extensive_measure",
-                    params={
-                        "artifact_path": artifact,
-                        "carrier": carrier,
-                        "stratify_icd": level,
-                        "icd_column": icd_column,
-                        "icd_axis": axis_name,
-                        "icd_source_field": icd_column,
-                        "name": f"{count_parents[0].source[0]}.{Path(artifact).stem}.count.{axis_name}",
-                    },
+                    params=_count_params(
+                        artifact_path=artifact,
+                        carrier=carrier,
+                        stratify_icd=level,
+                        icd_column=icd_column,
+                        icd_axis=axis_name,
+                        icd_source_field=icd_column,
+                        name=f"{count_parents[0].source[0]}.{Path(artifact).stem}.count.{axis_name}",
+                    ),
                 )
                 strat_child = expand(strat_operator, count_parents)
                 if strat_child is not None:
@@ -658,14 +671,14 @@ def _build_efg_base(
                 name=EFGOperator.COUNT_MEASURE.value,
                 role=f"{axis_name}_stratified_event_count",
                 output_kind="extensive_measure",
-                params={
-                    "artifact_path": artifact,
-                    "carrier": carrier,
-                    "stratify_column": column,
-                    "stratify_axis": axis_name,
-                    "stratify_source": source_system,
-                    "name": f"{source_system}.{Path(artifact).stem}.count.{axis_name}",
-                },
+                params=_count_params(
+                    artifact_path=artifact,
+                    carrier=carrier,
+                    stratify_column=column,
+                    stratify_axis=axis_name,
+                    stratify_source=source_system,
+                    name=f"{source_system}.{Path(artifact).stem}.count.{axis_name}",
+                ),
             )
             demo_child = expand(demo_operator, count_parents)
             if demo_child is not None:
@@ -686,15 +699,15 @@ def _build_efg_base(
             name=EFGOperator.COUNT_MEASURE.value,
             role=f"{rspec.predicate}_count",
             output_kind="extensive_measure",
-            params={
-                "artifact_path": artifact,
-                "carrier": rspec.event_carrier,
-                "restrict_predicate": rspec.predicate,
-                "restrict_conditions": [dict(cond) for cond in rspec.conditions],
-                "restrict_of_carrier": rspec.of_carrier,
-                "restrict_event_id": rspec.event_id,
-                "name": f"{restrict_parents[0].source[0]}.{Path(artifact).stem}.{rspec.event_carrier}",
-            },
+            params=_count_params(
+                artifact_path=artifact,
+                carrier=rspec.event_carrier,
+                restrict_predicate=rspec.predicate,
+                restrict_conditions=[dict(cond) for cond in rspec.conditions],
+                restrict_of_carrier=rspec.of_carrier,
+                restrict_event_id=rspec.event_id,
+                name=f"{restrict_parents[0].source[0]}.{Path(artifact).stem}.{rspec.event_carrier}",
+            ),
         )
         restrict_child = expand(restrict_operator, restrict_parents)
         if restrict_child is not None:

@@ -166,6 +166,17 @@ def _with_year(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame
     return df.with_columns(pl.lit(None, dtype=pl.Int64).alias("year"))
 
 
+def _geography_aggregation_of(field: Any) -> str | None:
+    """IBGE region level to aggregate event geography to (MSD §3.7), else None."""
+    support = _as_dict(getattr(field, "support", {}) or {})
+    params = _as_dict(support.get("operator_params") or support.get("params") or {})
+    for source in (support, params):
+        value = source.get("geography_aggregation")
+        if value not in (None, "", "municipality", "none"):
+            return str(value)
+    return None
+
+
 def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
     source = _declared_axis_column(field, "geography")
     if source and source in df.columns:
@@ -174,7 +185,32 @@ def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
         base = df
     else:
         return df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("municipality_cod6"))
-    return base.filter(~pl.col("municipality_cod6").cast(pl.Utf8).str.contains(r"^\d{2}0000$").fill_null(False))
+    base = base.filter(~pl.col("municipality_cod6").cast(pl.Utf8).str.contains(r"^\d{2}0000$").fill_null(False))
+    # Optional spatial aggregation (MSD §3.7): remap the municipality cell to a coarser
+    # IBGE region so events accumulate into denser cells. The geography key column name
+    # is preserved so all downstream support/RN/HSIC logic is unchanged — only its
+    # granularity coarsens. Authoritative crosswalk; unmapped municipalities -> null
+    # (dropped by complete-case), never silently mislabelled.
+    aggregation = _geography_aggregation_of(field)
+    if aggregation:
+        from pegasus.geo.region_crosswalk import cod6_to_region_map
+
+        try:
+            mapping = cod6_to_region_map(aggregation)
+        except Exception:
+            mapping = {}
+        if mapping:
+            map_df = pl.DataFrame(
+                {"municipality_cod6": list(mapping.keys()), "__region_cell__": list(mapping.values())},
+                schema={"municipality_cod6": pl.Utf8, "__region_cell__": pl.Utf8},
+            )
+            base = (
+                base.with_columns(pl.col("municipality_cod6").cast(pl.Utf8))
+                .join(map_df, on="municipality_cod6", how="left")
+                .with_columns(pl.col("__region_cell__").alias("municipality_cod6"))
+                .drop("__region_cell__")
+            )
+    return base
 
 
 def _support_frame(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:

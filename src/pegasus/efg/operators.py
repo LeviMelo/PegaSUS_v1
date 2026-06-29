@@ -315,6 +315,10 @@ def apply_operator(
             })
             axes[strat_axis] = "demographic_stratifier"
             role.append("demographic_stratified_count")
+        # Carry the spatial-aggregation level (MSD §3.7) into the support so the
+        # executor coarsens the geography cell consistently for every count.
+        if operator.params.get("geography_aggregation"):
+            support["geography_aggregation"] = str(operator.params["geography_aggregation"])
         carrier = str(operator.params.get("carrier", parent.carrier))
         name = str(operator.params.get("name", f"{parent.source[0]}.{artifact}.count"))
         unit = "counts"

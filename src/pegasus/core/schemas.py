@@ -39,6 +39,12 @@ class UserIntent(BaseModel):
     # Positive year lags for delayed cross-source covariate effects (MSD §2.11),
     # e.g. [1] aligns covariate(t-1) to outcome(t) per municipality. Empty = none.
     temporal_lags: list[int] = Field(default_factory=list)
+    # Spatial aggregation level for event counts (MSD §3.7): coarsen the geography
+    # cell to a denser IBGE region for sparse outcomes. "municipality" (default) =
+    # no aggregation.
+    geography_aggregation: Literal[
+        "municipality", "microregion", "immediate_region", "mesoregion", "intermediate_region"
+    ] = "municipality"
 
     execution_scale: Literal["smoke", "state", "region", "national_blocked"]
 

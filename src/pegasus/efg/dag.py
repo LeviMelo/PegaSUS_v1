@@ -775,9 +775,15 @@ def _build_efg_base(
             return frozenset(axis for axis in _STRATIFIERS if axis in node.axes)
 
         def _event_counts(carrier: str) -> list[FieldNode]:
+            # Match a carrier's additive count nodes for divergence pairing: both
+            # primary event counts (source_event_count) and σ-restricted clinical
+            # event counts (restricted_count, e.g. ArbovirusHospitalAdmissions,
+            # MicrocephalyBirths) qualify, so registry-declared divergences can relate
+            # restricted carriers across sources (MSD §2.11) — not just raw carriers.
             return [
                 node for node in count_nodes
-                if node.carrier == carrier and "source_event_count" in set(node.role or [])
+                if node.carrier == carrier
+                and bool({"source_event_count", "restricted_count"} & set(node.role or []))
             ]
 
         for grammar in bridge_grammar_entries(registry_root=root):

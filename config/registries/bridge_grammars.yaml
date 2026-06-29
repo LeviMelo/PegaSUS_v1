@@ -113,3 +113,24 @@ entries:
     municipality (MSD §2.11) — delayed morbidity-to-mortality gradient. A generic
     demonstration of registry-declared temporal-lag divergences; left operand year is
     shifted by 1 before the shared-support join.
+- id: arbovirus_microcephaly_lag1_divergence_bridge
+  status: active
+  bridge_type: arbovirus_microcephaly_lag1_divergence
+  left_carrier: ArbovirusHospitalAdmissions
+  right_carrier: MicrocephalyBirths
+  temporal_lag: 1
+  operators:
+  - divergence_log_ratio
+  required_metadata:
+  - support_intersection
+  warnings:
+  - administrative_admission_not_incidence
+  - divergence_is_observational_not_causal
+  - temporal_lag_divergence_is_observational_not_causal
+  - sparse_restricted_denominator_fragile
+  description: >-
+    Lagged restricted-carrier divergence log(SIH arbovirus admissions(t-1) /
+    SINASC microcephaly births(t)) on shared municipality (MSD §2.11) — the
+    Zika-epidemic coupling gradient. Restricted-carrier divergence; microcephaly is
+    a sparse denominator so the field is expected fragile/quarantined where counts
+    are too low — surfaced honestly, never as a verified claim.

@@ -29,6 +29,7 @@
       "AL"
     ]
   },
+  "geography_aggregation": "municipality",
   "health_seeds": [
     "hospitalization",
     "maternal_child"

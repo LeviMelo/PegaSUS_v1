@@ -36,6 +36,9 @@ class UserIntent(BaseModel):
     geo_mode: Literal["native", "AMC", "geneallocated", "hybrid"]
     force_selectors: list[str] = Field(default_factory=list)
     exclude_systems: list[str] = Field(default_factory=list)
+    # Positive year lags for delayed cross-source covariate effects (MSD §2.11),
+    # e.g. [1] aligns covariate(t-1) to outcome(t) per municipality. Empty = none.
+    temporal_lags: list[int] = Field(default_factory=list)
 
     execution_scale: Literal["smoke", "state", "region", "national_blocked"]
 

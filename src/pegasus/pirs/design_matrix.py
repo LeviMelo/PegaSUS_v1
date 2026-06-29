@@ -228,6 +228,96 @@ def _support_rows(root: Path) -> list[dict[str, Any]]:
     return _read_rows(root / DEFAULT_SUPPORT_INDEX)
 
 
+def _temporal_lags(root: Path) -> list[int]:
+    """Positive year lags requested by the intent (e.g. [1] for t-1 covariates).
+
+    Lagged covariates let PIRS estimate delayed cross-source effects (MSD §2.11),
+    e.g. arbovirus admissions in year t-1 against a birth-outcome in year t. The
+    mechanism is fully generic — any time-varying covariate gains a lagged variant;
+    nothing is source- or disease-specific.
+    """
+    payload = _load_json(root / "UserIntent.json")
+    raw = payload.get("temporal_lags")
+    if not isinstance(raw, list):
+        return []
+    lags: list[int] = []
+    for item in raw:
+        try:
+            k = int(item)
+        except (TypeError, ValueError):
+            continue
+        if k > 0 and k not in lags:
+            lags.append(k)
+    return sorted(lags)
+
+
+def _support_municipality(row: Mapping[str, Any]) -> str | None:
+    for key in ("municipality_cod6", "municipality", "mun_residence_cod6", "mun_occurrence_cod6", "ibge_cod7"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _build_lagged_covariates(
+    *,
+    specs: list[MatrixFieldSpec],
+    vectors: dict[str, list[Any]],
+    support_rows: Sequence[Mapping[str, Any]],
+    lags: list[int],
+) -> tuple[list[MatrixFieldSpec], dict[str, str]]:
+    """Materialize lag-k variants of each covariate, aligned on (municipality, year).
+
+    For cell i = (m, t), the lag-k value is the covariate's value at the cell
+    (m, t-k); cells with no antecedent (earliest years, gaps) carry None and are
+    treated as covariate missingness at fit time. Returns the new specs plus a map
+    of lagged field_id -> warning (empty when fully applied)."""
+    if not lags or not support_rows:
+        return [], {}
+    # (municipality, year) -> cell index
+    cell_index: dict[tuple[str, int], int] = {}
+    for i, row in enumerate(support_rows):
+        muni = _support_municipality(row)
+        year = row.get("year")
+        if muni is None or year in (None, ""):
+            continue
+        try:
+            cell_index[(muni, int(year))] = i
+        except (TypeError, ValueError):
+            continue
+    new_specs: list[MatrixFieldSpec] = []
+    warnings: dict[str, str] = {}
+    covariate_specs = [s for s in specs if s.role == "covariate"]
+    n = len(support_rows)
+    for spec in covariate_specs:
+        base = vectors.get(spec.field_id)
+        if base is None or len(base) != n:
+            continue
+        for k in lags:
+            lagged_id = f"{spec.field_id}@lag{k}"
+            lagged_col = f"{spec.column}_lag{k}"
+            lagged: list[Any] = [None] * n
+            populated = 0
+            for i, row in enumerate(support_rows):
+                muni = _support_municipality(row)
+                year = row.get("year")
+                if muni is None or year in (None, ""):
+                    continue
+                try:
+                    src = cell_index.get((muni, int(year) - k))
+                except (TypeError, ValueError):
+                    src = None
+                if src is not None:
+                    lagged[i] = base[src]
+                    if base[src] is not None:
+                        populated += 1
+            vectors[lagged_id] = lagged
+            new_specs.append(MatrixFieldSpec(field_id=lagged_id, role="covariate", column=lagged_col, required=False))
+            if populated == 0:
+                warnings[lagged_id] = "lagged_covariate_no_antecedent_cells"
+    return new_specs, warnings
+
+
 def _support_category(row: Mapping[str, Any], *, mode: str) -> str | None:
     if mode == "UF_FE":
         for key in ("uf", "state", "ibge_uf_cod2", "datasus_uf_prefix"):
@@ -391,6 +481,17 @@ def build_pirs_design_matrix_manifest(
         return payload
 
     row_count = next(iter(lengths)) if lengths else 0
+    # Temporal-lag covariates (MSD §2.11): generic delayed cross-source effects,
+    # e.g. arbovirus admissions(t-1) vs a birth outcome(t), aligned per municipality.
+    lags = _temporal_lags(root)
+    if lags and row_count:
+        lagged_specs, lagged_warnings = _build_lagged_covariates(
+            specs=specs,
+            vectors=vectors,
+            support_rows=_support_rows(root),
+            lags=lags,
+        )
+        specs = [*specs, *lagged_specs]
     outcome_field_ids = [spec.field_id for spec in specs if spec.role == "outcome"]
     matrix_rows: list[dict[str, Any]] = []
     for i in range(row_count):

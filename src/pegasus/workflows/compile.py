@@ -157,12 +157,34 @@ def _compiler_architecture_metadata() -> dict[str, Any]:
     }
 
 
+def _seed_user_intent_for_pirs(bundle_manager: Any, run_dir: Path, intent_payload: dict[str, Any]) -> None:
+    """Make the real intent (incl. force_selectors) visible to the PIRS stage.
+
+    The schema seed writes a stub UserIntent.json and the canonical serialization
+    runs after PIRS, so the PIRS stage workspace would otherwise copy a stub that
+    omits force_selectors — silently dropping forced outcome/covariate selection.
+    Seeding the bundle's first-class UserIntent payload here ensures the stage
+    workspace (write_stage_workspace) carries the forced selectors.
+    """
+    try:
+        bundle_manager.set_json("UserIntent", intent_payload)
+    except Exception:
+        pass
+    p = Path(run_dir) / "UserIntent.json"
+    if p.parent.exists():
+        p.write_text(
+            json.dumps(intent_payload, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+
+
 def _validate_compile_manifest_artifacts(
     artifacts: tuple[SourceArtifactRef, ...],
     *,
     include_cnes_sih: bool,
     run_profile: str = "core_vital",
     require_race_bridge_prior: bool = False,
+    excluded_systems: frozenset[str] = frozenset(),
 ) -> None:
     required: set[tuple[str, str]] = {
         ("SIM-DO", "processed_events"),
@@ -178,6 +200,11 @@ def _validate_compile_manifest_artifacts(
         required.add(("SIDRA", "context_facts"))
     if require_race_bridge_prior:
         required.add(("RACE-BRIDGE", "emission_prior"))
+    # Honor the intent's declared scope: a system the intent excludes is not a
+    # required source artifact (the compile is scope-aware, consistent with
+    # exclude_systems and the Run Profile contract).
+    if excluded_systems:
+        required = {(system, role) for (system, role) in required if system not in excluded_systems}
     available: dict[tuple[str, str], list[SourceArtifactRef]] = {}
     for artifact in artifacts:
         key = (artifact.source_system, artifact.artifact_role)
@@ -327,6 +354,7 @@ def _run_compile_impl(
         include_cnes_sih=include_cnes_sih,
         run_profile=intent.run_profile,
         require_race_bridge_prior=race_bridge_plan.status == "planned",
+        excluded_systems=frozenset(getattr(intent, "exclude_systems", None) or ()),
     )
     if race_bridge_plan.status == "planned":
         prior_artifact = _race_bridge_prior_artifact(autonomous_artifacts)
@@ -474,6 +502,12 @@ def _run_compile_impl(
     elif population_solver_manifest is not None:
         telemetry.resource_summary["population_solver"] = population_solver_manifest
 
+    # Surface the full intent (incl. force_selectors) into the bundle BEFORE the
+    # PIRS stage so the PIRS selection plan honors forced outcome/covariate
+    # selectors. The schema-seed writes a stub UserIntent.json that omits them, and
+    # the canonical serialization happens after PIRS — without this the PIRS stage
+    # workspace copies the stub and the forced outcome is silently dropped.
+    _seed_user_intent_for_pirs(bundle_manager, run_dir, intent_payload)
     pirs_hsic_metadata = run_msd_inference_pipeline(
         run_dir=run_dir,
         compiler_stage_plan=compiler_stage_plan,

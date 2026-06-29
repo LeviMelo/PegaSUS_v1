@@ -410,11 +410,15 @@ def _validate_inference_invariants(*, hypotheses, model_assoc, residual_assoc, b
                 f"Hypotheses row claims hsic_mode={mode} but has null statistic/p_value: {row.get('hypothesis_id')}"
             )
         rmode = str(row.get("residual_mode") or "")
-        if budget in {"standard", "deep"} and rmode == "in_sample":
+        # The §10 hard-abort targets *inference* on in-sample residuals. A disabled/
+        # blocked HSIC (e.g. n_eff < 100 per §6.7) produced no statistic and consumed
+        # no residuals for a result, so the nominal fold residual_mode it carries is
+        # moot — only an ACTIVE standard/deep HSIC that actually ran is a violation.
+        if active and budget in {"standard", "deep"} and rmode == "in_sample":
             errors.append(
                 f"standard/deep HSIC consumed in-sample residuals — MSD §10 hard-abort: {row.get('hypothesis_id')}"
             )
-        elif budget in {"standard", "deep"} and "in_sample_backfill" in rmode:
+        elif active and budget in {"standard", "deep"} and "in_sample_backfill" in rmode:
             # Backfill rows ARE in-sample residuals — same §10 violation.
             errors.append(
                 f"standard/deep HSIC residual mode includes in-sample backfill — MSD §10 hard-abort: {row.get('hypothesis_id')}"

@@ -270,8 +270,13 @@ def _normalize_system_requests(
     chunk_dir.mkdir(parents=True, exist_ok=True)
     chunk_paths: list[Path] = []
     for request in requests:
-        month = request.month_start if request.month_start is not None else "NA"
-        chunk_path = chunk_dir / f"{request.year_start}_{int(month):02d}_{request.request_hash[:12]}.parquet"
+        month = request.month_start
+        # Annual (whole-year) requests carry no month; only zero-pad real months.
+        try:
+            month_token = f"{int(month):02d}"
+        except (TypeError, ValueError):
+            month_token = "all"
+        chunk_path = chunk_dir / f"{request.year_start}_{month_token}_{request.request_hash[:12]}.parquet"
         try:
             _normalize_system(system, request=request, output_path=chunk_path, source_hash=source_hash)
         except Exception as exc:
@@ -317,10 +322,15 @@ def _forbidden_semantics(run_dir: Path) -> list[str]:
 
 def _support_pollution(run_dir: Path) -> list[str]:
     hits: list[str] = []
+    # Columns holding materialized float vectors / scalar stats: a "270000" substring
+    # inside a decimal expansion (e.g. 3484.2700000000004) is NOT a municipality-code
+    # leak, so these are excluded from the geography-code scan to avoid false positives.
+    numeric_value_columns = {"value_vector_json", "values_json", "value", "values", "statistic", "p_value", "q_value"}
     for table_name in ("V_fields", "Q_tensor", "Warnings", "VariableDictionary"):
         path = run_dir / f"{table_name}.parquet"
         for row in _table_rows(path):
-            text = json.dumps(row, ensure_ascii=False, default=str)
+            scanned = {k: v for k, v in row.items() if k not in numeric_value_columns}
+            text = json.dumps(scanned, ensure_ascii=False, default=str)
             if "270000" in text:
                 ident = row.get("field_id") or row.get("warning_id") or row.get("display_name") or "row"
                 hits.append(f"{table_name}:{ident}")
@@ -355,11 +365,27 @@ def _source_systems(overview: dict[str, Any]) -> list[str]:
     return sorted(str(x) for x in overview.get("source_reality", {}).get("source_systems", []))
 
 
-def run_actual_state_panel(*, intent_name: str = "alagoas_2022_actual_allsource_state_panel.json") -> dict[str, Any]:
-    root = ROOT / "data" / "actual_state_panels" / "alagoas_2022_allsource"
+def run_actual_state_panel(*, intent_name: str | None = None) -> dict[str, Any]:
+    import os as _os
+    # Generic env-driven scope: intent, panel root directory, and the DATASUS year
+    # range are all parameters so the same real compiler path serves any UF/year
+    # scope. Defaults reproduce the original single-year all-source Alagoas panel.
+    intent_name = intent_name or _os.environ.get("PEGASUS_RUN_INTENT", "alagoas_2022_actual_allsource_state_panel.json")
+    panel_dir = _os.environ.get("PEGASUS_RUN_ROOT", "alagoas_2022_allsource")
+    years = _os.environ.get("PEGASUS_RUN_YEARS", "2022")
+    run_subdir = _os.environ.get("PEGASUS_RUN_SUBDIR", "run")
+    root = ROOT / "data" / "actual_state_panels" / panel_dir
     data_root = root / "sources"
-    run_dir = root / "run"
+    run_dir = root / run_subdir
     intent_path = ROOT / "config" / "intents" / intent_name
+    # Honor the intent's own scope: which DATASUS systems to acquire and which
+    # named fields are mandatory (the hardcoded set is only the all-source default).
+    intent_doc: dict[str, Any] = {}
+    if intent_path.exists():
+        intent_doc = json.loads(intent_path.read_text(encoding="utf-8"))
+    excluded = {str(s) for s in (intent_doc.get("exclude_systems") or [])}
+    active_systems = tuple(s for s in DATASUS_SYSTEMS if s not in excluded)
+    mandatory_fields = set(intent_doc.get("mandatory_fields") or MANDATORY_FIELD_NAMES)
 
     rscript = _find_rscript()
     payload: dict[str, Any] = {
@@ -410,8 +436,8 @@ def run_actual_state_panel(*, intent_name: str = "alagoas_2022_actual_allsource_
 
         batches: dict[str, Any] = {}
         requests_by_system: dict[str, list[Any]] = {}
-        for system in DATASUS_SYSTEMS:
-            batch = client.fetch(system=system, uf="AL", years="2022")
+        for system in active_systems:
+            batch = client.fetch(system=system, uf="AL", years=years)
             batches[system] = batch
             if not batch.ok:
                 payload["classification"] = "source_unavailable"
@@ -423,7 +449,7 @@ def run_actual_state_panel(*, intent_name: str = "alagoas_2022_actual_allsource_
             for system in sorted(requests_by_system)
         })
         normalized: dict[str, Path] = {}
-        for system in DATASUS_SYSTEMS:
+        for system in active_systems:
             output_path = data_root / "normalized" / NORMALIZED_NAMES[system]
             output_path.parent.mkdir(parents=True, exist_ok=True)
             _normalize_system_requests(
@@ -439,16 +465,16 @@ def run_actual_state_panel(*, intent_name: str = "alagoas_2022_actual_allsource_
         payload["municipality_count"] = municipality_count
 
         artifacts = [
-            inspect_source_artifact(path=normalized["SIM-DO"], source_system="SIM-DO", artifact_role="processed_events", provenance_mode="materialized_external", source_manifest_hash=source_hash),
-            inspect_source_artifact(path=normalized["SINASC"], source_system="SINASC", artifact_role="processed_events", provenance_mode="materialized_external", source_manifest_hash=source_hash),
-            inspect_source_artifact(path=normalized["CNES-ST"], source_system="CNES-ST", artifact_role="processed_events", provenance_mode="materialized_external", source_manifest_hash=source_hash),
-            inspect_source_artifact(path=normalized["SIH-RD"], source_system="SIH-RD", artifact_role="processed_events", provenance_mode="materialized_external", source_manifest_hash=source_hash),
-            inspect_source_artifact(path=sidra_facts, source_system="SIDRA", artifact_role="normalized_facts", provenance_mode="materialized_external", source_manifest_hash=source_hash),
+            inspect_source_artifact(path=normalized[system], source_system=system, artifact_role="processed_events", provenance_mode="materialized_external", source_manifest_hash=source_hash)
+            for system in active_systems
         ]
+        artifacts.append(
+            inspect_source_artifact(path=sidra_facts, source_system="SIDRA", artifact_role="normalized_facts", provenance_mode="materialized_external", source_manifest_hash=source_hash)
+        )
         manifest = write_source_artifact_manifest(
             artifacts=artifacts,
             output_path=data_root / "source_artifacts.json",
-            manifest_id="alagoas_2022_actual_allsource_state_panel",
+            manifest_id=panel_dir,
         )
 
         payload["compile_attempted"] = True
@@ -480,10 +506,11 @@ def run_actual_state_panel(*, intent_name: str = "alagoas_2022_actual_allsource_
         payload["dashboard_read_only_ok"] = overview["read_only"] is True and overview["validation_ok"] is True
         payload["compile_source_mode"] = overview["source_reality"].get("compile_source_mode")
         payload["source_artifact_reality"] = overview["source_reality"]
-        payload["source_systems_ok"] = _source_systems(overview) == EXPECTED_SOURCE_SYSTEMS
+        expected_sources = sorted(set(active_systems) | {"SIDRA"})
+        payload["source_systems_ok"] = _source_systems(overview) == expected_sources
 
         names = _field_names(run_dir)
-        missing = sorted(MANDATORY_FIELD_NAMES - names)
+        missing = sorted(set(mandatory_fields) - names)
         payload["missing_mandatory_fields"] = missing
         payload["mandatory_fields_present"] = not missing
         payload["efg_fields_nonempty"] = overview["efg"]["fields"]["row_count"] > 0

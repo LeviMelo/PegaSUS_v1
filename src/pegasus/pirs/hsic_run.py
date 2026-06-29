@@ -133,6 +133,27 @@ def _column_vector(rows: Sequence[Mapping[str, Any]], column: str) -> list[float
         return None
 
 
+def _column_vector_nullable(rows: Sequence[Mapping[str, Any]], column: str) -> list[float | None] | None:
+    """Per-cell covariate vector preserving nulls (missingness) instead of failing.
+
+    Lagged covariates (MSD §2.11) carry None where no antecedent year exists; this
+    lets the scan run a pairwise complete-case HSIC on those covariates rather than
+    discarding them as non-numeric."""
+    if not rows or column not in rows[0]:
+        return None
+    out: list[float | None] = []
+    for row in rows:
+        value = row.get(column)
+        if value is None:
+            out.append(None)
+            continue
+        try:
+            out.append(float(value))
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
 def _fdr_adjust(p_values: Sequence[float | None], *, method: str = "BH") -> list[float | None]:
     """Step-up FDR adjustment. ``BH`` (Benjamini-Hochberg) for independent tests;
     ``BY`` (Benjamini-Yekutieli) for dependent panel residuals (MSD §6.8 mandates
@@ -449,7 +470,33 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
 
     scan_rows: list[dict[str, Any]] = []
     for spec in covariates:
-        vector = _column_vector(matrix_rows, spec["column"])
+        nullable = _column_vector_nullable(matrix_rows, spec["column"])
+        # A covariate carrying nulls (e.g. a lagged covariate with no antecedent
+        # year, MSD §2.11) is scanned on the pairwise complete-case subset rather
+        # than discarded. Because the panel-wide structured permutation indices no
+        # longer align after subsetting, this path falls back to the honest iid
+        # permutation null on the retained cells.
+        if nullable is not None and any(v is None for v in nullable):
+            paired = [
+                (r, c)
+                for r, c in zip(residual_vector, nullable)
+                if c is not None and r is not None
+            ]
+            if len(paired) >= max(min_support, 3):
+                res_subset = [r for r, _ in paired]
+                cov_subset = [c for _, c in paired]
+                scan_rows.append(_scan_row(
+                    residual_field_id=str(residual_field_id), model_id=model_manifest.get("model_id"),
+                    covariate_field_id=spec["field_id"], covariate_column=spec["column"],
+                    residuals=res_subset, covariate=cov_subset, budget=budget, permutations=permutations,
+                    min_support=min_support, seed=seed, permutation_indices=None,
+                    null_strategy_label="iid_permutation_pairwise_complete_case",
+                    bootstrap_replicates=None,
+                ))
+                continue
+            vector = None
+        else:
+            vector = None if nullable is None else [float(v) for v in nullable]
         if vector is None:
             scan_rows.append({
                 "hypothesis_id": f"hsic__{residual_field_id}__{spec['field_id']}",

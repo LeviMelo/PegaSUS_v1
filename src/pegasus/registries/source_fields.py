@@ -297,6 +297,11 @@ def resolve_raw_source_field_entries(
     raw_column_name: str,
     registry_root: str | Path = "config/registries",
 ) -> tuple[SourceFieldRegistryEntry, ...]:
+    return _resolve_raw_source_field_entries_cached(source_system, raw_column_name, str(registry_root))
+
+
+@lru_cache(maxsize=8192)
+def _resolve_raw_source_field_entries_cached(source_system: str, raw_column_name: str, registry_root: str) -> tuple[SourceFieldRegistryEntry, ...]:
     return load_source_field_registry(registry_root).resolve_raw_all(source_system=source_system, raw_column_name=raw_column_name)
 
 

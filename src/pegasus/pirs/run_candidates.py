@@ -142,10 +142,15 @@ def pirs_candidate_rejection_reason(field: dict[str, Any], q: dict[str, Any] | N
     state = str(field.get("state") or "")
     materialization_state = str(field.get("materialization_state") or "")
     warnings = {str(value) for value in _as_list(field.get("warnings"))}
+    roles = {str(value) for value in _as_list(field.get("role"))}
     if not field_id:
         return "missing_field_id"
     if materialization_state == "metadata_only":
         return "metadata_only_field_not_model_eligible"
+    if "geography_axis" in roles or "time_axis_candidate" in roles:
+        return "raw_axis_field_not_model_covariate"
+    if "source_field" in roles and "covariate" not in roles and "outcome" not in roles:
+        return "raw_source_field_not_model_covariate"
     # MSD §3.13: model eligibility is governed by the Q-state class, NOT by
     # dashboard safety. verified/fragile/forced_fragile fields are model-eligible
     # even when dashboard_safe is False/"warning"; only illegal/blocked/no-children

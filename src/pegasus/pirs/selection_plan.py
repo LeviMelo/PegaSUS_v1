@@ -125,6 +125,102 @@ def _candidate_from_mapping(payload: dict[str, Any]) -> FieldCandidate:
     )
 
 
+def _load_force_selectors(run_dir: str | Path | None) -> tuple[str, ...]:
+    if run_dir is None:
+        return ()
+    payload = _load_json(Path(run_dir) / "UserIntent.json")
+    selectors = payload.get("force_selectors")
+    if not isinstance(selectors, list):
+        return ()
+    return tuple(str(item) for item in selectors if str(item).strip())
+
+
+def _selector_parts(selector: str) -> tuple[str | None, str]:
+    raw = selector.strip()
+    if ":" not in raw:
+        return None, raw
+    left, right = raw.split(":", 1)
+    role = left.strip().lower()
+    if role not in {"outcome", "covariate", "offset"}:
+        return None, raw
+    return role, right.strip()
+
+
+def _candidate_matches(candidate: FieldCandidate, query: str) -> bool:
+    needle = query.strip().lower()
+    if not needle:
+        return False
+    haystack = " ".join(
+        [
+            candidate.field_id,
+            candidate.carrier,
+            candidate.unit,
+            json.dumps(candidate.support, ensure_ascii=False, sort_keys=True, default=str),
+            " ".join(candidate.warnings),
+            " ".join(candidate.provenance),
+        ]
+    ).lower()
+    return needle in haystack
+
+
+def _apply_force_selectors(
+    *,
+    selection: PIRSSelectionResult,
+    candidates: list[FieldCandidate],
+    force_selectors: tuple[str, ...],
+) -> tuple[PIRSSelectionResult, tuple[str, ...]]:
+    if not force_selectors:
+        return selection, ()
+    selected_outcome = selection.selected_outcome
+    selected_covariates = list(selection.selected_covariates)
+    selected_offset = selection.selected_offset
+    warnings: list[str] = []
+    eligible_by_role: dict[str, list[FieldCandidate]] = {
+        "outcome": [c for c in candidates if c.model_eligible and c.role == "outcome"],
+        "covariate": [c for c in candidates if c.model_eligible and c.role == "covariate"],
+        "offset": [c for c in candidates if c.model_eligible and c.role == "offset"],
+    }
+    for selector in force_selectors:
+        role, query = _selector_parts(selector)
+        roles = (role,) if role else ("outcome", "covariate", "offset")
+        matched_role = None
+        matched_candidate = None
+        for candidate_role in roles:
+            for candidate in eligible_by_role[candidate_role]:
+                if _candidate_matches(candidate, query):
+                    matched_role = candidate_role
+                    matched_candidate = candidate
+                    break
+            if matched_candidate is not None:
+                break
+        if matched_candidate is None or matched_role is None:
+            warnings.append(f"force_selector_unmatched:{selector}")
+            continue
+        if matched_role == "outcome":
+            selected_outcome = matched_candidate
+            warnings.append(f"force_selector_selected_outcome:{selector}")
+        elif matched_role == "covariate":
+            selected_covariates = [c for c in selected_covariates if c.field_id != matched_candidate.field_id]
+            selected_covariates.insert(0, matched_candidate)
+            warnings.append(f"force_selector_prioritized_covariate:{selector}")
+        elif matched_role == "offset":
+            selected_offset = matched_candidate
+            warnings.append(f"force_selector_selected_offset:{selector}")
+    top_k = selection.top_k
+    selected_covariates = selected_covariates[:top_k]
+    return (
+        PIRSSelectionResult(
+            selected_outcome=selected_outcome,
+            selected_covariates=tuple(selected_covariates),
+            selected_offset=selected_offset,
+            rejected=selection.rejected,
+            budget=selection.budget,
+            top_k=selection.top_k,
+        ),
+        tuple(dict.fromkeys(warnings)),
+    )
+
+
 def load_pirs_candidate_manifest(candidate_manifest: str | Path) -> tuple[list[FieldCandidate], tuple[dict[str, Any], ...], dict[str, Any]]:
     path = Path(candidate_manifest)
     payload = _load_json(path)
@@ -147,17 +243,26 @@ def build_pirs_selection_plan(
     *,
     candidate_manifest: str | Path,
     budget: Budget = "fast",
+    run_dir: str | Path | None = None,
 ) -> PIRSSelectionPlan:
     candidate_manifest_path = Path(candidate_manifest)
     candidates, gate_rejected, raw_manifest = load_pirs_candidate_manifest(candidate_manifest_path)
     selection = select_fields_for_pirs(candidates, budget=budget)
+    force_selectors = _load_force_selectors(run_dir)
+    selection, force_warnings = _apply_force_selectors(
+        selection=selection,
+        candidates=candidates,
+        force_selectors=force_selectors,
+    )
     support_kind = _support_kind(candidates)
     fold = fold_scheme_for_budget(budget=budget, support_kind=support_kind)
     assert_standard_deep_not_in_sample(budget, fold.residual_mode)
 
     family = None
     offset_source = None
+    selected_offset = selection.selected_offset
     warnings: list[str] = []
+    warnings.extend(force_warnings)
     if selection.selected_outcome is None:
         status = "blocked_no_outcome"
         warnings.append("pirs_selection_has_no_model_eligible_outcome")
@@ -166,10 +271,13 @@ def build_pirs_selection_plan(
         family = family_for_outcome(outcome=selection.selected_outcome, offset=selection.selected_offset)
         try:
             offset_source = exposure_offset_source(family=family, offset=selection.selected_offset)
+            if offset_source is None:
+                selected_offset = None
         except ValueError as exc:
             status = "blocked_invalid_offset"
             warnings.append(str(exc))
             offset_source = None
+            selected_offset = None
     diagnostics = build_pirs_diagnostics(
         selection=selection,
         fold_scheme=fold,
@@ -191,7 +299,7 @@ def build_pirs_selection_plan(
         exposure_offset_source=offset_source,
         selected_outcome=selection.selected_outcome,
         selected_covariates=selection.selected_covariates,
-        selected_offset=selection.selected_offset,
+        selected_offset=selected_offset,
         selection_rejected=selection.rejected,
         gate_rejected=gate_rejected,
         diagnostics=diagnostics,
@@ -251,7 +359,7 @@ def write_pirs_selection_plan(
     root = Path(run_dir)
     candidate_path = Path(candidate_manifest) if candidate_manifest is not None else root / "Tables" / "pirs_field_candidates.json"
     output_path = Path(output) if output is not None else root / "Tables" / "pirs_selection_plan.json"
-    plan = build_pirs_selection_plan(candidate_manifest=candidate_path, budget=budget)
+    plan = build_pirs_selection_plan(candidate_manifest=candidate_path, budget=budget, run_dir=root)
     manifest = plan.as_manifest()
     manifest["manifest_path"] = str(output_path)
     manifest["summary"] = selection_plan_summary(plan, manifest_path=output_path)

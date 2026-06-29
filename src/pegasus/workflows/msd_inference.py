@@ -245,9 +245,14 @@ def run_msd_inference_pipeline(
             telemetry.flush()
             raise
 
-    manifest_path = _write_stage_manifest(root, "msd_inference_pipeline.json", payload)
-    payload["manifest_path"] = str(manifest_path.relative_to(root)).replace("\\", "/")
+    manifest_path = _write_stage_manifest(ctx.pirs_root, "msd_inference_pipeline.json", payload)
+    try:
+        payload["manifest_path"] = str(manifest_path.relative_to(ctx.pirs_root)).replace("\\", "/")
+    except ValueError:
+        payload["manifest_path"] = str(manifest_path)
     payload["output_validation"] = {"status": "deferred_until_output_bundle_flush"}
+    if bundle is not None:
+        bundle.set_artifact_dir("Tables", ctx.pirs_root / "Tables")
     return payload
 
 

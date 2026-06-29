@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import re
+from functools import lru_cache
 from typing import Any, Callable
 
 from pegasus.she.source_registry import resolve_raw_source_fields
@@ -27,6 +28,7 @@ def _normalize_decoder_name(name: Any) -> str | None:
     return re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_")
 
 
+@lru_cache(maxsize=256)
 def _resolve_decoder_callable(name: str | None) -> Decoder | None:
     if not name:
         return None

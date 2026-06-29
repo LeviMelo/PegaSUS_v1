@@ -84,6 +84,26 @@ carriers:
     description: SIH in-hospital deaths; restriction of HospitalAdmissions.
     allowed_units: [counts]
     default_aggregation: additive
+  DengueHospitalAdmissions:
+    label: Dengue hospital admissions
+    description: SIH admissions with principal ICD-10 diagnosis A90 or A91; restriction of HospitalAdmissions.
+    allowed_units: [counts]
+    default_aggregation: additive
+  ZikaHospitalAdmissions:
+    label: Zika hospital admissions
+    description: SIH admissions with principal ICD-10 diagnosis A92.8/U06* zika-compatible coding; restriction of HospitalAdmissions.
+    allowed_units: [counts]
+    default_aggregation: additive
+  ChikungunyaHospitalAdmissions:
+    label: Chikungunya hospital admissions
+    description: SIH admissions with principal ICD-10 diagnosis A92.0; restriction of HospitalAdmissions.
+    allowed_units: [counts]
+    default_aggregation: additive
+  ArbovirusHospitalAdmissions:
+    label: Arbovirus hospital admissions
+    description: SIH dengue, zika-compatible, chikungunya, and other mosquito-borne viral fever admissions; restriction of HospitalAdmissions.
+    allowed_units: [counts]
+    default_aggregation: additive
   LowBirthWeightBirths:
     label: Low-birth-weight births
     description: Live births under 2500 g (§3.10.4); restriction of LiveBirths.
@@ -97,6 +117,11 @@ carriers:
   CongenitalAnomalyBirths:
     label: Congenital anomaly births
     description: Live births with congenital anomaly (§3.10.4); restriction of LiveBirths.
+    allowed_units: [counts]
+    default_aggregation: additive
+  MicrocephalyBirths:
+    label: Microcephaly births
+    description: Live births with SINASC anomaly ICD-10 Q02*; restriction of LiveBirths.
     allowed_units: [counts]
     default_aggregation: additive
   CesareanBirths:

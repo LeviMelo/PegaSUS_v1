@@ -22,7 +22,7 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.core.hashing import content_hash, sha256_file
+from pegasus.core.hashing import content_hash, sha256_file, sha256_text
 from pegasus.core.schemas import UserIntent
 from pegasus.datasus.client_microdatasus import MicrodatasusClient
 from pegasus.datasus.manifests import normalize_system
@@ -182,7 +182,28 @@ def _normalize_datasus(*, system: str, raw_path: Path, out_path: Path, source_ma
     module_name, fn_name = _NORMALIZERS[system]
     fn = getattr(importlib.import_module(module_name), fn_name)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if out_path.exists():
+        return out_path
     fn(input_path=raw_path, output_path=out_path, source_manifest_hash=source_manifest_hash)
+    return out_path
+
+
+def _combine_processed_datasus_chunks(*, system: str, requests: list[Any], out_path: Path) -> Path:
+    """Combine fetched DATASUS chunks before SHE normalization.
+
+    The live pipeline fetches annual SIM/SINASC and monthly SIH/CNES chunks. The
+    compiler consumes source-system artifacts, not individual fetch requests, so
+    normalizing one combined processed table per system avoids thousands of
+    duplicated batch-boundary operations on multi-year state runs.
+    """
+    if out_path.exists():
+        return out_path
+    frames = [pl.read_parquet(request.processed_path) for request in requests]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not frames:
+        pl.DataFrame().write_parquet(out_path)
+        return out_path
+    pl.concat(frames, how="diagonal_relaxed").write_parquet(out_path)
     return out_path
 
 
@@ -194,37 +215,52 @@ def _acquire_datasus(
     data_root: Path,
     client: MicrodatasusClient | None,
 ) -> list[dict[str, Any]]:
-    client = client or MicrodatasusClient(data_root=str(data_root))
+    client = client or MicrodatasusClient(data_root=str(data_root), manifest_root=data_root / "manifests" / "datasus")
     artifacts: list[dict[str, Any]] = []
     for system in systems:
         batch = client.fetch(system=system, uf=uf, years=years)
         if not batch.ok:
-            blocked = [r for r in batch.requests if r.status == "blocked"]
-            reason = blocked[0].error_message if blocked else f"datasus fetch not ok for {system}"
-            raise LivePipelineError(f"DATASUS acquisition failed for {system} {uf} {years}: {reason}")
-        # One request spans the full year range → exactly one processed artifact.
-        for request, manifest_path in zip(batch.requests, batch.manifest_paths, strict=True):
-            manifest_hash = sha256_file(Path(manifest_path))
-            canonical_path = (
-                data_root / "normalized" / "datasus" / request.system
-                / f"uf={uf}" / f"{manifest_hash[:16]}" / "canonical.parquet"
-            )
-            _normalize_datasus(
-                system=request.system,
-                raw_path=Path(request.processed_path),
-                out_path=canonical_path,
-                source_manifest_hash=manifest_hash,
-            )
-            artifacts.append(
-                inspect_source_artifact(
-                    path=canonical_path,
-                    source_system=request.system,
-                    artifact_role="processed_events",
-                    provenance_mode="materialized_external",
-                    source_manifest_hash=manifest_hash,
-                    manifest_path=manifest_path,
+            failed = [r for r in batch.requests if r.status not in {"success", "cached"}]
+            if failed:
+                reason = "; ".join(
+                    f"{r.system} {r.uf} {r.year_start}-{r.month_start or 'NA'}:{r.status}:{r.error_message}"
+                    for r in failed[:12]
                 )
+            else:
+                reason = f"datasus fetch not ok for {system}"
+            raise LivePipelineError(f"DATASUS acquisition failed for {system} {uf} {years}: {reason}")
+        request_hashes = [sha256_file(Path(path)) for path in batch.manifest_paths]
+        combined_hash = sha256_text(json.dumps({
+            "system": system,
+            "uf": uf,
+            "years": years,
+            "request_manifest_hashes": request_hashes,
+        }, ensure_ascii=False, sort_keys=True))
+        combined_processed = (
+            data_root / "processed" / "datasus_combined" / system
+            / f"uf={uf}" / f"years={years}" / combined_hash[:16] / "processed.parquet"
+        )
+        canonical_path = (
+            data_root / "normalized" / "datasus" / system
+            / f"uf={uf}" / f"years={years}" / combined_hash[:16] / "canonical.parquet"
+        )
+        _combine_processed_datasus_chunks(system=system, requests=list(batch.requests), out_path=combined_processed)
+        _normalize_datasus(
+            system=system,
+            raw_path=combined_processed,
+            out_path=canonical_path,
+            source_manifest_hash=combined_hash,
+        )
+        artifacts.append(
+            inspect_source_artifact(
+                path=canonical_path,
+                source_system=system,
+                artifact_role="processed_events",
+                provenance_mode="materialized_external",
+                source_manifest_hash=combined_hash,
+                manifest_path=batch.manifest_paths[0] if batch.manifest_paths else None,
             )
+        )
     return artifacts
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pegasus.pirs.schemas import FieldCandidate, PIRSSelectionResult
+from pegasus.pirs.families import pirs_outcome_blocking_reason
 
 
 BUDGET_TOP_K: dict[str, int] = {"fast": 10, "standard": 30, "deep": 100}
@@ -11,6 +12,10 @@ def rejection_reason(candidate: FieldCandidate) -> str | None:
         return f"q_state_{candidate.q_state}_not_model_eligible"
     if candidate.zero_variance:
         return "zero_variance_field_excluded_from_design_matrix"
+    if candidate.role == "outcome":
+        blocked = pirs_outcome_blocking_reason(candidate)
+        if blocked is not None:
+            return blocked
     return None
 
 

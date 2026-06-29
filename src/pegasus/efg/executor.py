@@ -309,6 +309,10 @@ def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.D
             term = col.cast(pl.Utf8).is_in([str(v) for v in (value or [])])
         elif op == "not_in":
             term = ~col.cast(pl.Utf8).is_in([str(v) for v in (value or [])])
+        elif op == "starts_with_any":
+            prefixes = [str(v).upper().replace(".", "") for v in (value or []) if str(v).strip()]
+            normalized = col.cast(pl.Utf8).str.to_uppercase().str.replace_all(r"\.", "")
+            term = pl.any_horizontal([normalized.str.starts_with(prefix) for prefix in prefixes]) if prefixes else pl.lit(False)
         elif op == "is_true":
             term = col.cast(pl.Utf8).str.to_lowercase().is_in(list(_TRUTHY))
         elif op == "is_false":
@@ -977,7 +981,6 @@ def execute_efg_result(
                 if support_update:
                     field = field.model_copy(update={
                         "support": {**dict(field.support), **support_update},
-                        "axes": {**dict(field.axes), **support_update},
                     })
                 new_field = _materialized(field, path)
                 fields_by_id[field_id] = new_field

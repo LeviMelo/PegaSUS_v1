@@ -166,16 +166,16 @@ def _state(row: dict[str, Any]) -> str:
 
 def _evidence_tier(row: dict[str, Any]) -> str:
     state = _state(row)
-    if state == "verified":
-        return "verified"
-    if state == "fragile":
-        return "fragile_descriptive"
     if state == "blocked":
         return "blocked"
     q = _float_or_none(row.get("q_value"))
     n = _float_or_none(row.get("n_eff"))
+    if state == "verified" and q is not None and q <= 0.05 and n is not None and n >= 100:
+        return "verified"
     if q is not None and q <= 0.10 and n is not None and n >= 20:
         return "supported_descriptive"
+    if state == "fragile":
+        return "fragile_descriptive"
     return "exploratory_descriptive"
 
 

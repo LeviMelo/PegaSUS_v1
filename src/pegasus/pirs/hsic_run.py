@@ -492,8 +492,10 @@ def build_hsic_residual_scan_manifest(*, run_dir: str | Path, model_execution_ma
     for row, q_value in zip(scan_rows, q_values):
         row["q_value"] = q_value
         row.setdefault("outcome_field_id", outcome_field_id)
-        row.setdefault("residual_mode", residual_mode)
-        row.setdefault("fold_scheme", fold_scheme)
+        if row.get("residual_mode") in (None, ""):
+            row["residual_mode"] = residual_mode
+        if row.get("fold_scheme") in (None, ""):
+            row["fold_scheme"] = fold_scheme
         row.setdefault("bootstrap_count", None)
         row.setdefault(
             "residual_uncertainty",

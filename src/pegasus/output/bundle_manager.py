@@ -120,7 +120,20 @@ def _normalize_variable_dictionary_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_model_assoc_row(row: dict[str, Any]) -> dict[str, Any]:
     rid = _clean_text(row.get("id") or row.get("model_id") or row.get("residual_id") or row.get("field_id") or "association")
-    return {"id": rid, "status": _clean_text(row.get("status") or "recorded"), "warnings": _clean_text(row.get("warnings") or _json([]))}
+    out = dict(row)
+    out["id"] = rid
+    out["status"] = _clean_text(out.get("status") or "recorded")
+    out["warnings"] = _clean_text(out.get("warnings") or _json([]))
+    for key in (
+        "covariate_field_id",
+        "covariate_field_ids",
+        "diagnostics_json",
+        "warnings",
+    ):
+        value = out.get(key)
+        if value is not None and not isinstance(value, str):
+            out[key] = _json(value)
+    return out
 
 
 def _now() -> str:
@@ -279,6 +292,8 @@ class OutputBundleManager:
                 self._write_table_key(workspace, key, rel)
             elif key in JSON_KEYS:
                 self._write_json_key(workspace, key, rel)
+            elif key in DIRECTORY_KEYS:
+                self._write_dir_key(workspace, key, rel)
         (workspace / "Tables").mkdir(parents=True, exist_ok=True)
         (workspace / "Maps").mkdir(parents=True, exist_ok=True)
         return workspace

@@ -9,6 +9,7 @@ legacy lowercase carrier checks used by early SHE tests.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -284,6 +285,15 @@ def resolve_raw_source_fields(
     source_system: str,
     raw_column_name: str,
     registry_root: str | Path = "config/registries",
+) -> tuple[SourceRegistryResolution, ...]:
+    return _resolve_raw_source_fields_cached(source_system, raw_column_name, str(registry_root))
+
+
+@lru_cache(maxsize=8192)
+def _resolve_raw_source_fields_cached(
+    source_system: str,
+    raw_column_name: str,
+    registry_root: str,
 ) -> tuple[SourceRegistryResolution, ...]:
     normalized = normalize_source_system(source_system)
     entries = resolve_raw_source_field_entries(

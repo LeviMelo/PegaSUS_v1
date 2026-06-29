@@ -160,12 +160,184 @@ def normalize_cnes_st_events(*, input_path: str | Path, output_path: str | Path,
     bed primitives for the MSD-named QTLEIT indices, the boolean service-flag
     vector, and the invalid-flag count (values > 1 are InvalidFlagState, never
     coerced to true)."""
-    df = _read_table(input_path)
-    records = [
-        normalize_cnes_st_record(row, source_manifest_hash=source_manifest_hash)
-        for row in df.to_dicts()
-    ]
-    out = pl.DataFrame(records, infer_schema_length=None)
+    df = _read_table(input_path).with_row_index("_row_idx")
+    capacity_columns = _capacity_columns(df.columns)
+    flag_columns = _flag_columns(df.columns)
+
+    def col(name: str) -> pl.Expr:
+        return pl.col(name) if name in df.columns else pl.lit(None)
+
+    def first(*names: str) -> pl.Expr:
+        return pl.coalesce([col(name) for name in names])
+
+    def clean_expr(expr: pl.Expr) -> pl.Expr:
+        text = expr.cast(pl.Utf8).str.strip_chars()
+        return pl.when(text.str.to_uppercase().is_in(["", "NA", "NAN", "NULL", "NONE"])).then(None).otherwise(text)
+
+    def clean(*names: str) -> pl.Expr:
+        return clean_expr(first(*names))
+
+    def digits_expr(expr: pl.Expr) -> pl.Expr:
+        digits = clean_expr(expr).str.replace_all(r"\D", "")
+        return pl.when(digits == "").then(None).otherwise(digits)
+
+    def digits(*names: str) -> pl.Expr:
+        return digits_expr(first(*names))
+
+    def period_expr(value: pl.Expr) -> list[pl.Expr]:
+        d = digits_expr(value)
+        year6 = d.str.slice(0, 4).cast(pl.Int64, strict=False)
+        month6 = d.str.slice(4, 2).cast(pl.Int64, strict=False)
+        year4 = d.cast(pl.Int64, strict=False)
+        valid6 = (d.str.len_chars() >= 6) & month6.is_between(1, 12)
+        return [
+            pl.when(valid6).then(year6)
+            .when(d.str.len_chars() == 4).then(year4)
+            .otherwise(None)
+            .alias("year"),
+            pl.when(valid6).then(month6).otherwise(None).alias("month"),
+            pl.when(d.is_null()).then(pl.lit("missing"))
+            .when(valid6).then(pl.lit("valid"))
+            .when(d.str.len_chars() == 4).then(pl.lit("year_only"))
+            .otherwise(pl.lit("invalid"))
+            .alias("period_state"),
+        ]
+
+    def municipality_expr(value: pl.Expr) -> list[pl.Expr]:
+        d = digits_expr(value)
+        cod6 = (
+            pl.when(d.str.len_chars() == 6).then(d)
+            .when(d.str.len_chars() == 7).then(d.str.slice(0, 6))
+            .otherwise(None)
+        )
+        ignored = cod6.str.slice(2, 4) == "0000"
+        valid = cod6.is_not_null() & ~ignored
+        return [
+            pl.when(valid).then(cod6).otherwise(None).alias("mun_facility_cod6"),
+            pl.when(valid & (d.str.len_chars() == 7)).then(d)
+            .when(valid).then(
+                cod6.map_elements(lambda value: datasus_cod6_to_ibge_cod7(value, strict=False) if value else None, return_dtype=pl.Utf8)
+            )
+            .otherwise(None)
+            .alias("mun_facility_cod7"),
+            pl.when(d.is_null()).then(pl.lit("missing"))
+            .when(ignored).then(pl.lit("ignored_municipality"))
+            .when(d.str.len_chars() == 7).then(pl.lit("ibge_cod7"))
+            .when(d.str.len_chars() == 6).then(pl.lit("datasus_cod6"))
+            .otherwise(pl.lit("invalid"))
+            .alias("municipality_code_state"),
+        ]
+
+    def cnpj_expr(prefix: str, value: pl.Expr) -> list[pl.Expr]:
+        cleaned = clean_expr(value)
+        return [
+            cleaned.map_elements(lambda raw: filter_cnpj(raw).cnpj, return_dtype=pl.Utf8).alias(f"{prefix}_cnpj"),
+            cleaned.map_elements(lambda raw: filter_cnpj(raw).state, return_dtype=pl.Utf8).alias(f"{prefix}_cnpj_state"),
+        ]
+
+    def nonnegative_expr(name: str) -> tuple[pl.Expr, pl.Expr]:
+        raw = clean(name)
+        value = raw.str.replace_all(",", ".").cast(pl.Float64, strict=False)
+        valid = value.is_not_null() & (value >= 0) & (value == value.floor())
+        parsed = pl.when(valid).then(value.cast(pl.Int64)).otherwise(None)
+        state = (
+            pl.when(raw.is_null()).then(pl.lit("missing"))
+            .when(valid).then(pl.lit("valid"))
+            .otherwise(pl.lit("invalid"))
+        )
+        return parsed.alias(name.upper()), state.alias(f"{name.upper()}_state")
+
+    capacity_value_exprs: list[pl.Expr] = []
+    capacity_state_exprs: list[pl.Expr] = []
+    for capacity_column in capacity_columns:
+        value_expr, state_expr = nonnegative_expr(capacity_column)
+        capacity_value_exprs.append(value_expr)
+        capacity_state_exprs.append(state_expr)
+
+    def json_capacity_values(row: dict[str, Any]) -> str:
+        return json.dumps({key: row.get(key) for key in sorted(row)}, ensure_ascii=False, sort_keys=True)
+
+    def json_capacity_states(row: dict[str, Any]) -> str:
+        return json.dumps({key.removesuffix("_state"): row.get(key) for key in sorted(row)}, ensure_ascii=False, sort_keys=True)
+
+    def json_flag_values(row: dict[str, Any]) -> str:
+        return json.dumps({key: clamp_bool(value).value for key, value in sorted(row.items())}, ensure_ascii=False, sort_keys=True)
+
+    def json_flag_states(row: dict[str, Any]) -> str:
+        return json.dumps({key: clamp_bool(value).state for key, value in sorted(row.items())}, ensure_ascii=False, sort_keys=True)
+
+    def invalid_flag_count(row: dict[str, Any]) -> int:
+        return sum(1 for value in row.values() if clamp_bool(value).state in {"InvalidFlagState", "UnparseableFlag"})
+
+    flag_struct = pl.struct([clean(column).alias(column.upper()) for column in flag_columns]) if flag_columns else pl.struct([])
+    capacity_value_struct = pl.struct(capacity_value_exprs) if capacity_value_exprs else pl.struct([])
+    capacity_state_struct = pl.struct(capacity_state_exprs) if capacity_state_exprs else pl.struct([])
+
+    out = (
+        df.with_columns(
+            clean("CNES", "facility_id").alias("facility_id"),
+            pl.lit("CNES-ST").alias("source_system"),
+            *period_expr(first("COMPETEN", "ANO_CMPT", "year")),
+            *municipality_expr(first("CODMUN", "MUNIC_RES", "facility_municipality")),
+            *cnpj_expr("facility", first("CPF_CNPJ", "facility_cnpj")),
+            *cnpj_expr("maintainer", first("CNPJ_MAN", "maintainer_cnpj")),
+            *capacity_value_exprs,
+            *capacity_state_exprs,
+            capacity_value_struct.map_elements(json_capacity_values, return_dtype=pl.Utf8).alias("capacity_vector_json"),
+            capacity_state_struct.map_elements(json_capacity_states, return_dtype=pl.Utf8).alias("capacity_state_json"),
+            flag_struct.map_elements(json_flag_values, return_dtype=pl.Utf8).alias("flag_vector_json"),
+            flag_struct.map_elements(json_flag_states, return_dtype=pl.Utf8).alias("flag_state_json"),
+            flag_struct.map_elements(invalid_flag_count, return_dtype=pl.Int64).alias("invalid_flag_count"),
+            pl.lit(len(flag_columns)).alias("flag_count"),
+        )
+        .with_columns(
+            pl.col("QTLEITP1").alias("clinical_bed_capacity") if "QTLEITP1" in capacity_columns else pl.lit(None, dtype=pl.Int64).alias("clinical_bed_capacity"),
+            pl.col("QTLEITP1_state").alias("clinical_bed_capacity_state") if "QTLEITP1" in capacity_columns else pl.lit("missing").alias("clinical_bed_capacity_state"),
+            pl.col("QTLEITP2").alias("surgical_bed_capacity") if "QTLEITP2" in capacity_columns else pl.lit(None, dtype=pl.Int64).alias("surgical_bed_capacity"),
+            pl.col("QTLEITP2_state").alias("surgical_bed_capacity_state") if "QTLEITP2" in capacity_columns else pl.lit("missing").alias("surgical_bed_capacity_state"),
+            pl.col("QTLEITP3").alias("obstetric_bed_capacity") if "QTLEITP3" in capacity_columns else pl.lit(None, dtype=pl.Int64).alias("obstetric_bed_capacity"),
+            pl.col("QTLEITP3_state").alias("obstetric_bed_capacity_state") if "QTLEITP3" in capacity_columns else pl.lit("missing").alias("obstetric_bed_capacity_state"),
+            pl.when(pl.col("facility_id").is_not_null() & pl.col("year").is_not_null() & pl.col("mun_facility_cod6").is_not_null())
+            .then(pl.lit("valid"))
+            .otherwise(pl.lit("invalid_identity"))
+            .alias("record_state"),
+            pl.lit(source_manifest_hash).alias("source_manifest_hash"),
+            pl.concat_str([pl.lit(source_manifest_hash), pl.lit(":"), pl.col("_row_idx").cast(pl.Utf8)]).hash().cast(pl.Utf8).alias("row_hash"),
+            pl.lit(None, dtype=pl.Utf8).alias("raw_json"),
+        )
+        .select(
+            [
+                "facility_id",
+                "source_system",
+                "year",
+                "month",
+                "period_state",
+                "mun_facility_cod6",
+                "mun_facility_cod7",
+                "municipality_code_state",
+                "facility_cnpj",
+                "facility_cnpj_state",
+                "maintainer_cnpj",
+                "maintainer_cnpj_state",
+                "clinical_bed_capacity",
+                "clinical_bed_capacity_state",
+                "surgical_bed_capacity",
+                "surgical_bed_capacity_state",
+                "obstetric_bed_capacity",
+                "obstetric_bed_capacity_state",
+                "capacity_vector_json",
+                "capacity_state_json",
+                "flag_vector_json",
+                "flag_state_json",
+                "invalid_flag_count",
+                "flag_count",
+                "record_state",
+                "source_manifest_hash",
+                "row_hash",
+                "raw_json",
+            ]
+        )
+    )
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out.write_parquet(out_path)
@@ -176,5 +348,5 @@ def normalize_cnes_st_events(*, input_path: str | Path, output_path: str | Path,
         "columns": out.columns,
         "zero_facility_cnpj_rows": int((out.get_column("facility_cnpj_state") == "NullifiedZeroCNPJ").sum()) if out.height else 0,
         "invalid_flag_rows": int((out.get_column("invalid_flag_count") > 0).sum()) if out.height else 0,
-        "capacity_components": _capacity_columns(df.columns),
+        "capacity_components": capacity_columns,
     }

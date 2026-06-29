@@ -273,9 +273,23 @@ def _q_row(
     warnings = list(field.warnings or [])
     if vector is not None and "municipality_cod6" in (panel.columns if panel is not None else []) and diag.get("moran_i") is None and moran_warning:
         warnings.append(moran_warning)
+    roles = {str(role) for role in (field.role or [])}
+    unit = str(field.unit or "").lower()
+    materialized_count_total: float | None = None
+    if vector is not None and (
+        unit in {"count", "counts", "events", "admissions", "births", "deaths"}
+        or "source_event_count" in roles
+        or "restricted_count" in roles
+    ):
+        materialized_count_total = float(sum(float(value) for value in vector if value is not None))
+    n_events = support.get("n_events")
+    if n_events is None and materialized_count_total is not None:
+        n_events = materialized_count_total
+    elif n_events is None:
+        n_events = support.get("row_count")
     row = {
         "field_id": field.id,
-        "n_events": float(support.get("n_events") or support.get("row_count") or 0.0),
+        "n_events": float(n_events or 0.0),
         "n_denom": support.get("n_denom"),
         "n_eff": diag.get("n_eff", support.get("n_eff")),
         "cov_S": support.get("cov_S"),

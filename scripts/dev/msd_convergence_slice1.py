@@ -301,19 +301,28 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
         "locality_level": "N6",
         "classifications": {"86": ["95251"], "2": ["6794"], "287": ["100362"]},
     }
+    header = response.payload[:1]
+    rows = [
+        row for row in response.payload[1:]
+        if isinstance(row, dict)
+        and str(row.get("D1C") or row.get("locality_id") or "").startswith("27")
+    ]
+    municipality_count = len({str(row.get("D1C") or row.get("locality_id")) for row in rows})
+    if municipality_count != 102:
+        raise RuntimeError(f"SIDRA AL N6 filter expected 102 municipalities, got {municipality_count}")
+    municipal_request = {**request, "post_filter": "AL_N6_cod7_prefix_27"}
     facts = normalize_sidra_payload_to_facts(
-        response.payload,
+        list(header) + rows,
         table_id="9606",
-        request_hash=content_hash(request),
-        metadata_hash=content_hash({"table": "9606", "official": True, "state_panel": "AL"}),
-        chunk_request=request,
+        request_hash=content_hash(municipal_request),
+        metadata_hash=content_hash({"table": "9606", "official": True, "state_panel": "AL", "support": "N6_municipality_year"}),
+        chunk_request=municipal_request,
         unit_by_variable={"93": "persons"},
         fetched_at=(response.sidecar or {}).get("fetched_at"),
     )
     path = root / "processed" / "sidra" / "population_2022.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     write_facts_parquet(facts, output_path=path)
-    municipality_count = len({str(row.get("D1C")) for row in response.payload[1:] if isinstance(row, dict) and row.get("D1C")})
     return path, bool(response.from_cache or response.status_code < 400), municipality_count
 
 
@@ -379,7 +388,12 @@ def _q_by_field(run_dir: Path) -> dict[str, dict[str, Any]]:
 
 def _check_anomaly(run_dir: Path) -> dict[str, Any]:
     q = _q_by_field(run_dir)
-    row = q.get("SINASCCongenitalAnomalyPrevalence") or {}
+    anomaly_field_id = "SINASCCongenitalAnomalyPrevalence"
+    for field in _table_rows(run_dir / "V_fields.parquet"):
+        if str(field.get("name") or "") == "SINASCCongenitalAnomalyPrevalence":
+            anomaly_field_id = str(field.get("field_id") or anomaly_field_id)
+            break
+    row = q.get(anomaly_field_id) or {}
     n_events = row.get("n_events")
     n_denom = row.get("n_denom")
     rate = None

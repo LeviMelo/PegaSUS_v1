@@ -95,7 +95,29 @@ WARNINGS_SCHEMA = pa.schema([
 
 MODEL_ASSOC_SCHEMA = pa.schema([
     ("id", pa.string()),
+    ("model_id", pa.string()),
     ("status", pa.string()),
+    ("family", pa.string()),
+    ("outcome_field_id", pa.string()),
+    ("covariate_field_id", pa.string()),
+    ("covariate_field_ids", pa.string()),
+    ("offset_field_id", pa.string()),
+    ("residual_field_id", pa.string()),
+    ("diagnostics_json", pa.string()),
+    ("created_at", pa.string()),
+    ("warnings", pa.string()),
+])
+
+RESIDUAL_ASSOC_SCHEMA = pa.schema([
+    ("id", pa.string()),
+    ("residual_association_id", pa.string()),
+    ("residual_field_id", pa.string()),
+    ("model_id", pa.string()),
+    ("parent_model_id", pa.string()),
+    ("outcome_field_id", pa.string()),
+    ("residual_type", pa.string()),
+    ("status", pa.string()),
+    ("created_at", pa.string()),
     ("warnings", pa.string()),
 ])
 
@@ -161,7 +183,7 @@ TABLE_SCHEMAS = {
     "Q_tensor.parquet": Q_TENSOR_SCHEMA,
     "Warnings.parquet": WARNINGS_SCHEMA,
     "ModelAssociations.parquet": MODEL_ASSOC_SCHEMA,
-    "ResidualAssociations.parquet": MODEL_ASSOC_SCHEMA,
+    "ResidualAssociations.parquet": RESIDUAL_ASSOC_SCHEMA,
     "Hypotheses.parquet": HYPOTHESES_SCHEMA,
     "VariableDictionary.parquet": VARIABLE_DICTIONARY_SCHEMA,
     "FailedBranches.parquet": FAILED_BRANCH_SCHEMA,

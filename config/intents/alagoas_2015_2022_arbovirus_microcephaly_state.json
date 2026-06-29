@@ -1,0 +1,70 @@
+{
+  "run_profile": "core_vital",
+  "budget": "standard",
+  "context_policy": [
+    "actual_source_state_panel",
+    "official_sidra_anchor",
+    "sinasc_maternal_child_compile",
+    "live_birth_denominator_linkage",
+    "include_cnes_sih",
+    "run_pirs",
+    "run_hsic"
+  ],
+  "exclude_systems": [],
+  "execution_scale": "state",
+  "force_selectors": [
+    "outcome:MicrocephalyBirths/LiveBirths",
+    "covariate:ArbovirusHospitalAdmissions/HospitalAdmissions",
+    "covariate:DengueHospitalAdmissions/HospitalAdmissions",
+    "covariate:ZikaHospitalAdmissions/HospitalAdmissions",
+    "covariate:ChikungunyaHospitalAdmissions/HospitalAdmissions"
+  ],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [],
+    "level": "municipality",
+    "uf": [
+      "AL"
+    ]
+  },
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block",
+    "hospitalization",
+    "capacity",
+    "maternal_child"
+  ],
+  "mandatory_fields": [
+    "SIMDeathsAll",
+    "SIMCrudeMortalitySIDRAOfficial",
+    "SIDRAPopulationTotalAnchor",
+    "SINASCLiveBirthsAll",
+    "SINASCCrudeBirthRateSIDRAOfficial",
+    "SINASCLowBirthWeightPrevalence",
+    "SINASCPrematurityPrevalence",
+    "SINASCCongenitalAnomalyPrevalence",
+    "SIMInfantMortalitySINASCBirths",
+    "SIMNeonatalMortalitySINASCBirths",
+    "SIMPostNeonatalMortalitySINASCBirths",
+    "CNESFacilitiesAll",
+    "SIHHospitalAdmissionsAll",
+    "SIHInpatientDeaths",
+    "SIHInpatientFatality"
+  ],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0,
+    "SINASC": 1.0,
+    "CNES-ST": 1.0,
+    "SIH-RD": 1.0
+  },
+  "time": {
+    "start_year": 2015,
+    "end_year": 2022,
+    "start_month": null,
+    "end_month": null
+  }
+}

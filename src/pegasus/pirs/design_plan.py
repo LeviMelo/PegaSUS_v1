@@ -265,14 +265,15 @@ def _spatial_effect_payload(plan: Mapping[str, Any], *, budget: str) -> tuple[st
     def first_present(key: str) -> Any:
         return plan[key] if key in plan and plan[key] is not None else diagnostics.get(key)
 
+    adjacency_path = first_present("adjacency_path") or first_present("geo_adjacency_path")
     selector = select_spatial_effect_mode(
         budget=budget,
         time_period_count=first_present("time_period_count"),
         spatial_missingness=first_present("spatial_missingness"),
         moran_i=first_present("moran_i"),
+        adjacency_available=adjacency_path not in (None, ""),
     )
     manifest = selector.as_manifest()
-    adjacency_path = first_present("adjacency_path") or first_present("geo_adjacency_path")
     if adjacency_path not in (None, ""):
         manifest["adjacency_path"] = str(adjacency_path)
     return selector.mode, selector.warnings, manifest

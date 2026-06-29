@@ -120,11 +120,8 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
     """Fetch SIDRA 9606 for AL and emit the current compiler's single-anchor artifact.
 
     Boundary rule:
-    - the generic src population anchor loader still receives one total SIDRA fact;
-    - this AL-specific audit adapter owns the AL N6 post-filter and temporary N6→N3
-      aggregation needed by the present compiler path;
-    - the 102 municipal N6 rows are preserved as a sidecar for auditability, but not
-      passed as the single SIDRA:normalized_facts compile artifact.
+    - the compiler receives the 102-row AL N6 municipal denominator panel;
+    - the AL N6→N3 aggregate is retained only as an audit sidecar.
     """
     client = SidraClient()
     response = client.values(
@@ -169,7 +166,7 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
         unit_by_variable={"93": "persons"},
         fetched_at=(response.sidecar or {}).get("fetched_at"),
     )
-    municipal_path = root / "processed" / "sidra" / "population_2022_al_n6_municipal_sidecar.parquet"
+    municipal_path = root / "processed" / "sidra" / "population_2022.parquet"
     municipal_path.parent.mkdir(parents=True, exist_ok=True)
     write_facts_parquet(municipal_facts, output_path=municipal_path)
 
@@ -196,7 +193,7 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
             "aggregation": "additive_sum",
             "municipality_count": municipality_count,
             "municipality_ids": municipality_ids,
-            "sidecar_path": str(municipal_path),
+            "compile_artifact_path": str(municipal_path),
         },
     }
     aggregate_payload = list(header) + [aggregate_row]
@@ -218,10 +215,10 @@ def _sidra_facts(*, root: Path, localities: list[str]) -> tuple[Path, bool, int]
     if len(numeric_anchor_facts) != 1:
         raise RuntimeError(f"Expected exactly one aggregated AL N3 SIDRA anchor fact, got {len(numeric_anchor_facts)}")
 
-    path = root / "processed" / "sidra" / "population_2022.parquet"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_facts_parquet(anchor_facts, output_path=path)
-    return path, bool(response.from_cache or response.status_code < 400), municipality_count
+    aggregate_path = root / "processed" / "sidra" / "population_2022_al_n3_aggregate_sidecar.parquet"
+    aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+    write_facts_parquet(anchor_facts, output_path=aggregate_path)
+    return municipal_path, bool(response.from_cache or response.status_code < 400), municipality_count
 
 
 def _normalize_system(system: str, *, request: Any, output_path: Path, source_hash: str) -> None:
@@ -336,7 +333,12 @@ def _q_by_field(run_dir: Path) -> dict[str, dict[str, Any]]:
 
 def _check_anomaly(run_dir: Path) -> dict[str, Any]:
     q = _q_by_field(run_dir)
-    row = q.get("SINASCCongenitalAnomalyPrevalence") or {}
+    anomaly_field_id = "SINASCCongenitalAnomalyPrevalence"
+    for field in _table_rows(run_dir / "V_fields.parquet"):
+        if str(field.get("name") or "") == "SINASCCongenitalAnomalyPrevalence":
+            anomaly_field_id = str(field.get("field_id") or anomaly_field_id)
+            break
+    row = q.get(anomaly_field_id) or {}
     n_events = row.get("n_events")
     n_denom = row.get("n_denom")
     rate = None

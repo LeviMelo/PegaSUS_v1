@@ -27,6 +27,7 @@ def select_spatial_effect_mode(
     time_period_count: int | None,
     spatial_missingness: float | None,
     moran_i: float | None,
+    adjacency_available: bool = True,
     moran_near_zero_threshold: float = 0.03,
 ) -> SpatialEffectSelection:
     """Select the MSD §6.3 spatial-effect mode.
@@ -48,6 +49,13 @@ def select_spatial_effect_mode(
         return SpatialEffectSelection(
             mode="municipality_FE",
             reason="long_panel_low_spatial_missingness_selects_municipality_fixed_effects",
+        )
+
+    if not adjacency_available:
+        return SpatialEffectSelection(
+            mode="municipality_FE",
+            reason="short_panel_without_declared_adjacency_selects_executable_municipality_fixed_effects",
+            warnings=("icar_requires_declared_municipality_adjacency",),
         )
 
     return SpatialEffectSelection(

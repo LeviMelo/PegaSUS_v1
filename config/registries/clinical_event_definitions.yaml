@@ -190,6 +190,102 @@ entries:
   warnings: []
   description: Inpatient death (SIH MORTE). Denominator is hospital admissions (case fatality).
 
+- id: dengue_hospital_admission_event
+  status: active
+  source_system: SIH-RD
+  event_carrier: DengueHospitalAdmissions
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: HospitalAdmissions
+    predicate: dengue_hospital_admission
+    conditions:
+    - {column: principal_icd_norm, op: starts_with_any, value: [A90, A91]}
+  denominator_carriers:
+  - HospitalAdmissions
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - hospitalization_rate
+  - admission_share
+  ratios:
+  - {denominator_carrier: HospitalAdmissions, role: admission_share, output_unit: proportion}
+  - {denominator_carrier: Population, role: hospitalization_rate, output_unit: rate}
+  warnings: [administrative_admission_not_incidence]
+  description: SIH dengue hospital admissions using principal ICD-10 A90/A91.
+
+- id: zika_hospital_admission_event
+  status: active
+  source_system: SIH-RD
+  event_carrier: ZikaHospitalAdmissions
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: HospitalAdmissions
+    predicate: zika_hospital_admission
+    conditions:
+    - {column: principal_icd_norm, op: starts_with_any, value: [A928, U06]}
+  denominator_carriers:
+  - HospitalAdmissions
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - hospitalization_rate
+  - admission_share
+  ratios:
+  - {denominator_carrier: HospitalAdmissions, role: admission_share, output_unit: proportion}
+  - {denominator_carrier: Population, role: hospitalization_rate, output_unit: rate}
+  warnings: [administrative_admission_not_incidence, zika_icd_coding_regime_varies_by_year]
+  description: SIH zika-compatible hospital admissions using principal ICD-10 A92.8/U06*.
+
+- id: chikungunya_hospital_admission_event
+  status: active
+  source_system: SIH-RD
+  event_carrier: ChikungunyaHospitalAdmissions
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: HospitalAdmissions
+    predicate: chikungunya_hospital_admission
+    conditions:
+    - {column: principal_icd_norm, op: starts_with_any, value: [A920]}
+  denominator_carriers:
+  - HospitalAdmissions
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - hospitalization_rate
+  - admission_share
+  ratios:
+  - {denominator_carrier: HospitalAdmissions, role: admission_share, output_unit: proportion}
+  - {denominator_carrier: Population, role: hospitalization_rate, output_unit: rate}
+  warnings: [administrative_admission_not_incidence]
+  description: SIH chikungunya hospital admissions using principal ICD-10 A92.0.
+
+- id: arbovirus_hospital_admission_event
+  status: active
+  source_system: SIH-RD
+  event_carrier: ArbovirusHospitalAdmissions
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: HospitalAdmissions
+    predicate: arbovirus_hospital_admission
+    conditions:
+    - {column: principal_icd_norm, op: starts_with_any, value: [A90, A91, A92, U06]}
+  denominator_carriers:
+  - HospitalAdmissions
+  - Population
+  default_aggregation: additive
+  allowed_rates:
+  - hospitalization_rate
+  - admission_share
+  ratios:
+  - {denominator_carrier: HospitalAdmissions, role: admission_share, output_unit: proportion}
+  - {denominator_carrier: Population, role: hospitalization_rate, output_unit: rate}
+  warnings: [administrative_admission_not_incidence, arbovirus_group_uses_principal_sih_diagnosis]
+  description: SIH arbovirus hospital admissions using principal ICD-10 A90/A91/A92/U06*.
+
 - id: low_birth_weight_event
   status: active
   source_system: SINASC
@@ -252,6 +348,27 @@ entries:
   - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
   warnings: []
   description: Congenital anomaly birth. Denominator is live births (§3.10.4).
+
+- id: microcephaly_birth_event
+  status: active
+  source_system: SINASC
+  event_carrier: MicrocephalyBirths
+  event_kind: restricted
+  numerator_unit: counts
+  restriction:
+    of_carrier: LiveBirths
+    predicate: microcephaly_birth
+    conditions:
+    - {column: anomaly_icd_code, op: starts_with_any, value: [Q02]}
+  denominator_carriers:
+  - LiveBirths
+  default_aggregation: additive
+  allowed_rates:
+  - birth_outcome_share
+  ratios:
+  - {denominator_carrier: LiveBirths, role: birth_outcome_share, output_unit: proportion}
+  warnings: [rare_event_sparse_support]
+  description: Microcephaly live birth identified by SINASC anomaly ICD-10 Q02*.
 
 - id: cesarean_event
   status: active

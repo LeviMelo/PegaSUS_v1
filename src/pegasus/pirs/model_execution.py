@@ -617,6 +617,10 @@ def build_pirs_model_execution_manifest(*, run_dir: str | Path, design_matrix_ma
         "offset_field_id": offset_field_id,
         "family": family,
         "family_fitted": fit.get("family_fitted", family),
+        "residual_mode": fit.get("residual_mode_actual"),
+        "residual_mode_requested": fit.get("residual_mode_requested"),
+        "residual_type": fit.get("residual_type"),
+        "fold_scheme": manifest.get("fold_scheme"),
         "row_count": len(rows),
         "coefficient_count": len(coefficients),
         "coefficients_path": str(coefficients_path),
@@ -730,7 +734,9 @@ def _mutate_output_bundle_with_model_result(root: Path, payload: Mapping[str, An
         "interpretation_warning": RESIDUAL_WARNING,
     }
     model_assoc = {"id": model_id, "model_id": model_id, "status": payload.get("status"), "family": payload.get("family"), "outcome_field_id": outcome, "covariate_field_id": _compact(covariates), "covariate_field_ids": _compact(covariates), "offset_field_id": payload.get("offset_field_id"), "residual_field_id": residual_field_id, "diagnostics_json": _compact(payload.get("diagnostics", {})), "created_at": _now()}
-    residual_assoc = {"id": residual_field_id, "residual_association_id": residual_field_id, "residual_field_id": residual_field_id, "model_id": model_id, "parent_model_id": model_id, "outcome_field_id": outcome, "residual_type": "raw_response_residual", "status": "materialized", "created_at": _now()}
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    residual_type = str(diagnostics.get("residual_type") or "model_response_residual")
+    residual_assoc = {"id": residual_field_id, "residual_association_id": residual_field_id, "residual_field_id": residual_field_id, "model_id": model_id, "parent_model_id": model_id, "outcome_field_id": outcome, "residual_type": residual_type, "status": "materialized", "created_at": _now()}
     warning = {"warning_id": warning_id, "field_id": residual_field_id, "source": "PIRS", "severity": "warning", "code": RESIDUAL_WARNING, "message": "PIRS residual is a model-derived diagnostic field, not a raw epidemiological observation.", "inherited_from": "[]", "created_at": _now()}
     if bundle is not None:
         bundle.append_table("V_fields", [residual_field])

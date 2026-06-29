@@ -56,6 +56,17 @@ suppressPackageStartupMessages({
 sanitize_utf8_scalar <- function(x) {
   if (is.na(x)) return(NA_character_)
   y <- as.character(x)
+  # DATASUS DBF text occasionally contains embedded NUL bytes. iconv aborts on
+  # those before it can apply sub="byte", so strip them at the byte boundary.
+  y <- gsub("\\x00", "", y, perl = TRUE, useBytes = TRUE)
+  y <- tryCatch({
+    bytes <- charToRaw(y)
+    if (any(bytes == as.raw(0))) {
+      rawToChar(bytes[bytes != as.raw(0)], multiple = FALSE)
+    } else {
+      y
+    }
+  }, error = function(e) y)
   Encoding(y) <- "unknown"
   z <- iconv(y, from = "", to = "UTF-8", sub = "byte")
   if (is.na(z)) {

@@ -260,98 +260,178 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
     first real file). Every canonical field is a Polars expression over the raw
     SINASC columns; clinical indicators (low birth weight, prematurity, cesarean,
     maternal-age bands) are computed per §2.6 definitions as 0/1 additive flags."""
-    df = _read_table(input_path)
+    df = _read_table(input_path).with_row_index("_row_idx")
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    records: list[dict[str, Any]] = []
-    for idx, row in enumerate(df.to_dicts()):
-        raw_payload = {str(k): v for k, v in row.items()}
-        birth_date, birth_year, birth_date_state = parse_sinasc_date(row.get("DTNASC"))
-        res6, res7, res_state = municipality_codes(row.get("CODMUNRES"))
-        birth6, birth7, birth_state = municipality_codes(row.get("CODMUNNASC"))
-        mother_age = int_or_none(row.get("IDADEMAE"))
-        birth_weight, birth_weight_state, _low_birth_weight = decode_birth_weight(row.get("PESO"))
-        gest_weeks, gest_state, _premature = decode_gestational_age(row.get("SEMAGESTAC"))
-        apgar1, apgar1_state, _low_apgar1 = decode_apgar(row.get("APGAR1"))
-        apgar5, apgar5_state, _low_apgar5 = decode_apgar(row.get("APGAR5"))
-        delivery_code, delivery_state, _cesarean = decode_delivery_mode(row.get("PARTO"))
-        prenatal, prenatal_state, prenatal_raw = decode_count_preserve_leading_zero(
-            row.get("CONSULTAS"),
-            sentinels={"99"},
-            upper=98,
+    def col(name: str) -> pl.Expr:
+        return pl.col(name) if name in df.columns else pl.lit(None)
+
+    def clean(name: str) -> pl.Expr:
+        text = col(name).cast(pl.Utf8).str.strip_chars()
+        return pl.when(text.str.to_lowercase().is_in(["", "nan", "none", "null"])).then(None).otherwise(text)
+
+    def digits(name: str) -> pl.Expr:
+        d = clean(name).str.replace_all(r"\D", "")
+        return pl.when(d == "").then(None).otherwise(d)
+
+    def int_digits(name: str) -> pl.Expr:
+        return digits(name).cast(pl.Int64, strict=False)
+
+    def municipality(prefix: str, raw_col: str) -> list[pl.Expr]:
+        d = digits(raw_col)
+        cod6 = (
+            pl.when(d.str.len_chars() == 6).then(d)
+            .when(d.str.len_chars() == 7).then(d.str.slice(0, 6))
+            .otherwise(None)
         )
-        anomaly_flag, anomaly_flag_state = decode_anomaly_flag(row.get("IDANOMAL"))
-        anomaly_code, anomaly_code_state, anomaly_positive = normalize_anomaly_icd(row.get("CODANOMAL"), anomaly_flag)
-        newborn_race, newborn_race_state = decode_race(row.get("RACACOR"))
-        maternal_race, maternal_race_state = decode_race(row.get("RACACORMAE"))
-        newborn_sex, newborn_sex_state = decode_sex(row.get("SEXO"))
-        # Reproductive history — decode_count2 preserves sentinel/state semantics
-        # (MSD §2.4.3); int_or_none would lose the 99-sentinel and missing/invalid.
-        live_children = decode_count2(row.get("QTDFILVIVO"), sentinels={"99"})
-        deceased_children = decode_count2(row.get("QTDFILMORT"), sentinels={"99"})
-        prior_pregnancies = decode_count2(row.get("QTDGESTANT"), sentinels={"99"})
-        prior_vaginal = decode_count2(row.get("QTDPARTNOR"), sentinels={"99"})
-        prior_cesarean = decode_count2(row.get("QTDPARTCES"), sentinels={"99"})
-        event_key = _clean(row.get("NUMERODN")) or f"{idx}_{source_manifest_hash[:8]}"
-        records.append(
-            {
-                "event_id": f"SINASC-{event_key}",
-                "source_system": "SINASC",
-                "birth_date": birth_date,
-                "birth_year": birth_year,
-                "birth_date_state": birth_date_state,
-                "mun_residence_cod6": res6,
-                "mun_residence_cod7": res7,
-                "mun_residence_state": res_state,
-                "mun_birth_cod6": birth6,
-                "mun_birth_cod7": birth7,
-                "mun_birth_state": birth_state,
-                "mother_age_years": mother_age,
-                "maternal_birth_date": _clean(row.get("DTNASCMAE")),
-                "newborn_sex": newborn_sex,
-                "newborn_sex_state": newborn_sex_state,
-                "newborn_race_admin": newborn_race,
-                "newborn_race_state": newborn_race_state,
-                "maternal_race_admin": maternal_race,
-                "maternal_race_state": maternal_race_state,
-                "birth_weight_g": birth_weight,
-                "birth_weight_grams": birth_weight,
-                "birth_weight_state": birth_weight_state,
-                "gestational_weeks": gest_weeks,
-                "gestational_age_state": gest_state,
-                "apgar_1min": apgar1,
-                "apgar_1min_state": apgar1_state,
-                "apgar_5min": apgar5,
-                "apgar_5min_state": apgar5_state,
-                "delivery_mode_code": delivery_code,
-                "delivery_mode_state": delivery_state,
-                "prenatal_consult_count": prenatal,
-                "prenatal_consult_state": prenatal_state,
-                "prenatal_consult_raw_digits": prenatal_raw,
-                "prenatal_visit_group": _clean(row.get("CONSULTAS")),
-                "live_children_count": live_children.value,
-                "live_children_state": live_children.state,
-                "deceased_children_count": deceased_children.value,
-                "deceased_children_state": deceased_children.state,
-                "prior_pregnancy_count": prior_pregnancies.value,
-                "prior_pregnancy_state": prior_pregnancies.state,
-                "prior_vaginal_delivery_count": prior_vaginal.value,
-                "prior_vaginal_delivery_state": prior_vaginal.state,
-                "prior_cesarean_delivery_count": prior_cesarean.value,
-                "prior_cesarean_delivery_state": prior_cesarean.state,
-                "anomaly_flag": anomaly_flag,
-                "anomaly_flag_state": anomaly_flag_state,
-                "anomaly_icd_code": anomaly_code,
-                "anomaly_icd_state": anomaly_code_state,
-                "anomaly_positive": anomaly_positive,
-                "record_state": "valid" if birth_year is not None and res6 is not None else "invalid_identity",
-                "source_manifest_hash": source_manifest_hash,
-                "row_hash": _stable_hash(raw_payload),
-                "raw_json": json.dumps(raw_payload, ensure_ascii=False, sort_keys=True, default=str),
-            }
-        )
-    out = pl.DataFrame(records, infer_schema_length=None)
+        ignored = cod6.str.slice(2, 4) == "0000"
+        valid = cod6.is_not_null() & ~ignored
+        return [
+            pl.when(valid).then(cod6).otherwise(None).alias(f"{prefix}_cod6"),
+            pl.when(valid & (d.str.len_chars() == 7)).then(d).otherwise(None).alias(f"{prefix}_cod7"),
+            pl.when(d.is_null()).then(pl.lit("missing"))
+            .when(ignored).then(pl.lit("ignored_municipality"))
+            .when(d.str.len_chars() == 7).then(pl.lit("ibge_cod7"))
+            .when(d.str.len_chars() == 6).then(pl.lit("datasus_cod6"))
+            .otherwise(pl.lit("invalid"))
+            .alias(f"{prefix}_state"),
+        ]
+
+    def scalar(name: str, out_name: str, state_name: str, *, lower: int, upper: int, sentinels: list[str]) -> list[pl.Expr]:
+        d = digits(name)
+        value = d.cast(pl.Int64, strict=False)
+        sentinel = d.is_in(sentinels)
+        valid = value.is_not_null() & ~sentinel & (value >= lower) & (value <= upper)
+        return [
+            pl.when(valid).then(value).otherwise(None).alias(out_name),
+            pl.when(d.is_null()).then(pl.lit("missing"))
+            .when(sentinel).then(pl.lit("sentinel"))
+            .when(value.is_null() | (value < lower) | (value > upper)).then(pl.lit("invalid"))
+            .otherwise(pl.lit("valid"))
+            .alias(state_name),
+        ]
+
+    def count2(name: str, out_name: str, state_name: str, *, upper: int = 98) -> list[pl.Expr]:
+        d = digits(name)
+        value = d.cast(pl.Int64, strict=False)
+        sentinel = d == "99"
+        valid = value.is_not_null() & ~sentinel & (value >= 0) & (value <= upper)
+        return [
+            pl.when(valid).then(value).otherwise(None).alias(out_name),
+            pl.when(d.is_null()).then(pl.lit("MissingCount"))
+            .when(sentinel).then(pl.lit("InvalidCount"))
+            .when(value.is_null() | (value < 0) | (value > upper)).then(pl.lit("InvalidCount"))
+            .otherwise(pl.lit("valid"))
+            .alias(state_name),
+        ]
+
+    birth_digits = digits("DTNASC")
+    birth_ymd = birth_digits.str.strptime(pl.Date, "%Y%m%d", strict=False)
+    birth_dmy = birth_digits.str.strptime(pl.Date, "%d%m%Y", strict=False)
+    birth_dt = pl.coalesce([birth_ymd, birth_dmy])
+    anomaly_flag_digits = digits("IDANOMAL")
+    anomaly_flag = (
+        pl.when(anomaly_flag_digits == "1").then(True)
+        .when(anomaly_flag_digits == "2").then(False)
+        .otherwise(None)
+    )
+    anomaly_code = clean("CODANOMAL").str.to_uppercase().str.extract(r"([A-Z][0-9]{2}[0-9A-Z]?)", 1)
+    event_key = pl.coalesce([clean("NUMERODN"), clean("contador"), clean("CONTADOR"), pl.col("_row_idx").cast(pl.Utf8) + pl.lit(f"_{source_manifest_hash[:8]}")])
+
+    out = df.with_columns(
+        birth_dt.alias("_birth_dt"),
+        birth_dt.dt.year().alias("_birth_year"),
+        *municipality("mun_residence", "CODMUNRES"),
+        *municipality("mun_birth", "CODMUNNASC"),
+        int_digits("IDADEMAE").alias("mother_age_years"),
+        *scalar("PESO", "birth_weight_g", "birth_weight_state", lower=300, upper=7000, sentinels=["0", "00", "000", "0000", "9999"]),
+        *scalar("SEMAGESTAC", "gestational_weeks", "gestational_age_state", lower=20, upper=45, sentinels=["0", "00", "99"]),
+        *scalar("APGAR1", "apgar_1min", "apgar_1min_state", lower=0, upper=10, sentinels=["99"]),
+        *scalar("APGAR5", "apgar_5min", "apgar_5min_state", lower=0, upper=10, sentinels=["99"]),
+        *count2("QTDFILVIVO", "live_children_count", "live_children_state"),
+        *count2("QTDFILMORT", "deceased_children_count", "deceased_children_state"),
+        *count2("QTDGESTANT", "prior_pregnancy_count", "prior_pregnancy_state"),
+        *count2("QTDPARTNOR", "prior_vaginal_delivery_count", "prior_vaginal_delivery_state"),
+        *count2("QTDPARTCES", "prior_cesarean_delivery_count", "prior_cesarean_delivery_state"),
+        event_key.alias("_event_key"),
+        anomaly_flag.alias("anomaly_flag"),
+        anomaly_code.alias("anomaly_icd_code"),
+    ).with_columns(
+        pl.concat_str([pl.lit("SINASC-"), pl.col("_event_key")]).alias("event_id"),
+        pl.lit("SINASC").alias("source_system"),
+        pl.col("_birth_dt").cast(pl.Utf8).alias("birth_date"),
+        pl.col("_birth_year").alias("birth_year"),
+        pl.when(clean("DTNASC").is_null()).then(pl.lit("missing"))
+        .when(pl.col("_birth_dt").is_null()).then(pl.lit("invalid"))
+        .otherwise(pl.lit("valid")).alias("birth_date_state"),
+        clean("DTNASCMAE").alias("maternal_birth_date"),
+        pl.when(digits("SEXO") == "1").then(pl.lit("male"))
+        .when(digits("SEXO") == "2").then(pl.lit("female"))
+        .when(digits("SEXO") == "9").then(None)
+        .otherwise(None).alias("newborn_sex"),
+        pl.when(digits("SEXO").is_null()).then(pl.lit("missing"))
+        .when(digits("SEXO").is_in(["1", "2"])).then(pl.lit("valid"))
+        .when(digits("SEXO") == "9").then(pl.lit("unknown"))
+        .otherwise(pl.lit("invalid")).alias("newborn_sex_state"),
+        pl.when(digits("RACACOR").is_in(["1", "2", "3", "4", "5"])).then(digits("RACACOR")).otherwise(None).alias("newborn_race_admin"),
+        pl.when(digits("RACACOR").is_null()).then(pl.lit("missing"))
+        .when(digits("RACACOR").is_in(["1", "2", "3", "4", "5"])).then(pl.lit("valid_admin_race"))
+        .when(digits("RACACOR") == "9").then(pl.lit("ignored_sentinel"))
+        .otherwise(pl.lit("invalid")).alias("newborn_race_state"),
+        pl.when(digits("RACACORMAE").is_in(["1", "2", "3", "4", "5"])).then(digits("RACACORMAE")).otherwise(None).alias("maternal_race_admin"),
+        pl.when(digits("RACACORMAE").is_null()).then(pl.lit("missing"))
+        .when(digits("RACACORMAE").is_in(["1", "2", "3", "4", "5"])).then(pl.lit("valid_admin_race"))
+        .when(digits("RACACORMAE") == "9").then(pl.lit("ignored_sentinel"))
+        .otherwise(pl.lit("invalid")).alias("maternal_race_state"),
+        pl.col("birth_weight_g").alias("birth_weight_grams"),
+        pl.when(digits("PARTO").is_in(["1", "2", "9"])).then(digits("PARTO")).otherwise(digits("PARTO")).alias("delivery_mode_code"),
+        pl.when(digits("PARTO").is_null()).then(pl.lit("missing"))
+        .when(digits("PARTO") == "9").then(pl.lit("sentinel"))
+        .when(digits("PARTO").is_in(["1", "2"])).then(pl.lit("valid"))
+        .otherwise(pl.lit("invalid")).alias("delivery_mode_state"),
+        pl.when((digits("CONSULTAS").is_not_null()) & (digits("CONSULTAS") != "99") & (digits("CONSULTAS").cast(pl.Int64, strict=False) <= 98))
+        .then(digits("CONSULTAS").cast(pl.Int64, strict=False)).otherwise(None).alias("prenatal_consult_count"),
+        pl.when(digits("CONSULTAS").is_null()).then(pl.lit("missing"))
+        .when(digits("CONSULTAS") == "99").then(pl.lit("sentinel"))
+        .when(digits("CONSULTAS").cast(pl.Int64, strict=False) > 98).then(pl.lit("invalid"))
+        .otherwise(pl.lit("valid")).alias("prenatal_consult_state"),
+        digits("CONSULTAS").alias("prenatal_consult_raw_digits"),
+        clean("CONSULTAS").alias("prenatal_visit_group"),
+        pl.when(digits("IDANOMAL").is_null()).then(pl.lit("missing"))
+        .when(digits("IDANOMAL") == "1").then(pl.lit("valid_present"))
+        .when(digits("IDANOMAL") == "2").then(pl.lit("valid_absent"))
+        .when(digits("IDANOMAL") == "9").then(pl.lit("sentinel"))
+        .otherwise(pl.lit("invalid")).alias("anomaly_flag_state"),
+        pl.when(pl.col("anomaly_icd_code").is_null() & (pl.col("anomaly_flag") == True)).then(pl.lit("flag_present_code_missing"))
+        .when(pl.col("anomaly_icd_code").is_null() & (pl.col("anomaly_flag") == False)).then(pl.lit("absent"))
+        .when(pl.col("anomaly_icd_code").is_null()).then(pl.lit("unknown"))
+        .when(pl.col("anomaly_icd_code").str.starts_with("Q")).then(pl.lit("valid_q_anomaly"))
+        .when(pl.col("anomaly_flag") == True).then(pl.lit("valid_non_q_with_present_flag"))
+        .when(pl.col("anomaly_flag") == False).then(pl.lit("valid_non_q_absent"))
+        .otherwise(pl.lit("valid_non_q_not_anomaly")).alias("anomaly_icd_state"),
+        ((pl.col("anomaly_flag") == True) | pl.col("anomaly_icd_code").str.starts_with("Q")).fill_null(False).alias("anomaly_positive"),
+        pl.when(pl.col("_birth_year").is_not_null() & pl.col("mun_residence_cod6").is_not_null()).then(pl.lit("valid")).otherwise(pl.lit("invalid_identity")).alias("record_state"),
+        pl.lit(source_manifest_hash).alias("source_manifest_hash"),
+        pl.concat_str([pl.lit(source_manifest_hash), pl.lit(":"), pl.col("_row_idx").cast(pl.Utf8)]).hash().cast(pl.Utf8).alias("row_hash"),
+        pl.lit(None, dtype=pl.Utf8).alias("raw_json"),
+    ).select([
+        "event_id", "source_system", "birth_date", "birth_year", "birth_date_state",
+        "mun_residence_cod6", "mun_residence_cod7", "mun_residence_state",
+        "mun_birth_cod6", "mun_birth_cod7", "mun_birth_state",
+        "mother_age_years", "maternal_birth_date", "newborn_sex", "newborn_sex_state",
+        "newborn_race_admin", "newborn_race_state", "maternal_race_admin", "maternal_race_state",
+        "birth_weight_g", "birth_weight_grams", "birth_weight_state", "gestational_weeks",
+        "gestational_age_state", "apgar_1min", "apgar_1min_state", "apgar_5min",
+        "apgar_5min_state", "delivery_mode_code", "delivery_mode_state",
+        "prenatal_consult_count", "prenatal_consult_state", "prenatal_consult_raw_digits",
+        "prenatal_visit_group", "live_children_count", "live_children_state",
+        "deceased_children_count", "deceased_children_state", "prior_pregnancy_count",
+        "prior_pregnancy_state", "prior_vaginal_delivery_count", "prior_vaginal_delivery_state",
+        "prior_cesarean_delivery_count", "prior_cesarean_delivery_state", "anomaly_flag",
+        "anomaly_flag_state", "anomaly_icd_code", "anomaly_icd_state", "anomaly_positive",
+        "record_state", "source_manifest_hash", "row_hash", "raw_json",
+    ])
     out.write_parquet(out_path)
     valid_rows = int((out.get_column("record_state") == "valid").sum()) if out.height else 0
     return {

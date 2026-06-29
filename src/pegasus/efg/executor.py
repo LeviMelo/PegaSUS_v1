@@ -447,6 +447,38 @@ def _load_parent_tensor(parent: FieldNode) -> pl.DataFrame:
     return df
 
 
+_YEAR_KEYS = ("year", "admission_year", "birth_year", "competence_year")
+
+
+def _temporal_lag_of(field: Any) -> int:
+    """Year lag declared for a bridge field (support/operator_params), else 0."""
+    support = _as_dict(getattr(field, "support", {}) or {})
+    params = _as_dict(support.get("operator_params") or support.get("params") or {})
+    for source in (support, params):
+        value = source.get("temporal_lag")
+        if value is not None:
+            try:
+                k = int(value)
+            except (TypeError, ValueError):
+                return 0
+            return k if k > 0 else 0
+    return 0
+
+
+def _shift_year(df: pl.DataFrame, lag: int) -> pl.DataFrame:
+    """Add `lag` to the first present year column so left(t) aligns to right(t+lag).
+
+    Output cell year t then pairs the left operand's value from year t-lag (MSD §2.11
+    delayed cross-source effect). Pure and column-agnostic across the SIH/SINASC/SIM
+    year axis names."""
+    if lag <= 0:
+        return df
+    for column in _YEAR_KEYS:
+        if column in df.columns:
+            return df.with_columns((pl.col(column).cast(pl.Int64, strict=False) + lag).alias(column))
+    return df
+
+
 def _join_keys(left: pl.DataFrame, right: pl.DataFrame) -> list[str]:
     common = [column for column in left.columns if column in right.columns]
     return [column for column in common if column not in METADATA_COLUMNS and column != VALUE_COLUMN]
@@ -713,6 +745,12 @@ def _compute_bridge_tensor(field: FieldNode, parents_by_id: dict[str, FieldNode]
     if _is_bridge_divergence(field) and len(parent_ids) == 2:
         p0 = _load_parent_tensor(parents_by_id[parent_ids[0]])
         p1 = _load_parent_tensor(parents_by_id[parent_ids[1]])
+        # Temporal-lag divergence (MSD §2.11): shift the left operand's year by k so
+        # the output cell at year t pairs left(t-k) with right(t) — log(left(t-k)/right(t)).
+        # Declared by the bridge grammar; 0 = the standard contemporaneous divergence.
+        lag = _temporal_lag_of(field)
+        if lag:
+            p0 = _shift_year(p0, lag)
         keys = _join_keys(p0, p1)
         if not keys:
             raise RuntimeError("Bridge divergence requires intersecting support axes.")

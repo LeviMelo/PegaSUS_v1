@@ -325,6 +325,10 @@ def apply_operator(
         support = dict((alignment.support_after_alignment if alignment else None) or left.support)
         support.update({"support_kind": "cross_source_divergence", "divergence_left_carrier": left.carrier,
                         "divergence_right_carrier": right.carrier, "epsilon": 1e-9})
+        # Carry a declared year lag (MSD §2.11) into the support so the executor pairs
+        # left(t-k) with right(t) when materializing the divergence tensor.
+        if operator.params.get("temporal_lag"):
+            support["temporal_lag"] = int(operator.params["temporal_lag"])
         axes = {key: value for key, value in left.axes.items() if key in right.axes and right.axes[key] == value}
         # Preserve shared stratifier axes (cause-specific / demographic divergence).
         for axis_name in ("icd_chapter", "icd_block", "curated_cause_group", "sex", "age_group", "race"):

@@ -94,3 +94,22 @@ entries:
   description: >-
     Natural-balance divergence log(SINASC live births / SIM deaths) on shared
     (year, municipality) support — a demographic vitality gradient.
+- id: morbidity_mortality_divergence_lag1_bridge
+  status: active
+  bridge_type: morbidity_mortality_lag1_divergence
+  left_carrier: HospitalAdmissions
+  right_carrier: Deaths
+  temporal_lag: 1
+  operators:
+  - divergence_log_ratio
+  required_metadata:
+  - support_intersection
+  warnings:
+  - administrative_morbidity_not_incidence
+  - divergence_is_observational_not_causal
+  - temporal_lag_divergence_is_observational_not_causal
+  description: >-
+    Lagged cross-source divergence log(SIH admissions(t-1) / SIM deaths(t)) on shared
+    municipality (MSD §2.11) — delayed morbidity-to-mortality gradient. A generic
+    demonstration of registry-declared temporal-lag divergences; left operand year is
+    shifted by 1 before the shared-support join.

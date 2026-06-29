@@ -790,16 +790,30 @@ def _build_efg_base(
             if not left_carrier or not right_carrier:
                 continue
             bridge_type = str(grammar.get("bridge_type"))
+            # Optional registry-declared year lag (MSD §2.11): a lagged divergence
+            # pairs left(t-k) with right(t), e.g. arbovirus admissions(t-1) vs a birth
+            # outcome(t). 0/absent = the standard contemporaneous divergence.
+            try:
+                temporal_lag = int(grammar.get("temporal_lag") or 0)
+            except (TypeError, ValueError):
+                temporal_lag = 0
+            lag_suffix = f".lag{temporal_lag}" if temporal_lag > 0 else ""
             rights_by_sig: dict[frozenset[str], list[FieldNode]] = {}
             for right in _event_counts(str(right_carrier)):
                 rights_by_sig.setdefault(_signature(right), []).append(right)
             for left in _event_counts(str(left_carrier)):
                 for right in rights_by_sig.get(_signature(left), []):
+                    params: dict[str, Any] = {
+                        "name": f"{left_carrier}_vs_{right_carrier}.{bridge_type}{lag_suffix}",
+                        "bridge_type": bridge_type,
+                    }
+                    if temporal_lag > 0:
+                        params["temporal_lag"] = temporal_lag
                     operator = OperatorSpec(
                         name=EFGOperator.DIVERGENCE.value,
                         role=bridge_type,
                         output_kind="bridge_divergence",
-                        params={"name": f"{left_carrier}_vs_{right_carrier}.{bridge_type}", "bridge_type": bridge_type},
+                        params=params,
                     )
                     alignment = align_fields(
                         left=left, right=right, operator=operator, intent=intent, registries=registry_arg,

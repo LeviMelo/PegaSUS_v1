@@ -63,9 +63,3 @@ MSD.md
 .r-library/
 .r-makevars
 src/codebase_dump_src.txt
-
-#documentation
-DATASUS_CONPENDIUM.md
-DATASUS_DESC.md
-SIDRA_COMPENDIUM.md
-SIDRA_DESC.md

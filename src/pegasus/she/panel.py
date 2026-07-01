@@ -151,11 +151,19 @@ def compile_common_panel(
     *,
     resolution: Resolution = "year",
     v_fields_path: str | Path | None = None,
+    geography_prefixes: frozenset[str] | set[str] | None = None,
 ) -> CommonPanel:
-    """Assemble the CommonPanel from a compiled run's materialized field tensors."""
+    """Assemble the CommonPanel from a compiled run's materialized field tensors.
+
+    ``geography_prefixes`` (2-digit cod6 UF prefixes) restricts the panel index to
+    the run's geographic scope — a defensive filter mirroring the EFG executor's
+    scope guard, so a panel built over tensors that predate that guard is still
+    scoped correctly.
+    """
     run_dir = Path(run_dir)
     v_path = Path(v_fields_path) if v_fields_path else run_dir / "V_fields.parquet"
     catalog = pl.read_parquet(v_path)
+    prefixes = frozenset(str(p) for p in geography_prefixes) if geography_prefixes else None
 
     cell_keys: tuple[str, ...] = ("municipality_cod6", "year") if resolution == "year" else ("municipality_cod6", "year", "month")
 
@@ -171,6 +179,10 @@ def compile_common_panel(
         meta[fid] = {**row, "_tensor": tensor}
 
     index = _build_index(tensors, resolution, cell_keys)
+    if prefixes is not None and index.height:
+        index = index.filter(
+            pl.col("municipality_cod6").cast(pl.Utf8).str.slice(0, 2).is_in(list(prefixes))
+        )
 
     value_frame = index.clone()
     manifest_rows: list[dict[str, Any]] = []

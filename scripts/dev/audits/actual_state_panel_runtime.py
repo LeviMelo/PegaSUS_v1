@@ -426,19 +426,20 @@ def run_actual_state_panel(*, intent_name: str | None = None) -> dict[str, Any]:
             config=DatasusConfig(
                 rscript_path=str(rscript),
                 r_library_path=str(R_LIBRARY),
-                r_timeout_seconds=3600,
-                heartbeat_timeout_seconds=600,
+                r_timeout_seconds=int(_os.environ.get("PEGASUS_DATASUS_R_TIMEOUT_SECONDS", 3600)),
+                heartbeat_timeout_seconds=int(_os.environ.get("PEGASUS_DATASUS_HEARTBEAT_TIMEOUT_SECONDS", 300)),
+                max_parallel_requests=int(_os.environ.get("PEGASUS_DATASUS_MAX_PARALLEL_REQUESTS", 8)),
             ),
             cache=DatasusCache(data_root / "cache"),
             data_root=data_root,
             manifest_root=data_root / "manifests",
         )
 
-        batches: dict[str, Any] = {}
+        # One global worker pool across all systems AND years (was serial per system).
+        batches = client.fetch_systems(systems=list(active_systems), uf="AL", years=years)
         requests_by_system: dict[str, list[Any]] = {}
         for system in active_systems:
-            batch = client.fetch(system=system, uf="AL", years=years)
-            batches[system] = batch
+            batch = batches[system]
             if not batch.ok:
                 payload["classification"] = "source_unavailable"
                 raise RuntimeError(f"DATASUS acquisition failed for {system}: {batch.as_manifest()}")

@@ -46,11 +46,7 @@ class MicrodatasusClient:
         self.data_root = Path(data_root)
         self.manifest_root = Path(manifest_root)
 
-    def fetch(self, *, system: str, uf: str, years: str) -> MicrodatasusBatchResult:
-        requests = build_datasus_manifests(
-            system=system, uf=uf, years=years,
-            config={"rscript_path": self.config.rscript_path}, data_root=self.data_root,
-        )
+    def _run_requests(self, requests: list[DATASUSRequestManifest]) -> MicrodatasusBatchResult:
         if not requests:
             return MicrodatasusBatchResult((), ())
 
@@ -67,17 +63,45 @@ class MicrodatasusClient:
         worker_count = min(max(1, self.config.max_parallel_requests), len(requests))
         if worker_count == 1:
             for idx, request in enumerate(requests):
-                result, path = run_one(request)
-                completed[idx] = result
-                paths[idx] = path
+                completed[idx], paths[idx] = run_one(request)
         else:
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="datasus-fetch") as pool:
                 futures = {pool.submit(run_one, request): idx for idx, request in enumerate(requests)}
                 for future in as_completed(futures):
                     idx = futures[future]
-                    result, path = future.result()
-                    completed[idx] = result
-                    paths[idx] = path
+                    completed[idx], paths[idx] = future.result()
         if any(item is None for item in completed) or any(item is None for item in paths):
             raise RuntimeError("DATASUS parallel fetch did not complete all request slots")
         return MicrodatasusBatchResult(tuple(completed), tuple(paths))
+
+    def fetch(self, *, system: str, uf: str, years: str) -> MicrodatasusBatchResult:
+        requests = build_datasus_manifests(
+            system=system, uf=uf, years=years,
+            config={"rscript_path": self.config.rscript_path}, data_root=self.data_root,
+        )
+        return self._run_requests(list(requests))
+
+    def fetch_systems(self, *, systems: list[str], uf: str, years: str) -> dict[str, MicrodatasusBatchResult]:
+        """Fetch multiple systems in ONE global worker pool.
+
+        The per-system ``fetch`` parallelizes only that system's year requests, so
+        the harness/pipeline (which loop systems serially) leave systems waiting on
+        each other. Flattening every system's requests into a single pool bounded
+        by ``max_parallel_requests`` parallelizes across systems AND years, so a
+        slow SIH month no longer blocks SIM/SINASC/CNES — the dominant wall-clock
+        win for an all-source multi-year run.
+        """
+        all_requests: list[DATASUSRequestManifest] = []
+        spans: dict[str, tuple[int, int]] = {}
+        for system in systems:
+            reqs = list(build_datasus_manifests(
+                system=system, uf=uf, years=years,
+                config={"rscript_path": self.config.rscript_path}, data_root=self.data_root,
+            ))
+            spans[system] = (len(all_requests), len(all_requests) + len(reqs))
+            all_requests.extend(reqs)
+        batch = self._run_requests(all_requests)
+        out: dict[str, MicrodatasusBatchResult] = {}
+        for system, (lo, hi) in spans.items():
+            out[system] = MicrodatasusBatchResult(batch.requests[lo:hi], batch.manifest_paths[lo:hi])
+        return out

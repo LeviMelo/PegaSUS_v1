@@ -38,8 +38,8 @@ class DatasusConfig:
     rscript_path: str = "Rscript"
     r_library_path: str | None = None
     r_timeout_seconds: int = 7200
-    heartbeat_timeout_seconds: int = 900
-    max_parallel_requests: int = 4
+    heartbeat_timeout_seconds: int = 300
+    max_parallel_requests: int = 8
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "DatasusConfig":

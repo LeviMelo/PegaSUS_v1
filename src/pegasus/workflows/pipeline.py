@@ -217,8 +217,11 @@ def _acquire_datasus(
 ) -> list[dict[str, Any]]:
     client = client or MicrodatasusClient(data_root=str(data_root), manifest_root=data_root / "manifests" / "datasus")
     artifacts: list[dict[str, Any]] = []
+    # Fetch all systems in one global worker pool (parallel across systems AND
+    # years) instead of one system at a time.
+    batches = client.fetch_systems(systems=systems, uf=uf, years=years)
     for system in systems:
-        batch = client.fetch(system=system, uf=uf, years=years)
+        batch = batches[system]
         if not batch.ok:
             failed = [r for r in batch.requests if r.status not in {"success", "cached"}]
             if failed:

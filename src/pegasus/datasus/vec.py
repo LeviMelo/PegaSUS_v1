@@ -97,6 +97,10 @@ class Cols:
         ``DDMMYYYY`` runs, and slash/ISO ``DD/MM/YYYY`` / ``YYYY-MM-DD`` text.
         """
         d = self.digits(*names)
+        # An 8-digit DDMMYYYY date stored as an integer loses its leading zero
+        # (e.g. 1012022 for 01012022); zero-pad a 7-digit run back to 8 so the
+        # numeric-column case parses identically to the string case.
+        d = pl.when(d.str.len_chars() == 7).then(pl.lit("0") + d).otherwise(d)
         c = self.clean(*names)
         return pl.coalesce([
             d.str.strptime(pl.Date, "%Y%m%d", strict=False),

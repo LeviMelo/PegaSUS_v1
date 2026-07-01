@@ -25,6 +25,7 @@ import numpy as np
 from sklearn.covariance import graphical_lasso
 
 from pegasus.geo.spatial_graph import structural_cod6_adjacency
+from pegasus.pirs.ldo.covariance import pairwise_correlation
 from pegasus.pirs.ldo.margins import GaussianField
 
 
@@ -82,49 +83,41 @@ def fit_contemporaneous_precision(
     alpha: float = 0.05,
     edge_threshold: float = 0.05,
     spatial_whiten: bool = True,
+    min_coverage: int = 30,
+    min_overlap: int = 20,
 ) -> PrecisionFit:
-    """Estimate the sparse contemporaneous variable precision ``Ω_var`` (K=0)."""
+    """Estimate the sparse contemporaneous variable precision ``Ω_var`` (K=0).
+
+    Uses the pairwise-complete correlation over ``(s,t)`` cells (missing-aware; no
+    impute-0), so a link is genuine covariation rather than an artefact of the
+    shared missingness pattern. Variables with insufficient coverage are dropped.
+    """
     p, S, T = field.shape
-    Z = field.Z
-    if spatial_whiten and S > 1:
-        Q = build_spatial_precision(field.space_ids, kappa=kappa)
-        Q_half = _matrix_sqrt_psd(Q)
-        Zw = _whiten_spatial(Z, Q_half)
-    else:
-        Zw = np.where(np.isfinite(Z), Z, 0.0)
-
-    # Samples = (s, t) cells; features = p variables.
-    D = Zw.reshape(p, S * T).T  # (n_samples, p)
-    # Standardize features so graphical_lasso's single alpha is comparable.
-    mu = D.mean(axis=0)
-    sd = D.std(axis=0)
-    sd[sd == 0] = 1.0
-    Dz = (D - mu) / sd
-    n = Dz.shape[0]
-
-    emp_cov = np.cov(Dz, rowvar=False)
-    emp_cov += 1e-4 * np.eye(p)  # ridge for numerical PD
+    samples = field.Z.reshape(p, S * T)  # (p variables, n cells), NaN where absent
+    pw = pairwise_correlation(samples, min_coverage=min_coverage, min_overlap=min_overlap)
+    kept = pw.kept
+    corr = pw.correlation + 1e-4 * np.eye(len(kept))
     try:
-        _, precision = graphical_lasso(emp_cov, alpha=alpha, max_iter=200)
+        _, precision = graphical_lasso(corr, alpha=alpha, max_iter=200)
     except Exception:
-        precision = np.linalg.pinv(emp_cov)
+        precision = np.linalg.pinv(corr)
 
     d = np.sqrt(np.clip(np.diag(precision), 1e-12, None))
     partial = -precision / np.outer(d, d)
     np.fill_diagonal(partial, 1.0)
 
     edges: list[tuple[int, int, float]] = []
-    for i in range(p):
-        for j in range(i + 1, p):
-            r = float(partial[i, j])
+    for a in range(len(kept)):
+        for b in range(a + 1, len(kept)):
+            r = float(partial[a, b])
             if abs(r) >= edge_threshold:
-                edges.append((i, j, r))
+                edges.append((kept[a], kept[b], r))
     edges.sort(key=lambda e: abs(e[2]), reverse=True)
     return PrecisionFit(
         variables=field.variables,
         precision=precision,
         partial_correlation=partial,
-        n_samples=n,
+        n_samples=int(pw.coverage.min()) if len(kept) else 0,
         edges=edges,
     )
 

@@ -59,8 +59,9 @@ def stability_select(
         seen: set[tuple[str, str, int]] = set()
         for lk in res.lagged_links:
             # bucket peak lags within tolerance so a jittering peak still counts
-            key = _edge_key(lk.source, lk.target, lk.peak_lag)
-            seen.add(key)
+            seen.add(_edge_key(lk.source, lk.target, lk.peak_lag))
+        for src, tgt, _ in res.contemporaneous:
+            seen.add(_edge_key(src, tgt, 0))
         for key in seen:
             counts[key] = counts.get(key, 0) + 1
     if runs == 0:
@@ -124,6 +125,20 @@ def to_link_records(
                 certification_status="selected" if certified else "descriptive",
                 null_strategy=null_strategy,
                 fdr_method=fdr_method,
+                warnings=("low_n_eff_descriptive_only",) if low_power else (),
+            )
+        )
+    for source, target, pcorr in lagged.contemporaneous:
+        records.append(
+            LinkRecord(
+                source_var=source,
+                target_var=target,
+                edge_type="contemporaneous",
+                lag_k=0,
+                weight=pcorr,
+                partial_correlation=pcorr,
+                stability=stability.get(_edge_key(source, target, 0)),
+                certification_status="descriptive" if low_power else "selected",
                 warnings=("low_n_eff_descriptive_only",) if low_power else (),
             )
         )

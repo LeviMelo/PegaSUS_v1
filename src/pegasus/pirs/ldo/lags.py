@@ -19,9 +19,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from pegasus.pirs.ldo.covariance import pairwise_correlation
 from pegasus.pirs.ldo.margins import GaussianField
 from pegasus.pirs.ldo.lowrank import SparseLowRankFit, fit_sparse_plus_lowrank
-from pegasus.pirs.ldo.precision import _matrix_sqrt_psd, build_spatial_precision
 
 
 @dataclass
@@ -40,32 +40,19 @@ class LaggedFit:
     fit: SparseLowRankFit
     lagged_links: list[LaggedLink] = field(default_factory=list)
     latent_shared: list[tuple[str, str, float]] = field(default_factory=list)
+    contemporaneous: list[tuple[str, str, float]] = field(default_factory=list)  # (i, j, partial_corr) lag-0
 
 
-def _spatially_whiten(field: GaussianField, kappa: float) -> np.ndarray:
-    p, S, T = field.shape
-    Zc = np.where(np.isfinite(field.Z), field.Z, 0.0)
-    if S <= 1:
-        return Zc
-    Q = build_spatial_precision(field.space_ids, kappa=kappa)
-    Q_half = _matrix_sqrt_psd(Q)
-    out = np.empty_like(Zc)
-    for j in range(p):
-        out[j] = Q_half @ Zc[j]
-    return out
-
-
-def _build_lagged_samples(Zw: np.ndarray, K: int) -> np.ndarray:
-    """(p,S,T) whitened → (n_samples, p*(K+1)); columns [lag0 vars.., lag1.., ..]."""
-    p, S, T = Zw.shape
+def _build_lagged_feature_matrix(Z: np.ndarray, K: int) -> np.ndarray:
+    """(p,S,T) → (p*(K+1), n_samples) preserving NaN; feature f=lag*p+var."""
+    p, S, T = Z.shape
     if T <= K:
         raise ValueError(f"need T>{K} time points for lag order K={K}; got T={T}")
-    rows: list[np.ndarray] = []
+    cols: list[np.ndarray] = []
     for t in range(K, T):
         for s in range(S):
-            feat = np.concatenate([Zw[:, s, t - lag] for lag in range(K + 1)])
-            rows.append(feat)
-    return np.asarray(rows, dtype=np.float64)
+            cols.append(np.concatenate([Z[:, s, t - lag] for lag in range(K + 1)]))
+    return np.asarray(cols, dtype=np.float64).T  # (features, samples)
 
 
 def fit_lagged_links(
@@ -76,18 +63,29 @@ def fit_lagged_links(
     lambda1: float = 0.1,
     lambda2: float = 0.1,
     edge_threshold: float = 0.05,
+    min_coverage: int = 30,
+    min_overlap: int = 20,
 ) -> LaggedFit:
-    """Fit the time-extended precision and read off directed lagged links."""
+    """Fit the time-extended precision (missing-aware) and read off directed lagged links.
+
+    The lag-extended features (variable × lag) are correlated pairwise-complete —
+    each entry from the cells where both lagged features are observed — so links
+    survive the sparsity of real panels instead of collapsing under impute-0.
+    """
     p = len(field.variables)
-    Zw = _spatially_whiten(field, kappa)
-    D = _build_lagged_samples(Zw, K)
-    D = (D - D.mean(axis=0)) / np.where(D.std(axis=0) == 0, 1.0, D.std(axis=0))
-    emp = np.cov(D, rowvar=False)
-    fit = fit_sparse_plus_lowrank(emp, lambda1=lambda1, lambda2=lambda2, edge_threshold=edge_threshold)
+    feat = _build_lagged_feature_matrix(field.Z, K)  # (p*(K+1), n)
+    pw = pairwise_correlation(feat, min_coverage=min_coverage, min_overlap=min_overlap)
+    kept = pw.kept
+    pos = {f: a for a, f in enumerate(kept)}  # feature index → matrix position
+    fit = fit_sparse_plus_lowrank(pw.correlation, lambda1=lambda1, lambda2=lambda2, edge_threshold=edge_threshold)
 
     S = fit.S
     d = np.sqrt(np.clip(np.diag(S), 1e-12, None))
     partial = -S / np.outer(d, d)
+
+    def entry(feat_a: int, feat_b: int) -> float:
+        a, b = pos.get(feat_a), pos.get(feat_b)
+        return float(partial[a, b]) if a is not None and b is not None else 0.0
 
     # Directed lagged links: source i at lag k (>0) → target j at lag 0.
     lagged_links: list[LaggedLink] = []
@@ -95,8 +93,7 @@ def fit_lagged_links(
         for j in range(p):
             if i == j:
                 continue
-            curve = [float(partial[j, lag * p + i]) for lag in range(K + 1)]
-            # peak over lags >= 1 (directed); lag 0 is contemporaneous/undirected
+            curve = [entry(j, lag * p + i) for lag in range(K + 1)]  # feat(0,j) vs feat(k,i)
             lag_mags = [(k, abs(curve[k])) for k in range(1, K + 1)]
             if not lag_mags:
                 continue
@@ -113,13 +110,27 @@ def fit_lagged_links(
                 )
     lagged_links.sort(key=lambda e: abs(e.peak_partial_correlation), reverse=True)
 
-    # latent_shared over the lag-0 block (variables co-loading on a common factor).
-    latent_shared: list[tuple[str, str, float]] = []
-    for i, j, v in fit.latent_shared:
-        if i < p and j < p:  # lag-0 variables only
-            latent_shared.append((field.variables[i], field.variables[j], v))
+    # Contemporaneous (undirected) edges from the lag-0 × lag-0 block of S.
+    contemporaneous: list[tuple[str, str, float]] = []
+    for i in range(p):
+        for j in range(i + 1, p):
+            r = entry(i, j)  # feat(0,i) vs feat(0,j)
+            if abs(r) >= edge_threshold:
+                contemporaneous.append((field.variables[i], field.variables[j], r))
+    contemporaneous.sort(key=lambda e: abs(e[2]), reverse=True)
 
-    return LaggedFit(variables=field.variables, K=K, fit=fit, lagged_links=lagged_links, latent_shared=latent_shared)
+    # latent_shared over the lag-0 block: kept features that are lag-0 variables.
+    lag0_feature_to_var = {f: f for f in kept if f < p}
+    latent_shared: list[tuple[str, str, float]] = []
+    for a, b, v in fit.latent_shared:
+        fa, fb = kept[a], kept[b]
+        if fa in lag0_feature_to_var and fb in lag0_feature_to_var:
+            latent_shared.append((field.variables[fa], field.variables[fb], v))
+
+    return LaggedFit(
+        variables=field.variables, K=K, fit=fit,
+        lagged_links=lagged_links, latent_shared=latent_shared, contemporaneous=contemporaneous,
+    )
 
 
 __all__ = ["LaggedLink", "LaggedFit", "fit_lagged_links"]

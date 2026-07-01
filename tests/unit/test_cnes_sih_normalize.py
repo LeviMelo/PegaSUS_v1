@@ -10,10 +10,16 @@ def test_cnes_normalization_preserves_capacity_flags_and_cnpj(tmp_path: Path):
     df = pl.read_parquet(out)
     assert result["row_count"] == 3
     assert result["zero_facility_cnpj_rows"] == 1
-    assert result["invalid_flag_rows"] == 2
+    # Row 1's URGEMERG=2 used to read as InvalidFlagState under the old clamp_bool-
+    # only heuristic. The mechanically-ported microdatasus dictionary (codebook
+    # registry) says code "2" is a valid "Não" alias for this flag family, so only
+    # row 3's LEITHOSP=9 (a column microdatasus doesn't itself translate, still on
+    # the clamp_bool fallback) remains genuinely invalid.
+    assert result["invalid_flag_rows"] == 1
     assert "QTLEITP3" in result["capacity_components"]
     assert "capacity_vector_json" in df.columns
     assert "flag_state_json" in df.columns
+    assert "attribute_vector_json" in df.columns
 
 
 def test_sih_normalization_preserves_diagnostic_topology_and_cost_components(tmp_path: Path):

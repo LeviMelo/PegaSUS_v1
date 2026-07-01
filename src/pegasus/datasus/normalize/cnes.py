@@ -9,13 +9,19 @@ from typing import Any
 import polars as pl
 
 from pegasus.datasus.decoders import clamp_bool, filter_cnpj
+from pegasus.datasus.normalize.codebook import concept_for, lookup_name, translate
 from pegasus.datasus.normalize.completeness import check_raw_completeness
 from pegasus.datasus.normalize.primitives import Cols, read_raw_table, row_hash, struct_json
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
 
 CAPACITY_PREFIXES = ("QTINST", "QTLEIT")
+# Heuristic fallback for boolean service-flag columns process_cnes doesn't itself
+# translate (e.g. CENTRCIR/LEITHOSP aren't in microdatasus's own dictionary) --
+# registry-covered flags (below) take priority and use the faithful, mechanically-
+# ported microdatasus dictionary instead of this guess.
 FLAG_PREFIXES = ("GESPRG", "SERAP")
 FLAG_NAMES = {"NIVATE_A", "NIVATE_H", "ATENDAMB", "ATENDHOS", "URGEMERG", "CENTRCIR", "CENTROBS", "LEITHOSP"}
+_CNES_SERVICE_FLAG_CONCEPT = "cnes_service_flag"
 
 
 def _clean(value: Any) -> str | None:
@@ -92,8 +98,45 @@ def _capacity_columns(columns: list[str]) -> list[str]:
     return sorted(c for c in columns if c.upper().startswith(CAPACITY_PREFIXES))
 
 
-def _flag_columns(columns: list[str]) -> list[str]:
-    return sorted(c for c in columns if c.upper() in FLAG_NAMES or c.upper().startswith(FLAG_PREFIXES))
+def _registry_flag_columns(columns: list[str]) -> list[str]:
+    """Boolean service-flag columns microdatasus's process_cnes actually translates
+    (mechanically ported into the codebook registry) that are present in ``columns``."""
+    return sorted(c for c in columns if concept_for("CNES-ST", c) == _CNES_SERVICE_FLAG_CONCEPT)
+
+
+def _legacy_flag_columns(columns: list[str]) -> list[str]:
+    """Flag-shaped columns matching the pre-registry name/prefix heuristic that the
+    registry does NOT cover (e.g. CENTRCIR/LEITHOSP aren't in microdatasus's own
+    dictionary) -- decoded via the generic ``clamp_bool`` fallback."""
+    registry_covered = set(_registry_flag_columns(columns))
+    return sorted(c for c in columns if c not in registry_covered and (c.upper() in FLAG_NAMES or c.upper().startswith(FLAG_PREFIXES)))
+
+
+def _attribute_columns(columns: list[str]) -> list[str]:
+    """Non-flag categorical columns bound in the codebook registry (facility type,
+    legal nature, management model, ...) present in ``columns``."""
+    return sorted(c for c in columns if concept_for("CNES-ST", c) not in (None, _CNES_SERVICE_FLAG_CONCEPT))
+
+
+def _cnes_flag_decode(col: str, value: Any) -> tuple[int | None, str]:
+    """Decode one boolean service-flag cell to ``(0/1/None, DecodedBoolean-state)``.
+
+    Registry-covered columns use the mechanically-ported microdatasus dictionary
+    (faithful: e.g. code "2" is a valid "Não" alias for many CNES flags, not an
+    InvalidFlagState as the old clamp_bool-only heuristic guessed); everything else
+    falls back to ``clamp_bool``. The output vocabulary is kept as clamp_bool's
+    (ValidTrue/ValidFalse/MissingFlag/InvalidFlagState) so flag_state_json stays a
+    single consistent vocabulary regardless of which path decoded a given column.
+    """
+    if concept_for("CNES-ST", col) == _CNES_SERVICE_FLAG_CONCEPT:
+        value_, state = translate(_CNES_SERVICE_FLAG_CONCEPT, value)
+        if state == "valid":
+            return (1 if value_ else 0), ("ValidTrue" if value_ else "ValidFalse")
+        if state == "missing":
+            return None, "MissingFlag"
+        return None, "InvalidFlagState"
+    decoded = clamp_bool(value)
+    return decoded.value, decoded.state
 
 
 def normalize_cnes_st_record(row: dict[str, Any], *, source_manifest_hash: str) -> dict[str, Any]:
@@ -113,11 +156,18 @@ def normalize_cnes_st_record(row: dict[str, Any], *, source_manifest_hash: str) 
         capacity_states[col.upper()] = state
     flag_values: dict[str, int | None] = {}
     flag_states: dict[str, str] = {}
-    for col in _flag_columns(list(row)):
-        decoded = clamp_bool(row.get(col))
-        flag_values[col.upper()] = decoded.value
-        flag_states[col.upper()] = decoded.state
+    for col in [*_registry_flag_columns(list(row)), *_legacy_flag_columns(list(row))]:
+        value, state = _cnes_flag_decode(col, row.get(col))
+        flag_values[col.upper()] = value
+        flag_states[col.upper()] = state
     invalid_flags = sum(1 for state in flag_states.values() if state in {"InvalidFlagState", "UnparseableFlag"})
+    attribute_values: dict[str, Any] = {}
+    attribute_states: dict[str, str] = {}
+    for col in _attribute_columns(list(row)):
+        concept = concept_for("CNES-ST", col)
+        value, state = translate(concept, row.get(col))
+        attribute_values[col.upper()] = value
+        attribute_states[col.upper()] = state
     identity_state = "valid" if facility is not None and year is not None and cod6 is not None else "invalid_identity"
     return {
         "facility_id": facility,
@@ -144,6 +194,8 @@ def normalize_cnes_st_record(row: dict[str, Any], *, source_manifest_hash: str) 
         "flag_state_json": json.dumps(flag_states, ensure_ascii=False, sort_keys=True),
         "invalid_flag_count": invalid_flags,
         "flag_count": len(flag_states),
+        "attribute_vector_json": json.dumps(attribute_values, ensure_ascii=False, sort_keys=True),
+        "attribute_state_json": json.dumps(attribute_states, ensure_ascii=False, sort_keys=True),
         "record_state": identity_state,
         "source_manifest_hash": source_manifest_hash,
         "row_hash": _stable_hash(raw_payload),
@@ -162,7 +214,25 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
     """
     cx = Cols(df)
     capacity_cols = _capacity_columns(list(df.columns))
-    flag_cols = _flag_columns(list(df.columns))
+    registry_flag_cols = _registry_flag_columns(list(df.columns))
+    legacy_flag_cols = _legacy_flag_columns(list(df.columns))
+    flag_cols = [*registry_flag_cols, *legacy_flag_cols]
+    attribute_cols = _attribute_columns(list(df.columns))
+
+    def flag_exprs(col: str) -> tuple[pl.Expr, pl.Expr]:
+        """Vectorized twin of ``_cnes_flag_decode``: registry-covered columns use
+        the mechanically-ported microdatasus dictionary; everything else falls back
+        to ``Cols.flag_int``. Output kept in the clamp_bool state vocabulary."""
+        if col in registry_flag_cols:
+            value, state = cx.categorical(_CNES_SERVICE_FLAG_CONCEPT, col)
+            out_value = pl.when(state == "valid").then(value.cast(pl.Int64)).otherwise(None)
+            out_state = (
+                pl.when(state == "missing").then(pl.lit("MissingFlag"))
+                .when(state == "valid").then(pl.when(value).then(pl.lit("ValidTrue")).otherwise(pl.lit("ValidFalse")))
+                .otherwise(pl.lit("InvalidFlagState"))
+            )
+            return out_value, out_state
+        return cx.flag_int(col)
 
     # COMPETEN year/month split (CNES-specific): YYYYMM → (year, month) valid;
     # 4-digit → year_only; else invalid.
@@ -186,7 +256,8 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
     clin_v, clin_s = cx.nonneg_int("QTLEITP1")
     surg_v, surg_s = cx.nonneg_int("QTLEITP2")
     obst_v, obst_s = cx.nonneg_int("QTLEITP3")
-    flag = {col: cx.flag_int(col) for col in flag_cols}
+    flag = {col: flag_exprs(col) for col in flag_cols}
+    attribute = {col: cx.categorical(concept_for("CNES-ST", col), col) for col in attribute_cols}
 
     invalid_flag_count = (
         sum((flag[col][1].is_in(["InvalidFlagState", "UnparseableFlag"]).cast(pl.Int64) for col in flag_cols), pl.lit(0))
@@ -213,6 +284,8 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
         struct_json([flag[col][1].alias(col.upper()) for col in flag_cols]).alias("flag_state_json"),
         invalid_flag_count.alias("invalid_flag_count"),
         pl.lit(len(flag_cols)).cast(pl.Int64).alias("flag_count"),
+        (pl.struct([attribute[col][0].alias(col.upper()) for col in attribute_cols]).struct.json_encode() if attribute_cols else pl.lit("{}")).alias("attribute_vector_json"),
+        (pl.struct([attribute[col][1].alias(col.upper()) for col in attribute_cols]).struct.json_encode() if attribute_cols else pl.lit("{}")).alias("attribute_state_json"),
         pl.lit(source_manifest_hash).alias("source_manifest_hash"),
         pl.lit(None, dtype=pl.Utf8).alias("raw_json"),
     ).with_columns(
@@ -228,8 +301,8 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
         "surgical_bed_capacity", "surgical_bed_capacity_state",
         "obstetric_bed_capacity", "obstetric_bed_capacity_state",
         "capacity_vector_json", "capacity_state_json", "flag_vector_json", "flag_state_json",
-        "invalid_flag_count", "flag_count", "record_state",
-        "source_manifest_hash", "row_hash", "raw_json",
+        "invalid_flag_count", "flag_count", "attribute_vector_json", "attribute_state_json",
+        "record_state", "source_manifest_hash", "row_hash", "raw_json",
     ]
     return out.rename({"mun_facility_state": "municipality_code_state"}).select(ordered)
 

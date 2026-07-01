@@ -25,7 +25,13 @@ class TimeWindow(BaseModel):
 class UserIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # DataScope: which substrate exists (MSD §1.5). Orthogonal to execution_stage.
     run_profile: Literal["core_vital", "contextual", "full"] = "core_vital"
+    # ExecutionStage: how far the pipeline runs (MSD-II §II.5). `validate` = SHE+EFG
+    # legality only; `compile` = materialize V_fields+Q_tensor, no inference;
+    # `investigate` = full pipeline incl. PIRS/LDO. Inference keys
+    # (ModelAssociations/Hypotheses/…) are required-non-empty only at `investigate`.
+    execution_stage: Literal["validate", "compile", "investigate"] = "investigate"
     geography: GeographySelector
     time: TimeWindow
     health_seeds: list[str] = Field(default_factory=list)

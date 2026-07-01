@@ -69,6 +69,15 @@ def _run_profile_from_payloads(user_intent: dict[str, Any], run_config: dict[str
     return profile
 
 
+_EXECUTION_STAGES = {"validate", "compile", "investigate"}
+
+
+def _execution_stage_from_payloads(user_intent: dict[str, Any], run_config: dict[str, Any], manifest: dict[str, Any]) -> str:
+    stage = user_intent.get("execution_stage") or run_config.get("execution_stage") or manifest.get("execution_stage") or "investigate"
+    stage = str(stage)
+    return stage if stage in _EXECUTION_STAGES else "investigate"
+
+
 def _load_json_file(path: Path, *, errors: list[str], name: str) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -445,13 +454,17 @@ def _first_class_artifact_nonempty(root: Path, key: str) -> bool:
     return bool(getattr(table, "num_rows", 0))
 
 
-def _empty_by_profile_keys(warnings_table) -> set[str]:
+# Inference keys are required-non-empty only at ExecutionStage=investigate
+# (MSD-II §II.5); at validate/compile they may be empty with an empty_by_stage row.
+INFERENCE_KEYS = {"ModelAssociations", "ResidualAssociations", "Hypotheses"}
+
+
+def _empty_keys_for_code(warnings_table, code: str) -> set[str]:
     if "code" not in warnings_table.column_names:
         return set()
-    rows = warnings_table.to_pylist()
     keys: set[str] = set()
-    for row in rows:
-        if row.get("code") != "empty_by_profile":
+    for row in warnings_table.to_pylist():
+        if row.get("code") != code:
             continue
         message = str(row.get("message") or "")
         warning_id = str(row.get("warning_id") or "")
@@ -461,12 +474,24 @@ def _empty_by_profile_keys(warnings_table) -> set[str]:
     return keys
 
 
-def _validate_profile_nonempty_contract(*, root: Path, run_profile: str, warnings_table, errors: list[str]) -> None:
+def _empty_by_profile_keys(warnings_table) -> set[str]:
+    return _empty_keys_for_code(warnings_table, "empty_by_profile")
+
+
+def _validate_profile_nonempty_contract(
+    *, root: Path, run_profile: str, execution_stage: str, warnings_table, errors: list[str]
+) -> None:
     required = PROFILE_NONEMPTY.get(run_profile)
     if required is None:
         errors.append(f"unsupported run_profile for output profile validation: {run_profile}")
         return
-    declared_empty = _empty_by_profile_keys(warnings_table)
+    required = set(required)
+    # ExecutionStage gate (MSD-II §II.5): below `investigate`, inference keys are
+    # not required non-empty — but an empty one must still carry an empty_by_stage
+    # reason (anti-silence), which is admitted via declared_empty below.
+    if execution_stage != "investigate":
+        required = required - INFERENCE_KEYS
+    declared_empty = _empty_by_profile_keys(warnings_table) | _empty_keys_for_code(warnings_table, "empty_by_stage")
     for key in OUTPUT_BUNDLE_FILES:
         try:
             nonempty = _first_class_artifact_nonempty(root, key)
@@ -479,7 +504,7 @@ def _validate_profile_nonempty_contract(*, root: Path, run_profile: str, warning
             errors.append(f"{key} is empty under run_profile={run_profile} without an empty_by_profile warning")
 
 
-def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], budget: str, run_profile: str, errors: list[str], warnings: list[str]) -> None:
+def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manifest: dict[str, Any], budget: str, run_profile: str, execution_stage: str, errors: list[str], warnings: list[str]) -> None:
     try:
         v = _read(root / "V_fields.parquet")
         q = _read(root / "Q_tensor.parquet")
@@ -499,7 +524,7 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
     _require_columns(table_name="E_DAG", actual=set(edges.column_names), required=REQUIRED_E_DAG_COLUMNS, errors=errors)
     _require_columns(table_name="Q_tensor", actual=set(q.column_names), required=REQUIRED_Q_TENSOR_COLUMNS, errors=errors)
     _require_columns(table_name="VariableDictionary", actual=set(vd.column_names), required=REQUIRED_VARIABLE_DICTIONARY_COLUMNS, errors=errors)
-    _validate_profile_nonempty_contract(root=root, run_profile=run_profile, warnings_table=warnings_table, errors=errors)
+    _validate_profile_nonempty_contract(root=root, run_profile=run_profile, execution_stage=execution_stage, warnings_table=warnings_table, errors=errors)
     if q.num_rows == 0:
         errors.append("Q_tensor is empty")
     v_ids = _nonnull(_column_values(v, "field_id"))
@@ -609,5 +634,6 @@ def validate_output_bundle(*, run_dir: str, schema_registry: OutputSchemaRegistr
     user_intent, run_config, manifest = _validate_manifest_and_config(root=root, errors=errors, warnings=warnings)
     budget = str((user_intent or {}).get("budget") or run_config.get("budget") or "fast")
     run_profile = _run_profile_from_payloads(user_intent, run_config, manifest)
-    _validate_parquet_contracts(root=root, run_config=run_config, manifest=manifest, budget=budget, run_profile=run_profile, errors=errors, warnings=warnings)
+    execution_stage = _execution_stage_from_payloads(user_intent, run_config, manifest)
+    _validate_parquet_contracts(root=root, run_config=run_config, manifest=manifest, budget=budget, run_profile=run_profile, execution_stage=execution_stage, errors=errors, warnings=warnings)
     return OutputValidationResult(ok=not errors, errors=errors, warnings=warnings)

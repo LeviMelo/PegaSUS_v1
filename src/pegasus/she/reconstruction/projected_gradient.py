@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from pegasus.she.population.loss import evaluate_population_loss, validate_population_problem
-from pegasus.she.population.schema import PopulationSolverTelemetry, PopulationTensorProblem
+from pegasus.she.reconstruction.loss import evaluate_population_loss, validate_population_problem
+from pegasus.she.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorProblem
 
 
 @dataclass(frozen=True)

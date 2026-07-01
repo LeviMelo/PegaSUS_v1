@@ -7,17 +7,17 @@ import math
 from typing import Any
 
 from pegasus.compute.memory import MemoryPreflight, preflight_memory
-from pegasus.she.population.block_coordinate import solve_population_block_coordinate
-from pegasus.she.population.loss import evaluate_population_loss, validate_population_problem
-from pegasus.she.population.projected_gradient import (
+from pegasus.she.reconstruction.block_coordinate import solve_population_block_coordinate
+from pegasus.she.reconstruction.loss import evaluate_population_loss, validate_population_problem
+from pegasus.she.reconstruction.projected_gradient import (
     PopulationOptimizationResult,
     _initial_population,
     _migration_bounds,
     _project_migration,
     _project_population,
 )
-from pegasus.she.population.schema import PopulationSolverTelemetry, PopulationTensorProblem
-from pegasus.she.population.state_space import PopulationStateSpace, build_population_state_space
+from pegasus.she.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorProblem
+from pegasus.she.reconstruction.state_space import PopulationStateSpace, build_population_state_space
 
 
 @dataclass(frozen=True)

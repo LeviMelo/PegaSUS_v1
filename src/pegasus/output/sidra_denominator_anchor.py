@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 from pegasus.geo.support import SupportAlignmentError, assert_municipality_year_support_aligned
 from pegasus.output.table_io import append_replace_rows, read_rows, write_rows_like
-from pegasus.she.population.sidra_anchor import SidraPopulationAnchor, load_sidra_population_total_anchor
+from pegasus.sidra.population_cube.anchor import SidraPopulationAnchor, load_sidra_population_total_anchor
 
 
 def _remove_by_values(rows: list[dict[str, Any]], column: str, values: set[Any]) -> list[dict[str, Any]]:

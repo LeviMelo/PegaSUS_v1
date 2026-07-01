@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pegasus.registries.population import DENSE_NATIONAL_CELL_THRESHOLD, PopulationSolverSpec
-from pegasus.she.population.schema import PopulationSolverTelemetry, PopulationTensorDiagnostics, PopulationTensorRequest
+from pegasus.she.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorDiagnostics, PopulationTensorRequest
 
 
 def population_tensor_diagnostics(

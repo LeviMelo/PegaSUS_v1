@@ -189,7 +189,7 @@ def build_compile_stage_plan(
             required_for_level3=population_requested,
             can_execute=population_requested,
             skip_reason="intent does not request population tensor optimization",
-            executor="pegasus.she.population.solvers.solve_population_tensor_problem" if population_requested else None,
+            executor="pegasus.sidra.population_cube.build.solve_population_tensor_from_sidra_strata" if population_requested else None,
             expected_artifacts=("Tables/population_tensor.parquet", "Tables/population_tensor_manifest.json") if population_requested else (),
         ),
         _stage(

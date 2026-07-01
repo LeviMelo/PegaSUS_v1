@@ -269,15 +269,15 @@ def _build_population_tensor_artifact(
         None,
     )
     output_path = run_dir / "Intermediate" / "population_tensor" / f"{solver_mode}.parquet"
-    from pegasus.workflows.population import run_population_tensor_plan
+    from pegasus.sidra.population_cube import solve_population_tensor_from_sidra_strata
 
-    manifest = run_population_tensor_plan(
-        sidra_facts_path=total_anchor.path,
+    manifest = solve_population_tensor_from_sidra_strata(
         population_strata_path=strata.path,
+        total_anchor_path=total_anchor.path,
         output_path=output_path,
         sim_events_path=None if sim_events is None else sim_events.path,
         mode=solver_mode,
-    )
+    ).as_manifest()
     artifact = SourceArtifactRef(
         path=str(output_path),
         source_system="SIDRA",

@@ -10,7 +10,7 @@ from pegasus.output.sidra_denominator_anchor import attach_sidra_population_anch
 from pegasus.output.validate import validate_output_bundle
 from pegasus.sidra.facts import write_facts_parquet
 from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
-from pegasus.she.population.sidra_anchor import load_sidra_population_total_anchor
+from pegasus.sidra.population_cube.anchor import load_sidra_population_total_anchor
 from pegasus.workflows.build_efg import build_sim_fixture_efg_run
 
 

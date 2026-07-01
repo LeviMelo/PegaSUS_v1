@@ -6,9 +6,9 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from pegasus.she.population.projected_gradient import PopulationOptimizationResult, _initial_population, _project_population
-from pegasus.she.population.schema import PopulationSolverTelemetry
-from pegasus.she.population.schema import PopulationTensorProblem
+from pegasus.she.reconstruction.projected_gradient import PopulationOptimizationResult, _initial_population, _project_population
+from pegasus.she.reconstruction.schema import PopulationSolverTelemetry
+from pegasus.she.reconstruction.schema import PopulationTensorProblem
 
 
 @dataclass(frozen=True)

@@ -9,15 +9,12 @@ from pegasus.registries.population import (
     get_population_solver,
     select_population_solver,
 )
-from pegasus.she.population.schema import PopulationObjectiveWeights, PopulationTensorProblem
-from pegasus.she.population.solvers import (
-    dense_national_abort_check,
-    solve_population_tensor_from_sidra_anchor,
-    solve_population_tensor_problem,
-)
-from pegasus.she.population.sparse_admm import plan_sparse_population_solver, solve_sparse_population
-from pegasus.she.population.state_space import build_population_state_space, solve_population_state_space_smoother
+from pegasus.she.reconstruction.schema import PopulationObjectiveWeights, PopulationTensorProblem
+from pegasus.she.reconstruction.solvers import dense_national_abort_check, solve_population_tensor_problem
+from pegasus.she.reconstruction.sparse_admm import plan_sparse_population_solver, solve_sparse_population
+from pegasus.she.reconstruction.state_space import build_population_state_space, solve_population_state_space_smoother
 from pegasus.sidra.facts import normalize_fixture_json_to_facts
+from pegasus.sidra.population_cube.build import solve_population_tensor_from_sidra_anchor
 
 
 def _facts(tmp_path: Path) -> Path:

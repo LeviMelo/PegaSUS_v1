@@ -2,7 +2,7 @@
 
 - ``population_ctr_instance``: the canonical instance. Its latent is ``[P | M]``
   (population then migration, each of length ``n_cells``); its ``native_evaluator``
-  delegates to ``she.population.loss.evaluate_population_loss`` byte-for-byte, so
+  delegates to ``she.reconstruction.loss.evaluate_population_loss`` byte-for-byte, so
   the CTR kernel reproduces the population tensor exactly (golden-value equal).
 - ``age_bin_disaggregation_instance``: a genuinely-linear instance (MII-CTR-02).
   Recover fine age-bin counts ``n_fine`` from broad-bin totals under the
@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.she.population.loss import evaluate_population_loss
-from pegasus.she.population.schema import PopulationTensorProblem
+from pegasus.she.reconstruction.loss import evaluate_population_loss
+from pegasus.she.reconstruction.schema import PopulationTensorProblem
 from pegasus.she.reconstruction.problem import (
     CTRProblem,
     MarginalConstraint,

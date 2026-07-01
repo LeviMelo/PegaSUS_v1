@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import math
 
-from pegasus.she.population.loss import evaluate_population_loss, validate_population_problem
-from pegasus.she.population.projected_gradient import (
+from pegasus.she.reconstruction.loss import evaluate_population_loss, validate_population_problem
+from pegasus.she.reconstruction.projected_gradient import (
     PopulationOptimizationResult,
     _initial_population,
     _migration_bounds,
     _project_migration,
     _project_population,
 )
-from pegasus.she.population.schema import PopulationSolverTelemetry, PopulationTensorProblem
+from pegasus.she.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorProblem
 
 
 def solve_population_block_coordinate(

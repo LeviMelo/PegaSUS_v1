@@ -6,10 +6,11 @@ This is the denominator side of stratified rates: a sex-stratified death count i
 by the sex-stratified population on the shared canonical axis (§3.7.4 alignment).
 
 For a fully-enumerated census period the tensor is the *directly observed* disaggregated
-counts (population_mode = official_sidra_anchor) — no solver. The orphaned
-`she.population` block-coordinate/ADMM solvers (§2.8.3+) are for the
-independent/sim-informed reconstruction modes (incomplete data), invoked elsewhere; we do
-not run a solver to "reconstruct" already-observed cells.
+counts (population_mode = official_sidra_anchor) — no solver. The
+`she.reconstruction` block-coordinate/ADMM solvers (§2.8.3+) are for the
+independent/sim-informed reconstruction modes (incomplete data), invoked from
+`sidra.population_cube.build`; we do not run a solver to "reconstruct" already-observed
+cells.
 """
 
 from __future__ import annotations

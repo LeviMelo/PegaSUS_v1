@@ -9,7 +9,7 @@ marginals, and an optional compositional axis.
 ``CTRProblem`` is that object. The **population tensor is the canonical instance**
 (see ``instances.population_ctr_instance``): rather than re-deriving its bespoke
 aging/birth/ILR math, that instance carries a ``native_evaluator`` that delegates
-to ``she.population.loss.evaluate_population_loss`` byte-for-byte. Instances whose
+to ``she.reconstruction.loss.evaluate_population_loss`` byte-for-byte. Instances whose
 structure is genuinely linear (age-bin disaggregation, cube reconstruction) use
 the generic weighted-least-squares + quadratic-penalty core here — no bespoke code.
 """

@@ -18,11 +18,11 @@ from pegasus.core.hashing import content_hash
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.lineage import make_lineage, lineage_hash
 from pegasus.efg.node import make_field_node
-from pegasus.she.population.sidra_anchor import (
+from pegasus.she.substrate import SubstrateBundle, SubstrateFieldCandidate, SubstrateFieldExclusion
+from pegasus.sidra.population_cube.anchor import (
     load_sidra_population_total_anchor,
     load_sidra_population_totals_frame,
 )
-from pegasus.she.substrate import SubstrateBundle, SubstrateFieldCandidate, SubstrateFieldExclusion
 
 
 FIELD_KINDS: frozenset[str] = frozenset({
@@ -383,7 +383,7 @@ def _sidra_demographic_population_materialized_fields(bundle: SubstrateBundle) -
     (that would yield duplicate/competing stratified rates). In official_sidra_anchor mode
     no solver tensor exists, so the observed strata are admitted directly.
     """
-    from pegasus.she.demographic_tensor import build_sidra_demographic_population_fields
+    from pegasus.sidra.population_cube.fields import build_sidra_demographic_population_fields
 
     has_solver_tensor = any(
         artifact.source_system == "SIDRA" and artifact.artifact_role == "population_tensor"
@@ -418,7 +418,7 @@ def _sidra_demographic_population_materialized_fields(bundle: SubstrateBundle) -
 def _population_solver_materialized_fields(bundle: SubstrateBundle) -> list[SubstrateMaterializedField]:
     """Admit materialized population solver tensors as Population denominator fields.
 
-    These tensors are produced by ``workflows.population`` for
+    These tensors are produced by ``sidra.population_cube.build`` for
     ``independent_population_tensor`` / ``sim_informed_population_tensor`` intents. They
     enter through the source-artifact boundary instead of compile side channels.
     """

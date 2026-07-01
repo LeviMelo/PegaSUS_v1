@@ -8,7 +8,7 @@ from pegasus.output.sidra_denominator_anchor import (
     _population_v_field,
     _uf_year_support_alignment,
 )
-from pegasus.she.population.sidra_anchor import SidraPopulationAnchor
+from pegasus.sidra.population_cube.anchor import SidraPopulationAnchor
 
 
 def _anchor() -> SidraPopulationAnchor:

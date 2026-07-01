@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel
 
-from pegasus.she.population.schema import PopulationTensorProblem
+from pegasus.she.reconstruction.schema import PopulationTensorProblem
 
 
 class PopulationLossEvaluation(BaseModel):

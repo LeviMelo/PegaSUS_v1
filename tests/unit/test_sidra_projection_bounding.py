@@ -1,6 +1,6 @@
 from pegasus.sidra.category_maps import bounded_pushforward_scaffold
 from pegasus.sidra.projection import project_classification_to_axis
-from pegasus.she.population.schema import blocked_missing_population_contract, official_sidra_anchor_contract
+from pegasus.she.reconstruction.schema import blocked_missing_population_contract, official_sidra_anchor_contract
 
 
 def test_projection_blocks_ratio_without_denominator_recovery():

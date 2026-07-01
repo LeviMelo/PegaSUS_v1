@@ -50,13 +50,6 @@ def _read_table(path: str | Path) -> pl.DataFrame:
     return read_raw_table(path)
 
 
-def _raw(row: dict[str, Any], *names: str) -> Any:
-    for name in names:
-        if name in row:
-            return row[name]
-    return None
-
-
 def parse_sinasc_date(value: Any) -> tuple[str | None, int | None, str]:
     text = _clean(value)
     if text is None:

@@ -9,7 +9,7 @@ from typing import Any
 import polars as pl
 
 from pegasus.datasus.decoders import clamp_bool, filter_cnpj
-from pegasus.datasus.normalize.codebook import concept_for, lookup_name, translate
+from pegasus.datasus.normalize.codebook import concept_for, translate
 from pegasus.datasus.normalize.completeness import check_raw_completeness
 from pegasus.datasus.normalize.primitives import Cols, read_raw_table, row_hash, struct_json
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk

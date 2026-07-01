@@ -54,11 +54,6 @@ def load_reference_table(table: str, registry_root: str = "config/registries") -
     return dict(zip(df["code"].to_list(), df["name"].to_list()))
 
 
-def lookup_for(system: str, raw_column: str, registry_root: str = "config/registries") -> str | None:
-    """Return the reference table bound to ``raw_column`` for ``system``, or None."""
-    return load_codebook(registry_root)["lookups"].get(system, {}).get(raw_column)
-
-
 def lookup_name(table: str, code: Any, *, registry_root: str = "config/registries") -> str | None:
     """Record-level reference-table lookup: raw code → name, or None if absent."""
     text = _clean_code(code)

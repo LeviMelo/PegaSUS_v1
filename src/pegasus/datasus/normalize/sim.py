@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from pegasus.datasus.normalize.records import (
-    normalize_record,
     normalize_sim_do_record as _registry_normalize_sim_do_record,
     normalize_sinasc_record as _registry_normalize_sinasc_record,
 )
 
 import hashlib
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -86,28 +84,6 @@ SIM_DO_NORMALIZED_COLUMNS = [
 ]
 
 
-INVALID_DATE_VALUES = {
-    "",
-    "0",
-    "00000000",
-    "0000-00-00",
-    "00/00/0000",
-    "99999999",
-    "9999-99-99",
-    "99/99/9999",
-    "NA",
-    "NAN",
-    "NULL",
-}
-
-
-def _raw(row: dict[str, Any], *names: str) -> Any:
-    for name in names:
-        if name in row:
-            return row.get(name)
-    return None
-
-
 def _clean_str(value: Any) -> str | None:
     if value is None:
         return None
@@ -126,55 +102,6 @@ def _read_table(path: str | Path) -> pl.DataFrame:
     return read_raw_table(path)
 
 
-def _parse_datasus_date(value: Any) -> str | None:
-    text = _clean_str(value)
-    if text is None:
-        return None
-
-    upper = text.upper()
-    if upper in INVALID_DATE_VALUES:
-        return None
-
-    # Field-specific date parser. Do not apply this generically to identifiers.
-    candidates = [
-        "%d%m%Y",
-        "%Y%m%d",
-        "%d/%m/%Y",
-        "%Y-%m-%d",
-    ]
-
-    for fmt in candidates:
-        try:
-            return datetime.strptime(text, fmt).date().isoformat()
-        except ValueError:
-            pass
-
-    return None
-
-
-def _parse_hour(value: Any) -> str | None:
-    text = _clean_str(value)
-    if text is None:
-        return None
-
-    digits = re.sub(r"\D", "", text)
-    if digits == "":
-        return None
-
-    if len(digits) <= 2:
-        hour = int(digits)
-        minute = 0
-    else:
-        padded = digits.zfill(4)
-        hour = int(padded[:2])
-        minute = int(padded[2:4])
-
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        return None
-
-    return f"{hour:02d}:{minute:02d}:00"
-
-
 def _year_from_date(iso_date: str | None, fallback: Any = None) -> int | None:
     if iso_date:
         return int(iso_date[:4])
@@ -183,69 +110,6 @@ def _year_from_date(iso_date: str | None, fallback: Any = None) -> int | None:
         if text and text.isdigit() and len(text) == 4:
             return int(text)
     return None
-
-
-def _mun_codes(value: Any) -> tuple[str | None, str | None]:
-    text = _clean_str(value)
-    if text is None:
-        return None, None
-
-    digits = re.sub(r"\D", "", text)
-    if len(digits) == 6:
-        return digits, None
-    if len(digits) == 7:
-        return digits[:6], digits
-
-    return None, None
-
-
-def _facility_code(value: Any) -> tuple[str | None, str]:
-    text = _clean_str(value)
-    if text is None:
-        return None, "missing"
-    digits = re.sub(r"\D", "", text)
-    if digits == "" or set(digits) == {"0"}:
-        return None, "missing"
-    return digits, "valid"
-
-
-def _race_state(value: Any) -> tuple[str | None, str]:
-    text = _clean_str(value)
-    if text is None:
-        return None, "missing"
-
-    if text in {"9", "99"}:
-        return text, "unknown"
-
-    return text, "valid"
-
-
-def _decode_sex(value: Any) -> tuple[str | None, str]:
-    """Decode DATASUS SEXO via the shared single-authority decoder (§2.3)."""
-    from pegasus.datasus.decoders import decode_datasus_sex
-
-    decoded = decode_datasus_sex(value)
-    return decoded.value, decoded.state
-
-
-def _int_or_none(value: Any) -> int | None:
-    text = _clean_str(value)
-    if text is None:
-        return None
-    try:
-        return int(float(text.replace(",", ".")))
-    except ValueError:
-        return None
-
-
-def _float_or_none(value: Any) -> float | None:
-    text = _clean_str(value)
-    if text is None:
-        return None
-    try:
-        return float(text.replace(",", "."))
-    except ValueError:
-        return None
 
 
 def _days_between(start_iso: str | None, end_iso: str | None) -> int | None:
@@ -257,53 +121,6 @@ def _days_between(start_iso: str | None, end_iso: str | None) -> int | None:
     except ValueError:
         return None
     return (end - start).days
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-
-
-def _raw(df: pl.DataFrame, column: str) -> pl.Expr:
-    """Raw column as Utf8, or a null literal if absent — so the decoder never
-    crashes on a source file that omits an optional field."""
-    if column in df.columns:
-        return pl.col(column).cast(pl.Utf8)
-    return pl.lit(None, dtype=pl.Utf8)
-
-
-def _row_raw(row: dict[str, Any], *names: str) -> Any:
-    for name in names:
-        if name in row:
-            return row.get(name)
-    return None
-
-
-def _datasus_year(column_expr: pl.Expr) -> pl.Expr:
-    """DATASUS dates are DDMMYYYY strings; the year is the trailing 4 digits."""
-    s = column_expr.str.strip_chars()
-    return (
-        pl.when(s.str.len_chars() >= 8)
-        .then(s.str.slice(4, 4).cast(pl.Int64, strict=False))
-        .otherwise(None)
-    )
-
-
-def _cod6(column_expr: pl.Expr) -> pl.Expr:
-    return column_expr.str.strip_chars().str.extract(r"(\d{6})", 1)
-
-
-def _icd_norm(column_expr: pl.Expr) -> pl.Expr:
-    return column_expr.str.replace_all(r"[^A-Za-z0-9]", "").str.to_uppercase()
-
-
-def _icd_parse_state(norm_expr: pl.Expr) -> pl.Expr:
-    return (
-        pl.when(norm_expr.is_null() | (norm_expr.str.len_chars() == 0))
-        .then(pl.lit("missing"))
-        .when(norm_expr.str.contains(r"^[A-Z][0-9]{2,4}$"))
-        .then(pl.lit("valid"))
-        .otherwise(pl.lit("invalid"))
-    )
 
 
 def _cod7_from_cod6(cod6: Any) -> str | None:

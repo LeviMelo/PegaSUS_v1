@@ -21,6 +21,7 @@ import numpy as np
 
 from pegasus.pirs.ldo.assemble import LDOField, assemble_ldo_tensor
 from pegasus.pirs.ldo.certify import LDOCertificationPolicy, certify_links
+from pegasus.pirs.ldo.envelope import assert_within_envelope
 from pegasus.pirs.ldo.edges import stability_select, to_link_records
 from pegasus.pirs.ldo.lags import fit_lagged_links
 from pegasus.pirs.ldo.margins import GaussianField, gaussianize_field
@@ -64,10 +65,15 @@ def run_ldo(
     run_residual_scan: bool = True,
     seed: int = 0,
     certification_policy: LDOCertificationPolicy | None = None,
+    enforce_envelope: bool = True,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass."""
     gf = _to_gaussian_field(source, seed=seed)
     p, S, T = gf.shape
+
+    # §II.10: refuse a run whose dense form exceeds the compute envelope rather
+    # than silently subsampling; the caller should tile/multi-resolve (§II.7).
+    envelope_bytes = assert_within_envelope(p=p, S=S, T=T, K=K) if enforce_envelope else None
 
     fit_kwargs = dict(kappa=kappa, lambda1=lambda1, lambda2=lambda2, edge_threshold=edge_threshold)
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
@@ -105,6 +111,7 @@ def run_ldo(
         "n_link_records": len(records),
         "n_selected": sum(1 for r in records if r.certification_status == "selected"),
         "residual_scan_error": _residual_error,
+        "envelope_bytes": envelope_bytes,
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

@@ -15,6 +15,8 @@ from pegasus.pirs.ldo.certify import (
 )
 from pegasus.pirs.ldo.orchestrator import LDORun, run_ldo
 from pegasus.pirs.ldo.resolution import MultiResolutionRun, restrict_variables, run_multiresolution_ldo
+from pegasus.pirs.ldo.envelope import ScaleExceedsEnvelopeError, assert_within_envelope, estimate_ldo_bytes, load_compute_envelope
+from pegasus.pirs.ldo.output import link_records_to_table, write_hypotheses
 from pegasus.pirs.ldo.records import LINK_RECORD_COLUMNS, EdgeType, LinkRecord
 
 __all__ = [
@@ -44,6 +46,12 @@ __all__ = [
     "run_multiresolution_ldo",
     "MultiResolutionRun",
     "restrict_variables",
+    "assert_within_envelope",
+    "estimate_ldo_bytes",
+    "load_compute_envelope",
+    "ScaleExceedsEnvelopeError",
+    "link_records_to_table",
+    "write_hypotheses",
     "LinkRecord",
     "EdgeType",
     "LINK_RECORD_COLUMNS",

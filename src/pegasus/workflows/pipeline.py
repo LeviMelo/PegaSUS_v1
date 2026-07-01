@@ -577,7 +577,7 @@ def _acquire_sidra_compendium_context(
         artifacts.append(artifact)
         acquired.append({
             **plan.as_manifest(),
-            "row_count": artifact.get("row_count"),
+            "row_count": artifact.as_manifest().get("row_count"),
             "artifact_path": str(combined_path),
             "metadata_hash": metadata_hash,
         })

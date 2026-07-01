@@ -256,18 +256,41 @@ class OutputBundleManager:
                 return str(profile)
         return "core_vital"
 
+    def _execution_stage(self) -> str:
+        for key in ("UserIntent", "RunConfig", "ReproducibilityManifest"):
+            stage = self.json_payloads.get(key, {}).get("execution_stage")
+            if stage:
+                return str(stage)
+        return "investigate"
+
     def _append_empty_by_profile_warnings(self) -> None:
+        # Inference outputs (Hypotheses/ModelAssociations/ResidualAssociations) are
+        # produced only at the `investigate` stage (the LDO), so below that they are
+        # legitimately empty even when the run_profile lists them as required. Emit an
+        # `empty_by_stage` row for each so the anti-silence contract is satisfied and
+        # the validator (which drops INFERENCE_KEYS from `required` below investigate)
+        # does not flag them as silently-empty. MSD-II §II.5 / MII-SCOPE-01.
+        _INFERENCE_KEYS = {"ModelAssociations", "ResidualAssociations", "Hypotheses"}
         run_profile = self._run_profile()
-        required = PROFILE_NONEMPTY.get(run_profile, PROFILE_NONEMPTY["core_vital"])
+        execution_stage = self._execution_stage()
+        required = set(PROFILE_NONEMPTY.get(run_profile, PROFILE_NONEMPTY["core_vital"]))
         existing = self.tables.get("Warnings", [])
         existing_ids = {str(row.get("warning_id")) for row in existing}
         rows = list(existing)
         for key in OUTPUT_BUNDLE_FILES:
-            if key in required or key == "Warnings":
+            if key == "Warnings" or self._artifact_nonempty_in_manager(key):
                 continue
-            if self._artifact_nonempty_in_manager(key):
+            below_investigate_inference = execution_stage != "investigate" and key in _INFERENCE_KEYS
+            if key in required and not below_investigate_inference:
                 continue
-            warning_id = f"empty_by_profile::{run_profile}::{key}"
+            if below_investigate_inference:
+                warning_id = f"empty_by_stage::{execution_stage}::{key}"
+                code = "empty_by_stage"
+                message = f"{key} is empty because execution_stage={execution_stage} does not run inference (produced at investigate)."
+            else:
+                warning_id = f"empty_by_profile::{run_profile}::{key}"
+                code = "empty_by_profile"
+                message = f"{key} is empty because run_profile={run_profile} does not require it."
             if warning_id in existing_ids:
                 continue
             rows.append({
@@ -275,8 +298,8 @@ class OutputBundleManager:
                 "field_id": "run",
                 "source": "output_profile",
                 "severity": "info",
-                "code": "empty_by_profile",
-                "message": f"{key} is empty because run_profile={run_profile} does not require it.",
+                "code": code,
+                "message": message,
                 "inherited_from": "[]",
                 "created_at": _now(),
             })

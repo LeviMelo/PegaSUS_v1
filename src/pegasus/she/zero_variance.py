@@ -202,8 +202,16 @@ def profile_column(df: pl.DataFrame, column: str) -> ColumnVarianceProfile:
     non_null_count = int(non_missing_mask.sum())
     missing_count = row_count - non_null_count
     missing_rate = missing_count / float(row_count) if row_count else None
-    non_missing_values = series.filter(non_missing_mask).to_list()
-    unique_non_null_count = len({json.dumps(v, sort_keys=True, default=str, ensure_ascii=False) for v in non_missing_values})
+    non_missing = series.filter(non_missing_mask)
+    # Native columnar unique count (C-speed) rather than json.dumps-ing every value
+    # into a Python set -- the latter was ~100M json.dumps calls on the large SIH/
+    # CNES tables and dominated the whole compile's she_build stage. Nested dtypes
+    # (Struct/List) aren't hashable by n_unique in all polars versions, so fall back
+    # to a string cast for those (equivalent for the <=1 constant test that matters).
+    try:
+        unique_non_null_count = int(non_missing.n_unique())
+    except Exception:
+        unique_non_null_count = int(non_missing.cast(pl.Utf8, strict=False).n_unique())
     structural_role = classify_structural_role(column)
     numeric_parse_count, numeric_min, numeric_max = _numeric_stats(series, non_missing_mask)
 
@@ -232,7 +240,7 @@ def profile_column(df: pl.DataFrame, column: str) -> ColumnVarianceProfile:
         missing_count=missing_count,
         missing_rate=missing_rate,
         unique_non_null_count=unique_non_null_count,
-        constant_value_repr=_constant_repr(non_missing_values) if unique_non_null_count <= 1 else None,
+        constant_value_repr=_constant_repr(non_missing.head(1).to_list()) if unique_non_null_count <= 1 else None,
         numeric_parse_count=numeric_parse_count,
         numeric_min=numeric_min,
         numeric_max=numeric_max,

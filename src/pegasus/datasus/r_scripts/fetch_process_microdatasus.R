@@ -181,28 +181,48 @@ official_dbc_url <- function(system_id, uf, year, month = NULL) {
   stop(sprintf("No direct official DBC fallback URL for system: %s", system_id))
 }
 
+# Per-download timeout (seconds), SHORT and independent of the whole-process
+# budget. DATASUS FTP does not rate-limit but frequently leaves connections
+# STALLED (bytes trickle, socket stays open), so a large timeout lets a single
+# DBC hang for hours. A short CURLOPT_TIMEOUT aborts a stalled transfer quickly;
+# a retry gets a fresh connection, which almost always succeeds.
+download_timeout <- as.integer(get_arg("--download-timeout-seconds", "120"))
+download_retries <- as.integer(get_arg("--download-retries", "4"))
+
 read_direct_dbc <- function(url) {
   dbc_path <- file.path(out_dir, basename(url))
-  utils::download.file(
-    url,
-    dbc_path,
-    mode = "wb",
-    method = "libcurl",
-    quiet = TRUE
-  )
+  prev_timeout <- getOption("timeout")
+  options(timeout = download_timeout)
+  on.exit(options(timeout = prev_timeout), add = TRUE)
 
-  data <- read.dbc::read.dbc(dbc_path, as.is = TRUE)
+  last_err <- NULL
+  for (attempt in seq_len(max(1L, download_retries))) {
+    ok <- tryCatch({
+      if (file.exists(dbc_path)) unlink(dbc_path)
+      utils::download.file(url, dbc_path, mode = "wb", method = "libcurl", quiet = TRUE)
+      file.exists(dbc_path) && file.info(dbc_path)$size > 0
+    }, error = function(e) { last_err <<- conditionMessage(e); FALSE })
 
-  if (!("source" %in% names(data))) {
-    data$source <- basename(url)
+    if (isTRUE(ok)) {
+      data <- tryCatch(read.dbc::read.dbc(dbc_path, as.is = TRUE),
+                       error = function(e) { last_err <<- conditionMessage(e); NULL })
+      if (!is.null(data)) {
+        if (!("source" %in% names(data))) data$source <- basename(url)
+        return(data)
+      }
+    }
+
+    write_heartbeat("fetching", 0, sprintf("download retry %d/%d for %s (%s)",
+                    attempt, download_retries, basename(url),
+                    if (is.null(last_err)) "stall/empty" else last_err))
+    Sys.sleep(min(2 * attempt, 8))
   }
-
-  data
+  stop(sprintf("download failed after %d attempts for %s: %s",
+               download_retries, url, if (is.null(last_err)) "unknown" else last_err))
 }
 
 direct_fallback_fetch <- function(system_id, uf, year_start, year_end, month_start, month_end) {
-  options(timeout = max(timeout_seconds, getOption("timeout")))
-
+  # read_direct_dbc manages its own short per-download timeout + retry.
   if (system_id %in% c("SIM-DO", "SINASC")) {
     decoded <- lapply(seq.int(year_start, year_end), function(year) {
       url <- official_dbc_url(system_id, uf, year)
@@ -243,7 +263,10 @@ fetch_args <- list(
   year_end = year_end,
   uf = uf,
   information_system = information_system,
-  timeout = timeout_seconds,
+  # Short per-download timeout so microdatasus's internal download aborts a
+  # stalled DATASUS FTP connection quickly instead of hanging for hours; the
+  # direct-DBC fallback (with retry) recovers if microdatasus gives up.
+  timeout = download_timeout,
   track_source = TRUE
 )
 

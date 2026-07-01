@@ -2,6 +2,7 @@
 
 from pegasus.pirs.ldo.assemble import LDOField, assemble_ldo_tensor
 from pegasus.pirs.ldo.margins import GaussianField, gaussianize_field, randomized_pit_gaussianize
+from pegasus.pirs.ldo.precision import PrecisionFit, build_spatial_precision, fit_contemporaneous_precision
 from pegasus.pirs.ldo.records import LINK_RECORD_COLUMNS, EdgeType, LinkRecord
 
 __all__ = [
@@ -10,6 +11,9 @@ __all__ = [
     "GaussianField",
     "gaussianize_field",
     "randomized_pit_gaussianize",
+    "PrecisionFit",
+    "fit_contemporaneous_precision",
+    "build_spatial_precision",
     "LinkRecord",
     "EdgeType",
     "LINK_RECORD_COLUMNS",

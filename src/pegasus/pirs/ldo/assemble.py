@@ -55,11 +55,16 @@ def assemble_ldo_tensor(
     panel: CommonPanel,
     *,
     field_weights: Mapping[str, float] | None = None,
+    keep_variables: set[str] | frozenset[str] | None = None,
 ) -> LDOField:
     """Assemble ``X`` and ``W`` from a compiled CommonPanel.
 
     ``field_weights`` optionally scales a whole variable's weights (e.g. a per-field
-    ``n_eff``-derived reliability from the §3.12 state tensor).
+    ``n_eff``-derived reliability from the §3.12 state tensor). ``keep_variables``,
+    if given, restricts the LDO variable set to those field ids (e.g. the analytical
+    fields per ``field_selection.analytical_variable_ids``) — raw passthrough/support
+    axes are dropped, shrinking the ``O(p^3)`` precision solve and removing meaningless
+    edges.
     """
     values = panel.values
     time_col = _time_key(panel.cell_keys)
@@ -72,6 +77,7 @@ def assemble_ldo_tensor(
     variables = tuple(
         c for c in values.columns
         if c not in panel.cell_keys and values.schema.get(c) in numeric
+        and (keep_variables is None or c in keep_variables)
     )
     space_ids = tuple(sorted(str(s) for s in values["municipality_cod6"].unique() if s is not None))
     time_ids = tuple(sorted(int(t) for t in values[time_col].unique() if t is not None))
@@ -80,16 +86,18 @@ def assemble_ldo_tensor(
     s_index = {s: i for i, s in enumerate(space_ids)}
     t_index = {t: i for i, t in enumerate(time_ids)}
 
+    # Vectorized scatter: map each row's (space, time) to flat indices once, then
+    # assign each variable column in one shot (was a per-row Python loop per field).
+    si_col = values["municipality_cod6"].cast(pl.Utf8).replace_strict(s_index, default=-1)
+    ti_col = values[time_col].cast(pl.Int64).replace_strict(t_index, default=-1)
+    si_arr = si_col.to_numpy()
+    ti_arr = ti_col.to_numpy()
+    valid_cell = (si_arr >= 0) & (ti_arr >= 0)
     X = np.full((p, S, T), np.nan, dtype=np.float64)
     for vi, var in enumerate(variables):
-        col = values.select(["municipality_cod6", time_col, var]).to_dicts()
-        for row in col:
-            s = str(row["municipality_cod6"]) if row["municipality_cod6"] is not None else None
-            t = row[time_col]
-            val = row[var]
-            if s is None or t is None or val is None:
-                continue
-            X[vi, s_index[s], t_index[int(t)]] = float(val)
+        vals = values[var].cast(pl.Float64).to_numpy()
+        ok = valid_cell & np.isfinite(vals)
+        X[vi, si_arr[ok], ti_arr[ok]] = vals[ok]
 
     # Weights from the per-(field, cell) provenance manifest.
     W = np.zeros((p, S, T), dtype=np.float64)

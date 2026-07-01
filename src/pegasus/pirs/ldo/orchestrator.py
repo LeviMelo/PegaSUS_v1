@@ -40,9 +40,14 @@ class LDORun:
         return [r.as_row() for r in self.link_records]
 
 
-def _to_gaussian_field(source: CommonPanel | LDOField | GaussianField, *, seed: int) -> GaussianField:
+def _to_gaussian_field(
+    source: CommonPanel | LDOField | GaussianField,
+    *,
+    seed: int,
+    keep_variables: set[str] | frozenset[str] | None = None,
+) -> GaussianField:
     if isinstance(source, CommonPanel):
-        return gaussianize_field(assemble_ldo_tensor(source), seed=seed)
+        return gaussianize_field(assemble_ldo_tensor(source, keep_variables=keep_variables), seed=seed)
     if isinstance(source, LDOField):
         return gaussianize_field(source, seed=seed)
     if isinstance(source, GaussianField):
@@ -66,9 +71,11 @@ def run_ldo(
     seed: int = 0,
     certification_policy: LDOCertificationPolicy | None = None,
     enforce_envelope: bool = True,
+    keep_variables: set[str] | frozenset[str] | None = None,
+    max_workers: int | None = None,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass."""
-    gf = _to_gaussian_field(source, seed=seed)
+    gf = _to_gaussian_field(source, seed=seed, keep_variables=keep_variables)
     p, S, T = gf.shape
 
     # §II.10: refuse a run whose dense form exceeds the compute envelope rather
@@ -79,7 +86,8 @@ def run_ldo(
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
 
     stability = stability_select(
-        gf, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac, seed=seed + 1, **fit_kwargs
+        gf, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac, seed=seed + 1,
+        max_workers=max_workers, **fit_kwargs
     )
     records = to_link_records(
         lagged, field=gf, stability=stability, stability_threshold=stability_threshold,

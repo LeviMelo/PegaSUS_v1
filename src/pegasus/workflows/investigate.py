@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pegasus.pirs.ldo.field_selection import analytical_variable_ids
 from pegasus.pirs.ldo.orchestrator import run_ldo
 from pegasus.pirs.ldo.output import write_hypotheses
 from pegasus.she.panel import Resolution, compile_common_panel
@@ -48,7 +49,13 @@ def run_investigate(
     prefixes = _geography_prefixes(intent)
     panel = compile_common_panel(run_dir, resolution=resolution, geography_prefixes=prefixes)
 
-    ldo_run = run_ldo(panel, K=K, **ldo_kwargs)
+    # Restrict the LDO to analytical fields (drop raw source-column passthroughs and
+    # support axes) unless the caller overrides — smaller precision solve, cleaner graph.
+    keep_variables = ldo_kwargs.pop("keep_variables", None)
+    if keep_variables is None:
+        keep_variables = analytical_variable_ids(run_dir)
+
+    ldo_run = run_ldo(panel, K=K, keep_variables=keep_variables, **ldo_kwargs)
 
     hypotheses_path = run_dir / "Hypotheses.parquet"
     if write:

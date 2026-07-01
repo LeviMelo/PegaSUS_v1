@@ -10,6 +10,8 @@ descriptive only.
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import numpy as np
@@ -25,6 +27,30 @@ def _edge_key(source: str, target: str, lag: int) -> tuple[str, str, int]:
     return (source, target, lag)
 
 
+def _subsample_edges(
+    field: GaussianField, idx: np.ndarray, *, K: int, fit_kwargs: dict
+) -> set[tuple[str, str, int]] | None:
+    """Fit one spatial subsample and return its selected edge keys (or None on failure)."""
+    sub = GaussianField(
+        variables=field.variables,
+        space_ids=tuple(field.space_ids[i] for i in idx),
+        time_ids=field.time_ids,
+        Z=field.Z[:, idx, :],
+        W=field.W[:, idx, :],
+        resolution=field.resolution,
+    )
+    try:
+        res = fit_lagged_links(sub, K=K, **fit_kwargs)
+    except Exception:
+        return None
+    seen: set[tuple[str, str, int]] = set()
+    for lk in res.lagged_links:
+        seen.add(_edge_key(lk.source, lk.target, lk.peak_lag))
+    for src, tgt, _ in res.contemporaneous:
+        seen.add(_edge_key(src, tgt, 0))
+    return seen
+
+
 def stability_select(
     field: GaussianField,
     *,
@@ -33,35 +59,47 @@ def stability_select(
     subsample_frac: float = 0.7,
     lag_tolerance: int = 1,
     seed: int = 0,
+    max_workers: int | None = None,
     **fit_kwargs,
 ) -> dict[tuple[str, str, int], float]:
-    """Return per-edge selection frequency over spatial subsamples of the lattice."""
+    """Return per-edge selection frequency over spatial subsamples of the lattice.
+
+    The subsample refits are independent and dominate the LDO cost, so they run
+    concurrently on a thread pool (numpy's LAPACK eigensolves release the GIL and
+    the field arrays are shared read-only — no per-worker serialization). Draw all
+    subsample indices up front so the result is deterministic regardless of
+    completion order.
+    """
     rng = np.random.default_rng(seed)
     p, S, T = field.shape
-    counts: dict[tuple[str, str, int], int] = {}
     n_keep = max(2, int(round(subsample_frac * S)))
-    runs = 0
-    for _ in range(n_subsamples):
-        idx = np.sort(rng.choice(S, size=min(n_keep, S), replace=False))
-        sub = GaussianField(
-            variables=field.variables,
-            space_ids=tuple(field.space_ids[i] for i in idx),
-            time_ids=field.time_ids,
-            Z=field.Z[:, idx, :],
-            W=field.W[:, idx, :],
-            resolution=field.resolution,
-        )
+    index_sets = [np.sort(rng.choice(S, size=min(n_keep, S), replace=False)) for _ in range(n_subsamples)]
+
+    if max_workers is None:
+        max_workers = max(1, min(n_subsamples, (os.cpu_count() or 2) - 1))
+    if max_workers <= 1:
+        results = [_subsample_edges(field, idx, K=K, fit_kwargs=fit_kwargs) for idx in index_sets]
+    else:
+        # Pin BLAS to one thread per worker so N eigensolves use N cores rather than
+        # oversubscribing (each LAPACK eigh would otherwise grab every core).
         try:
-            res = fit_lagged_links(sub, K=K, **fit_kwargs)
+            from threadpoolctl import threadpool_limits
+            limiter = threadpool_limits(limits=1, user_api="blas")
         except Exception:
+            limiter = None
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                results = list(pool.map(lambda idx: _subsample_edges(field, idx, K=K, fit_kwargs=fit_kwargs), index_sets))
+        finally:
+            if limiter is not None:
+                limiter.unregister()
+
+    counts: dict[tuple[str, str, int], int] = {}
+    runs = 0
+    for seen in results:
+        if seen is None:
             continue
         runs += 1
-        seen: set[tuple[str, str, int]] = set()
-        for lk in res.lagged_links:
-            # bucket peak lags within tolerance so a jittering peak still counts
-            seen.add(_edge_key(lk.source, lk.target, lk.peak_lag))
-        for src, tgt, _ in res.contemporaneous:
-            seen.add(_edge_key(src, tgt, 0))
         for key in seen:
             counts[key] = counts.get(key, 0) + 1
     if runs == 0:

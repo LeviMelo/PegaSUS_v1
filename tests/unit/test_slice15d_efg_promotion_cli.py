@@ -30,8 +30,8 @@ def test_slice15d_compile_boundary_remains_consolidated() -> None:
 
 
 def test_slice15d_workflow_api_is_present() -> None:
-    promotion = Path("src/pegasus/workflows/efg_promotion.py").read_text(encoding="utf-8")
-    apply = Path("src/pegasus/workflows/efg_apply.py").read_text(encoding="utf-8")
+    promotion = Path("src/pegasus/workflows/construct/efg_promotion.py").read_text(encoding="utf-8")
+    apply = Path("src/pegasus/workflows/construct/efg_apply.py").read_text(encoding="utf-8")
     assert "run_plan_efg_promotion" in promotion
     assert "run_attach_efg_promotion_plan_to_run" in promotion
     assert "run_apply_efg_promotion_plan" in apply

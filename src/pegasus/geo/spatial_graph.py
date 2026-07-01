@@ -156,6 +156,45 @@ def load_spatial_graph(graph_id: str = "contiguity_queen", root: str = "config/r
     )
 
 
+@lru_cache(maxsize=4)
+def _structural_cod6_items(graph_id: str, root: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    graph = load_spatial_graph(graph_id, root)
+    cod6: dict[str, set[str]] = {}
+    for node in graph.node_ids:
+        left = node[:6]
+        for neighbour in graph.neighbors(node):
+            right = neighbour[:6]
+            if left != right:
+                cod6.setdefault(left, set()).add(right)
+    return tuple((key, tuple(sorted(values))) for key, values in sorted(cod6.items()))
+
+
+def structural_graph_available(graph_id: str = "contiguity_queen", root: str = "config/registries") -> bool:
+    """True when the structural spatial graph and its artifact are loadable.
+
+    Lets spatial-mode selection know ICAR/GMRF is executable by default (the graph
+    is a committed artifact) even when an intent declares no adjacency path.
+    """
+    try:
+        return load_spatial_graph(graph_id, root).n > 0
+    except Exception:
+        return False
+
+
+def structural_cod6_adjacency(
+    graph_id: str = "contiguity_queen", root: str = "config/registries"
+) -> dict[str, tuple[str, ...]]:
+    """Structural contiguity as a ``municipality_cod6``-keyed adjacency dict.
+
+    The SpatialWeightGraph is keyed by IBGE cod7; the EFG/PIRS panels key geography
+    by ``municipality_cod6`` (cod7 minus the check digit). This is the single
+    cod7→cod6 down-map used by every consumer that falls back to the structural
+    default graph (Moran's I, ICAR, ...). Returns a fresh dict each call (callers
+    must not mutate the shared cache).
+    """
+    return dict(_structural_cod6_items(graph_id, root))
+
+
 def assert_spatial_legality(graph: SpatialWeightGraph, variable_provenance) -> None:
     """§II.4.1 circularity guard.
 
@@ -178,5 +217,7 @@ __all__ = [
     "SpatialGraphError",
     "SpatialCircularityError",
     "load_spatial_graph",
+    "structural_cod6_adjacency",
+    "structural_graph_available",
     "assert_spatial_legality",
 ]

@@ -31,6 +31,7 @@ from pegasus.compute.glm import (
     select_count_family,
 )
 from pegasus.geo.adjacency import load_adjacency
+from pegasus.geo.spatial_graph import structural_cod6_adjacency
 
 # Count families eligible for §6.2 data-aware routing and log-exposure offsets.
 _COUNT_FAMILIES = {"poisson_count_with_log_offset", "negative_binomial", "quasi_poisson", "hurdle_poisson", "hurdle_nb"}
@@ -185,8 +186,16 @@ def _icar_design(
     spatial = _spatial_effect(manifest)
     adjacency_path = _resolve_run_path(run_dir, spatial.get("adjacency_path") or spatial.get("geo_adjacency_path"))
     if adjacency_path is None:
-        raise PIRSModelExecutionError("icar_spatial_effect_requires_adjacency_path")
-    adjacency = load_adjacency(adjacency_path)
+        # SPG default (MII-SPG-02): fall back to the structural queen-contiguity
+        # graph (cod6-keyed) so ICAR is executable by default instead of aborting
+        # whenever an intent omits an explicit adjacency artifact.
+        adjacency = structural_cod6_adjacency()
+        adjacency_source = "structural_contiguity_queen"
+        if not adjacency:
+            raise PIRSModelExecutionError("icar_spatial_effect_requires_adjacency_path")
+    else:
+        adjacency = load_adjacency(adjacency_path)
+        adjacency_source = str(adjacency_path)
     support = _support_rows(run_dir)
     municipalities = [_municipality_for_row(row, support) for row in rows]
     missing = sum(1 for value in municipalities if value in (None, ""))
@@ -221,7 +230,7 @@ def _icar_design(
     manifest_payload = {
         "mode": "ICAR",
         "executed": True,
-        "adjacency_path": str(adjacency_path),
+        "adjacency_path": adjacency_source,
         "municipality_count": m,
         "municipalities": categories,
         "tau": tau,

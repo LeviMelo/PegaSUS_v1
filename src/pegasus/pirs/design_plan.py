@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from pegasus.geo.spatial_graph import structural_graph_available
 from pegasus.pirs.spatial import select_spatial_effect_mode
 
 
@@ -266,12 +267,15 @@ def _spatial_effect_payload(plan: Mapping[str, Any], *, budget: str) -> tuple[st
         return plan[key] if key in plan and plan[key] is not None else diagnostics.get(key)
 
     adjacency_path = first_present("adjacency_path") or first_present("geo_adjacency_path")
+    # ICAR is executable whenever an adjacency is declared OR the structural
+    # queen-contiguity graph is available (MII-SPG-02: it is a committed default).
+    adjacency_available = adjacency_path not in (None, "") or structural_graph_available()
     selector = select_spatial_effect_mode(
         budget=budget,
         time_period_count=first_present("time_period_count"),
         spatial_missingness=first_present("spatial_missingness"),
         moran_i=first_present("moran_i"),
-        adjacency_available=adjacency_path not in (None, ""),
+        adjacency_available=adjacency_available,
     )
     manifest = selector.as_manifest()
     if adjacency_path not in (None, ""):

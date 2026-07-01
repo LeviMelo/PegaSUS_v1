@@ -11,6 +11,7 @@ import polars as pl
 
 from pegasus.datasus.decoders import decode_datasus_sex, decode_sih_age, filter_cnpj
 from pegasus.datasus.icd_parser import parse_icd
+from pegasus.datasus.vec import Cols, row_hash
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
 
 SECONDARY_DIAG_COLUMNS = tuple(f"DIAGSEC{i}" for i in range(1, 10))
@@ -239,79 +240,24 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
 
     Produces the same canonical schema as ``normalize_sih_rd_record`` — including
     the ``COD_IDADE``-driven age unit (§2.4.0.1), populated secondary-diagnosis and
-    cost JSON, and the ``filter_cnpj`` linkage gate (§2.4.0.5) — but as Polars
-    expressions over whole columns rather than ~2000 Python calls per row.
+    cost JSON, and the ``filter_cnpj`` linkage gate (§2.4.0.5) — via the shared
+    ``vec.Cols`` decode primitives (single source of truth, XCUT-02) rather than a
+    per-row Python loop. Only the SIH-specific age and death-flag rules live here.
     """
     crosswalk = load_municipality_crosswalk()
-
-    def raw(name: str) -> pl.Expr:
-        return pl.col(name).cast(pl.Utf8) if name in df.columns else pl.lit(None, dtype=pl.Utf8)
-
-    def first(*names: str) -> pl.Expr:
-        present = [n for n in names if n in df.columns]
-        return pl.coalesce([pl.col(n).cast(pl.Utf8) for n in present]) if present else pl.lit(None, dtype=pl.Utf8)
-
-    def clean(*names: str) -> pl.Expr:
-        t = first(*names).str.strip_chars()
-        return pl.when(t.str.to_uppercase().is_in(["", "NA", "NAN", "NULL", "NONE"])).then(None).otherwise(t)
-
-    def digits(*names: str) -> pl.Expr:
-        d = clean(*names).str.replace_all(r"\D", "")
-        return pl.when(d == "").then(None).otherwise(d)
-
-    def parse_date(*names: str) -> pl.Expr:
-        d = digits(*names)
-        return pl.coalesce([d.str.strptime(pl.Date, "%Y%m%d", strict=False),
-                            d.str.strptime(pl.Date, "%d%m%Y", strict=False)])
+    cx = Cols(df)
+    clean = cx.clean
+    digits = cx.digits
+    parse_date = cx.date
+    icd_norm = cx.icd_norm
+    icd_state = cx.icd_state
+    nonneg_int = cx.nonneg_int
+    money = cx.money
+    money_state = cx.money_state
+    cnpj = cx.cnpj
 
     def municipality(prefix: str, *names: str) -> list[pl.Expr]:
-        d = digits(*names)
-        cod6 = pl.when(d.str.len_chars() == 6).then(d).when(d.str.len_chars() == 7).then(d.str.slice(0, 6)).otherwise(None)
-        ignored = cod6.str.slice(2, 4) == "0000"
-        valid = cod6.is_not_null() & ~ignored
-        cod6v = pl.when(valid).then(cod6).otherwise(None)
-        return [
-            cod6v.alias(f"{prefix}_cod6"),
-            pl.when(valid & (d.str.len_chars() == 7)).then(d)
-              .when(valid).then(cod6v.replace_strict(crosswalk, default=None))
-              .otherwise(None).alias(f"{prefix}_cod7"),
-            pl.when(d.is_null()).then(pl.lit("missing"))
-              .when(ignored).then(pl.lit("ignored_municipality"))
-              .when(d.str.len_chars() == 7).then(pl.lit("ibge_cod7"))
-              .when(d.str.len_chars() == 6).then(pl.lit("datasus_cod6"))
-              .otherwise(pl.lit("invalid")).alias(f"{prefix}_state"),
-        ]
-
-    def icd_norm(*names: str) -> pl.Expr:
-        return clean(*names).str.to_uppercase().str.replace_all(r"[^A-Z0-9]", "").str.extract(_ICD_NORM, 1)
-
-    def nonneg_int(*names: str) -> tuple[pl.Expr, pl.Expr]:
-        rawv = clean(*names)
-        val = rawv.str.replace_all(",", ".").cast(pl.Float64, strict=False)
-        ok = val.is_not_null() & (val >= 0) & (val == val.floor())
-        state = pl.when(rawv.is_null()).then(pl.lit("missing")).when(ok).then(pl.lit("valid")).otherwise(pl.lit("invalid"))
-        return pl.when(ok).then(val.cast(pl.Int64)).otherwise(None), state
-
-    def money(*names: str) -> pl.Expr:
-        v = clean(*names).str.replace_all(",", ".").cast(pl.Float64, strict=False)
-        return pl.when(v >= 0).then(v).otherwise(None)
-
-    def money_state(*names: str) -> pl.Expr:
-        rawv = clean(*names)
-        v = rawv.str.replace_all(",", ".").cast(pl.Float64, strict=False)
-        return pl.when(rawv.is_null()).then(pl.lit("missing")).when(v >= 0).then(pl.lit("valid")).otherwise(pl.lit("invalid"))
-
-    def cnpj(*names: str) -> tuple[pl.Expr, pl.Expr]:
-        d = clean(*names).str.replace_all(r"\D", "")
-        is_zero = d.str.replace_all("0", "") == ""
-        valid = (d.str.len_chars() == 14) & ~is_zero
-        value = pl.when(valid).then(d).otherwise(None)
-        state = (pl.when(clean(*names).is_null()).then(pl.lit("MissingCNPJ"))
-                 .when(is_zero).then(pl.lit("NullifiedZeroCNPJ"))
-                 .when(valid).then(pl.lit("ValidCNPJ"))
-                 .when(d.str.len_chars() != 14).then(pl.lit("InvalidCNPJLength"))
-                 .otherwise(pl.lit("InvalidCNPJDigits")))
-        return value, state
+        return cx.municipality(prefix, *names, crosswalk=crosswalk)
 
     # Age (COD_IDADE unit + IDADE magnitude). IDADE must be all-digit to be a
     # valid magnitude (matches decode_sih_age's isdigit() gate — a malformed
@@ -343,6 +289,7 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     admit_dt = parse_date("DT_INTER", "DTINTERN", "admission_date")
     disc_dt = parse_date("DT_SAIDA", "DTSAIDA", "discharge_date")
     principal_norm = icd_norm("DIAG_PRINC", "principal_icd")
+    principal_state = icd_state("DIAG_PRINC", "principal_icd")
 
     out = df.with_row_index("_i").with_columns(
         pl.concat_str([pl.lit("SIH-"), pl.coalesce([clean("AIH", "N_AIH", "admission_id"),
@@ -368,12 +315,11 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
         pl.lit("sih_billing_race_color").alias("race_axis_type"),
         clean("DIAG_PRINC", "principal_icd").alias("principal_icd_raw"),
         principal_norm.alias("principal_icd_norm"),
-        pl.when(principal_norm.is_null()).then(pl.lit("missing")).otherwise(pl.lit("valid")).alias("principal_icd_parse_state"),
-        (pl.struct([clean(c).alias(c) for c in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_raw_json"),
-        (pl.struct([icd_norm(c).alias(c) for c in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_norm_json"),
-        (pl.struct([pl.when(icd_norm(c).is_not_null()).then(pl.lit("valid")).when(clean(c).is_null()).then(pl.lit("missing"))
-                    .otherwise(pl.lit("invalid")).alias(c) for c in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_parse_states_json"),
-        (pl.struct([clean(c).alias(c) for c in type_cols]).struct.json_encode() if type_cols else pl.lit("{}")).alias("secondary_diagnosis_type_json"),
+        principal_state.alias("principal_icd_parse_state"),
+        (pl.struct([clean(col).alias(col) for col in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_raw_json"),
+        (pl.struct([icd_norm(col).alias(col) for col in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_norm_json"),
+        (pl.struct([icd_state(col).alias(col) for col in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_parse_states_json"),
+        (pl.struct([clean(col).alias(col) for col in type_cols]).struct.json_encode() if type_cols else pl.lit("{}")).alias("secondary_diagnosis_type_json"),
         clean("PROC_SOLIC").alias("procedure_requested"),
         clean("PROC_REA").alias("procedure_performed"),
         stay_v.alias("stay_length_days"), stay_s.alias("stay_length_state"),
@@ -389,14 +335,18 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
         money("VAL_SP").alias("professional_service_cost_real"),
         money("VAL_UTI").alias("icu_cost_real"),
         money("VAL_TOT").alias("total_admission_cost_real"),
-        pl.struct([money_state(c).alias(c) for c in COST_COMPONENTS]).struct.json_encode().alias("cost_state_json"),
-        pl.struct([clean(c).alias(c) for c in COST_COMPONENTS]).struct.json_encode().alias("cost_raw_json"),
+        pl.struct([money_state(col).alias(col) for col in COST_COMPONENTS]).struct.json_encode().alias("cost_state_json"),
+        pl.struct([clean(col).alias(col) for col in COST_COMPONENTS]).struct.json_encode().alias("cost_raw_json"),
         pl.lit(source_manifest_hash).alias("source_manifest_hash"),
         pl.lit(None, dtype=pl.Utf8).alias("raw_json"),
     ).with_columns(
-        pl.when(pl.col("admission_year").is_not_null() & pl.col("mun_residence_cod6").is_not_null() & pl.col("principal_icd_norm").is_not_null())
+        # Matches the record oracle: valid identity + a principal diagnosis whose
+        # parse_state is not in {missing, blank, unparseable, invalid} (an R-code
+        # 'ill-defined' principal is still a valid record).
+        pl.when(pl.col("admission_year").is_not_null() & pl.col("mun_residence_cod6").is_not_null()
+                & pl.col("principal_icd_parse_state").is_in(["valid", "ill-defined"]))
           .then(pl.lit("valid")).otherwise(pl.lit("invalid_identity_or_principal_diagnosis")).alias("record_state"),
-        pl.concat_str([pl.lit(source_manifest_hash), pl.lit(":"), pl.col("_i").cast(pl.Utf8)]).hash().cast(pl.Utf8).alias("row_hash"),
+        row_hash(source_manifest_hash).alias("row_hash"),
     )
     ordered = [
         "admission_id", "source_system", "admission_date", "discharge_date", "admission_year",

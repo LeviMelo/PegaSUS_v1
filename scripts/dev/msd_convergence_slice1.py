@@ -193,10 +193,10 @@ from pegasus.sidra.api import SidraClient
 from pegasus.sidra.facts import write_facts_parquet
 from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
 from pegasus.source_artifacts.contracts import inspect_source_artifact, write_source_artifact_manifest
-from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes, run_datasus_normalize_sih
+from pegasus.workflows.acquire.cnes_sih import run_datasus_normalize_cnes, run_datasus_normalize_sih
 from pegasus.workflows.compile import run_compile
-from pegasus.workflows.datasus import run_datasus_normalize_sim
-from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
+from pegasus.workflows.acquire.datasus import run_datasus_normalize_sim
+from pegasus.workflows.acquire.sinasc import run_datasus_normalize_sinasc
 
 ROOT = Path(__file__).resolve().parents[3]
 R_LIBRARY = ROOT / ".r-library"

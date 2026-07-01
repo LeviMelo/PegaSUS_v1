@@ -1129,7 +1129,7 @@ def main() -> None:
     from pegasus.output.bundle import create_empty_output_bundle
     from pegasus.output.validate import validate_output_bundle
     from pegasus.registries.validators import validate_registry_tree
-    from pegasus.workflows.build_efg import build_sim_fixture_efg_run
+    from pegasus.workflows.construct.build_efg import build_sim_fixture_efg_run
 
     app = typer.Typer(no_args_is_help=True)
     registries_app = typer.Typer(no_args_is_help=True)
@@ -1413,7 +1413,7 @@ def main() -> None:
 
     from pegasus.datasus.normalize import normalize_sim_do_events
     from pegasus.output.validate import validate_output_bundle
-    from pegasus.workflows.build_efg import build_sim_fixture_efg_run
+    from pegasus.workflows.construct.build_efg import build_sim_fixture_efg_run
 
 
     def test_sim_fixture_efg_bundle_validates(tmp_path: Path):

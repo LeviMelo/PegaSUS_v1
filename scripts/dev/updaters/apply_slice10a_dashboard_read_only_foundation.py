@@ -39,7 +39,7 @@ def dashboard_assert_read_only() -> None:
 def dashboard_inspect_run(
     run: Path = typer.Option(..., "--run"),
 ) -> None:
-    from pegasus.workflows.dashboard import run_dashboard_inspect_run
+    from pegasus.workflows.report.dashboard import run_dashboard_inspect_run
 
     typer.echo(json.dumps(run_dashboard_inspect_run(run_dir=run), indent=2, sort_keys=True))
 
@@ -50,7 +50,7 @@ def dashboard_table_head(
     table: str = typer.Option(..., "--table"),
     limit: int = typer.Option(10, "--limit"),
 ) -> None:
-    from pegasus.workflows.dashboard import run_dashboard_table_head
+    from pegasus.workflows.report.dashboard import run_dashboard_table_head
 
     typer.echo(json.dumps(run_dashboard_table_head(run_dir=run, table_name=table, limit=limit), indent=2, sort_keys=True))
 '''
@@ -390,7 +390,7 @@ def main() -> None:
         from pegasus.dashboard.contracts import DashboardContractError, assert_no_compute_trigger
         from pegasus.dashboard.read_only import inspect_run, read_table_head, variable_dictionary
         from pegasus.output.bundle import create_empty_output_bundle
-        from pegasus.workflows.dashboard import run_dashboard_inspect_run, run_dashboard_table_head
+        from pegasus.workflows.report.dashboard import run_dashboard_inspect_run, run_dashboard_table_head
 
 
         def test_slice10a_dashboard_inspects_valid_run_without_computation(tmp_path: Path) -> None:

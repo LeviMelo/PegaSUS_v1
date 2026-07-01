@@ -1213,7 +1213,7 @@ from pathlib import Path
 import polars as pl
 
 from pegasus.output.bundle import create_empty_output_bundle
-from pegasus.workflows.build_substrate import (
+from pegasus.workflows.construct.build_substrate import (
     run_attach_substrate_to_run,
     run_build_substrate_from_artifacts,
     run_substrate_summary,
@@ -1353,7 +1353,7 @@ def run_compile(*, intent_path, run_dir=None, data_root="data", source_manifest=
 
     try:
         from pegasus.output.validate import validate_output_bundle as _validate_output_bundle
-        from pegasus.workflows.build_substrate import run_attach_substrate_to_run as _run_attach_substrate_to_run
+        from pegasus.workflows.construct.build_substrate import run_attach_substrate_to_run as _run_attach_substrate_to_run
 
         run_path = result.get("run_dir") if isinstance(result, dict) else None
         if run_path is not None and source_manifest is not None:
@@ -1394,7 +1394,7 @@ def she_build_substrate(
     provenance_mode: str = typer.Option("fixture", "--provenance-mode"),
     output: Path | None = typer.Option(None, "--output"),
 ) -> None:
-    from pegasus.workflows.build_substrate import run_build_substrate_from_artifacts
+    from pegasus.workflows.construct.build_substrate import run_build_substrate_from_artifacts
 
     artifacts = [
         {
@@ -1414,7 +1414,7 @@ def she_build_substrate_manifest(
     source_manifest: Path = typer.Option(..., "--source-manifest"),
     output: Path | None = typer.Option(None, "--output"),
 ) -> None:
-    from pegasus.workflows.build_substrate import run_build_substrate_from_source_manifest
+    from pegasus.workflows.construct.build_substrate import run_build_substrate_from_source_manifest
 
     result = run_build_substrate_from_source_manifest(source_manifest=source_manifest, output=output)
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
@@ -1424,7 +1424,7 @@ def she_build_substrate_manifest(
 def she_substrate_summary(
     manifest: Path = typer.Option(..., "--manifest"),
 ) -> None:
-    from pegasus.workflows.build_substrate import run_substrate_summary
+    from pegasus.workflows.construct.build_substrate import run_substrate_summary
 
     typer.echo(json.dumps(run_substrate_summary(manifest=manifest), indent=2, sort_keys=True))
 # ---- End Slice 13A SHE substrate CLI ----

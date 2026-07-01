@@ -7,8 +7,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from pegasus.cli import app
-import pegasus.workflows.efg_apply as apply_workflow
-import pegasus.workflows.efg_promotion as promotion_workflow
+import pegasus.workflows.construct.efg_apply as apply_workflow
+import pegasus.workflows.construct.efg_promotion as promotion_workflow
 
 
 runner = CliRunner()

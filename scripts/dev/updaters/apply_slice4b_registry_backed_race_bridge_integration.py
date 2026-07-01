@@ -1255,10 +1255,10 @@ def patch_compile() -> None:
     from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
     from pegasus.sidra.facts import write_facts_parquet
     from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
-    from pegasus.workflows.datasus import run_datasus_normalize_sim
+    from pegasus.workflows.acquire.datasus import run_datasus_normalize_sim
     from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
-    from pegasus.workflows.race_bridge import run_attach_race_bridge
-    from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
+    from pegasus.workflows.report.race_bridge import run_attach_race_bridge
+    from pegasus.workflows.acquire.sinasc import run_datasus_normalize_sinasc
 
 
     SIDRA_POPULATION_MACEIO_FLAT_PAYLOAD: list[dict[str, str]] = [
@@ -1630,7 +1630,7 @@ def patch_cli() -> None:
 def efg_validate_race_bridge_prior(
     bridge_prior: Path = typer.Option(..., "--bridge-prior"),
 ) -> None:
-    from pegasus.workflows.race_bridge import run_validate_race_bridge_prior
+    from pegasus.workflows.report.race_bridge import run_validate_race_bridge_prior
 
     result = run_validate_race_bridge_prior(bridge_prior_path=bridge_prior)
     print(f"[green]race bridge prior valid[/green] bridge_id={result['bridge_id']} hash={result['prior_hash']}")
@@ -1647,7 +1647,7 @@ def efg_plan_race_bridge(
     registry: Path = typer.Option(Path("config/registries/demographic/race_bridge_priors.yaml"), "--registry"),
     municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
 ) -> None:
-    from pegasus.workflows.race_bridge import run_plan_race_bridge
+    from pegasus.workflows.report.race_bridge import run_plan_race_bridge
 
     result = run_plan_race_bridge(
         sim_events_path=sim_events,
@@ -1774,7 +1774,7 @@ def write_tests_and_audit() -> None:
     import polars as pl
 
     from pegasus.workflows.compile import run_compile
-    from pegasus.workflows.race_bridge import run_attach_race_bridge
+    from pegasus.workflows.report.race_bridge import run_attach_race_bridge
 
 
     def test_race_bridge_attach_is_idempotent_on_compile_run(tmp_path):
@@ -1807,7 +1807,7 @@ def write_tests_and_audit() -> None:
 
     from pegasus.output.validate import validate_output_bundle
     from pegasus.workflows.compile import run_compile
-    from pegasus.workflows.race_bridge import run_plan_race_bridge
+    from pegasus.workflows.report.race_bridge import run_plan_race_bridge
 
 
     def test_baseline_compile_remains_decoupled_and_valid(tmp_path: Path):

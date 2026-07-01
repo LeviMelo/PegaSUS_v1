@@ -90,7 +90,7 @@ def efg_attach_race_bridge(
     bridge_prior: Path = typer.Option(..., "--bridge-prior"),
     municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
 ) -> None:
-    from pegasus.workflows.race_bridge import run_attach_race_bridge
+    from pegasus.workflows.report.race_bridge import run_attach_race_bridge
 
     result = run_attach_race_bridge(
         run_dir=run_dir,
@@ -845,7 +845,7 @@ def main() -> None:
 
     from pegasus.output.validate import validate_output_bundle
     from pegasus.workflows.compile import run_compile
-    from pegasus.workflows.race_bridge import run_attach_race_bridge
+    from pegasus.workflows.report.race_bridge import run_attach_race_bridge
 
 
     def test_slice4a_attach_race_bridge_to_compile_run(tmp_path: Path):

@@ -41,7 +41,7 @@ def patch_cli() -> None:
 # Slice 11A acceptance hardening commands
 @acceptance_app.command("plan")
 def acceptance_plan() -> None:
-    from pegasus.workflows.acceptance import run_acceptance_plan
+    from pegasus.workflows.report.acceptance import run_acceptance_plan
 
     typer.echo(json.dumps(run_acceptance_plan(), indent=2, sort_keys=True))
 
@@ -51,7 +51,7 @@ def acceptance_check_run(
     run: Path = typer.Option(..., "--run"),
     require_non_scaffold: bool = typer.Option(False, "--require-non-scaffold"),
 ) -> None:
-    from pegasus.workflows.acceptance import run_acceptance_check_run
+    from pegasus.workflows.report.acceptance import run_acceptance_check_run
 
     result = run_acceptance_check_run(run_dir=run, require_non_scaffold=require_non_scaffold)
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
@@ -311,7 +311,7 @@ from pathlib import Path
 from pegasus.acceptance.contracts import assert_dashboard_did_not_compute, summarize_run
 from pegasus.dashboard.read_only import inspect_run
 from pegasus.output.bundle import create_empty_output_bundle
-from pegasus.workflows.acceptance import run_acceptance_check_run, run_acceptance_plan
+from pegasus.workflows.report.acceptance import run_acceptance_check_run, run_acceptance_plan
 
 
 def test_slice11a_acceptance_checks_valid_17_key_bundle(tmp_path: Path) -> None:

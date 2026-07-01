@@ -508,7 +508,7 @@ from pegasus.source_artifacts.contracts import (
     validate_source_artifact_manifest,
     write_source_artifact_manifest,
 )
-from pegasus.workflows.source_artifacts import (
+from pegasus.workflows.acquire.source_artifacts import (
     run_source_artifact_inspect,
     run_source_manifest_summary,
     run_source_manifest_validate,
@@ -658,7 +658,7 @@ def source_artifacts_inspect(
     output: Path | None = typer.Option(None, "--output"),
     source_manifest_hash: str | None = typer.Option(None, "--source-manifest-hash"),
 ) -> None:
-    from pegasus.workflows.source_artifacts import run_source_artifact_inspect
+    from pegasus.workflows.acquire.source_artifacts import run_source_artifact_inspect
 
     result = run_source_artifact_inspect(
         path=path,
@@ -676,7 +676,7 @@ def source_artifacts_validate_manifest(
     manifest: Path = typer.Option(..., "--manifest"),
     require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
 ) -> None:
-    from pegasus.workflows.source_artifacts import run_source_manifest_validate
+    from pegasus.workflows.acquire.source_artifacts import run_source_manifest_validate
 
     result = run_source_manifest_validate(
         manifest=manifest,
@@ -691,7 +691,7 @@ def source_artifacts_validate_manifest(
 def source_artifacts_summary(
     manifest: Path = typer.Option(..., "--manifest"),
 ) -> None:
-    from pegasus.workflows.source_artifacts import run_source_manifest_summary
+    from pegasus.workflows.acquire.source_artifacts import run_source_manifest_summary
 
     typer.echo(json.dumps(run_source_manifest_summary(manifest=manifest), indent=2, sort_keys=True))
 '''

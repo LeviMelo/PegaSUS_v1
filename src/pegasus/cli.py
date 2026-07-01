@@ -16,9 +16,9 @@ from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.validators import validate_registry_tree
 from pegasus.workflows.compile import run_compile
 from pegasus.sidra.api import SidraClient, SidraClientConfig
-from pegasus.workflows.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
-from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
-from pegasus.workflows.sidra import (
+from pegasus.workflows.acquire.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
+from pegasus.workflows.acquire.sinasc import run_datasus_normalize_sinasc
+from pegasus.workflows.acquire.sidra import (
     run_sidra_extract,
     run_sidra_metadata,
     run_sidra_plan,
@@ -322,7 +322,7 @@ def run_live(
 def efg_validate_race_bridge_prior(
     bridge_prior: Path = typer.Option(..., "--bridge-prior"),
 ) -> None:
-    from pegasus.workflows.race_bridge import run_validate_race_bridge_prior
+    from pegasus.workflows.report.race_bridge import run_validate_race_bridge_prior
 
     result = run_validate_race_bridge_prior(bridge_prior_path=bridge_prior)
     print(f"[green]race bridge prior valid[/green] bridge_id={result['bridge_id']} hash={result['prior_hash']}")
@@ -336,7 +336,7 @@ def efg_plan_race_bridge(
     registry: Path = typer.Option(Path("config/registries/demographic/race_bridge_priors.yaml"), "--registry"),
     municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
 ) -> None:
-    from pegasus.workflows.race_bridge import run_plan_race_bridge
+    from pegasus.workflows.report.race_bridge import run_plan_race_bridge
 
     result = run_plan_race_bridge(
         sim_events_path=sim_events,
@@ -354,7 +354,7 @@ def datasus_normalize_cnes(
     output_path: Path = typer.Option(..., "--output"),
     source_manifest_hash: str = typer.Option("development", "--source-manifest-hash"),
 ) -> None:
-    from pegasus.workflows.cnes_sih import run_datasus_normalize_cnes
+    from pegasus.workflows.acquire.cnes_sih import run_datasus_normalize_cnes
     result = run_datasus_normalize_cnes(input_path=input_path, output_path=output_path, source_manifest_hash=source_manifest_hash)
     print(f"[green]cnes normalized[/green] rows={result['row_count']} output={result['output_path']}")
 
@@ -365,7 +365,7 @@ def datasus_normalize_sih(
     output_path: Path = typer.Option(..., "--output"),
     source_manifest_hash: str = typer.Option("development", "--source-manifest-hash"),
 ) -> None:
-    from pegasus.workflows.cnes_sih import run_datasus_normalize_sih
+    from pegasus.workflows.acquire.cnes_sih import run_datasus_normalize_sih
     result = run_datasus_normalize_sih(input_path=input_path, output_path=output_path, source_manifest_hash=source_manifest_hash)
     print(f"[green]sih normalized[/green] rows={result['row_count']} output={result['output_path']}")
 
@@ -380,7 +380,7 @@ def dashboard_assert_read_only() -> None:
 def dashboard_inspect_run(
     run: Path = typer.Option(..., "--run"),
 ) -> None:
-    from pegasus.workflows.dashboard import run_dashboard_inspect_run
+    from pegasus.workflows.report.dashboard import run_dashboard_inspect_run
 
     typer.echo(json.dumps(run_dashboard_inspect_run(run_dir=run), indent=2, sort_keys=True))
 
@@ -391,14 +391,14 @@ def dashboard_table_head(
     table: str = typer.Option(..., "--table"),
     limit: int = typer.Option(10, "--limit"),
 ) -> None:
-    from pegasus.workflows.dashboard import run_dashboard_table_head
+    from pegasus.workflows.report.dashboard import run_dashboard_table_head
 
     typer.echo(json.dumps(run_dashboard_table_head(run_dir=run, table_name=table, limit=limit), indent=2, sort_keys=True))
 
 # Slice 11A acceptance hardening commands
 @acceptance_app.command("plan")
 def acceptance_plan() -> None:
-    from pegasus.workflows.acceptance import run_acceptance_plan
+    from pegasus.workflows.report.acceptance import run_acceptance_plan
 
     typer.echo(json.dumps(run_acceptance_plan(), indent=2, sort_keys=True))
 
@@ -408,7 +408,7 @@ def acceptance_check_run(
     run: Path = typer.Option(..., "--run"),
     require_nonempty: bool = typer.Option(False, "--require-nonempty"),
 ) -> None:
-    from pegasus.workflows.acceptance import run_acceptance_check_run
+    from pegasus.workflows.report.acceptance import run_acceptance_check_run
 
     result = run_acceptance_check_run(run_dir=run, require_nonempty=require_nonempty)
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
@@ -421,7 +421,7 @@ def acceptance_check_run(
 def acceptance_level3(
     run: Path = typer.Option(..., "--run"),
 ) -> None:
-    from pegasus.workflows.acceptance import run_acceptance_level3
+    from pegasus.workflows.report.acceptance import run_acceptance_level3
 
     result = run_acceptance_level3(run_dir=run)
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
@@ -439,7 +439,7 @@ def source_artifacts_inspect(
     output: Path | None = typer.Option(None, "--output"),
     source_manifest_hash: str | None = typer.Option(None, "--source-manifest-hash"),
 ) -> None:
-    from pegasus.workflows.source_artifacts import run_source_artifact_inspect
+    from pegasus.workflows.acquire.source_artifacts import run_source_artifact_inspect
 
     result = run_source_artifact_inspect(
         path=path,
@@ -457,7 +457,7 @@ def source_artifacts_validate_manifest(
     manifest: Path = typer.Option(..., "--manifest"),
     require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
 ) -> None:
-    from pegasus.workflows.source_artifacts import run_source_manifest_validate
+    from pegasus.workflows.acquire.source_artifacts import run_source_manifest_validate
 
     result = run_source_manifest_validate(
         manifest=manifest,
@@ -472,7 +472,7 @@ def source_artifacts_validate_manifest(
 def source_artifacts_summary(
     manifest: Path = typer.Option(..., "--manifest"),
 ) -> None:
-    from pegasus.workflows.source_artifacts import run_source_manifest_summary
+    from pegasus.workflows.acquire.source_artifacts import run_source_manifest_summary
 
     typer.echo(json.dumps(run_source_manifest_summary(manifest=manifest), indent=2, sort_keys=True))
 
@@ -482,7 +482,7 @@ def source_artifacts_compile_reality_plan(
     source_manifest: Path | None = typer.Option(None, "--source-manifest"),
     require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
 ) -> None:
-    from pegasus.workflows.compile_source import run_compile_source_reality_plan
+    from pegasus.workflows.report.compile_source import run_compile_source_reality_plan
 
     typer.echo(json.dumps(
         run_compile_source_reality_plan(
@@ -506,7 +506,7 @@ def she_build_substrate(
     provenance_mode: str = typer.Option("materialized_external", "--provenance-mode"),
     output: Path | None = typer.Option(None, "--output"),
 ) -> None:
-    from pegasus.workflows.build_substrate import run_build_substrate_from_artifacts
+    from pegasus.workflows.construct.build_substrate import run_build_substrate_from_artifacts
 
     artifacts = [
         {
@@ -526,7 +526,7 @@ def she_build_substrate_manifest(
     source_manifest: Path = typer.Option(..., "--source-manifest"),
     output: Path | None = typer.Option(None, "--output"),
 ) -> None:
-    from pegasus.workflows.build_substrate import run_build_substrate_from_source_manifest
+    from pegasus.workflows.construct.build_substrate import run_build_substrate_from_source_manifest
 
     result = run_build_substrate_from_source_manifest(source_manifest=source_manifest, output=output)
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
@@ -536,7 +536,7 @@ def she_build_substrate_manifest(
 def she_substrate_summary(
     manifest: Path = typer.Option(..., "--manifest"),
 ) -> None:
-    from pegasus.workflows.build_substrate import run_substrate_summary
+    from pegasus.workflows.construct.build_substrate import run_substrate_summary
 
     typer.echo(json.dumps(run_substrate_summary(manifest=manifest), indent=2, sort_keys=True))
 # ---- End Slice 13A SHE substrate CLI ----
@@ -571,7 +571,7 @@ def efg_materialize_substrate_manifest(
     """Build a metadata-only EFG materialization manifest from a substrate manifest."""
     import json
 
-    from pegasus.workflows.efg_materialize import run_materialize_substrate_manifest
+    from pegasus.workflows.construct.efg_materialize import run_materialize_substrate_manifest
 
     payload = run_materialize_substrate_manifest(substrate_manifest=substrate_manifest, output=output)
     print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
@@ -585,7 +585,7 @@ def efg_attach_materialization_manifest(
     """Attach EFG substrate materialization metadata to an existing run bundle."""
     import json
 
-    from pegasus.workflows.efg_materialize import run_attach_efg_materialization_to_run
+    from pegasus.workflows.construct.efg_materialize import run_attach_efg_materialization_to_run
 
     payload = run_attach_efg_materialization_to_run(run_dir=run_dir, substrate_manifest=substrate_manifest)
     print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
@@ -626,7 +626,7 @@ def efg_plan_promotion(
     """Build a non-mutating EFG promotion plan from a materialization manifest."""
     import json
 
-    from pegasus.workflows.efg_promotion import run_plan_efg_promotion
+    from pegasus.workflows.construct.efg_promotion import run_plan_efg_promotion
 
     payload = run_plan_efg_promotion(
         run_dir=run_dir,
@@ -644,7 +644,7 @@ def efg_attach_promotion_plan(
     """Attach a non-mutating EFG promotion plan and gate summary to a run bundle."""
     import json
 
-    from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run
+    from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run
 
     payload = run_attach_efg_promotion_plan_to_run(
         run_dir=run_dir,
@@ -662,7 +662,7 @@ def efg_apply_promotion_plan(
     """Apply planned EFG promotions to descriptive/quarantined bundle surfaces."""
     import json
 
-    from pegasus.workflows.efg_apply import run_apply_efg_promotion_plan
+    from pegasus.workflows.construct.efg_apply import run_apply_efg_promotion_plan
 
     payload = run_apply_efg_promotion_plan(
         run_dir=run_dir,

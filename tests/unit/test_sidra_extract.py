@@ -6,7 +6,7 @@ from pegasus.sidra.api import SidraClient, SidraClientConfig
 from pegasus.sidra.cache import SidraJsonCache
 from pegasus.sidra.extract import extract_one_chunk
 from pegasus.sidra.schemas import SIDRAChunk, SIDRAMetadata, SIDRARequest, SIDRATableMetadata
-from pegasus.workflows.ingest_sidra import ingest_sidra
+from pegasus.workflows.acquire.ingest_sidra import ingest_sidra
 
 
 def test_extract_one_chunk_writes_raw_and_facts_from_real_flat_shape(tmp_path: Path):

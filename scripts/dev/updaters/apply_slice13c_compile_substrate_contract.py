@@ -184,7 +184,7 @@ def consolidate_compile() -> None:
             return result
 
         from pegasus.output.validate import validate_output_bundle as _validate_output_bundle
-        from pegasus.workflows.build_substrate import run_attach_substrate_to_run as _run_attach_substrate_to_run
+        from pegasus.workflows.construct.build_substrate import run_attach_substrate_to_run as _run_attach_substrate_to_run
 
         substrate_summary = _run_attach_substrate_to_run(run_dir=run_path, source_manifest=source_manifest)
         result["substrate_gate"] = substrate_summary

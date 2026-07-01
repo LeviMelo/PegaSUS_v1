@@ -699,7 +699,7 @@ def patch_cli() -> None:
 def acceptance_level3(
     run: Path = typer.Option(..., "--run"),
 ) -> None:
-    from pegasus.workflows.acceptance import run_acceptance_level3
+    from pegasus.workflows.report.acceptance import run_acceptance_level3
 
     result = run_acceptance_level3(run_dir=run)
     typer.echo(json.dumps(result, indent=2, sort_keys=True))

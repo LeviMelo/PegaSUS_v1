@@ -28,7 +28,7 @@ def test_slice14c_compile_boundary_remains_consolidated() -> None:
 
 
 def test_slice14c_workflow_api_is_present() -> None:
-    from pegasus.workflows.efg_materialize import (
+    from pegasus.workflows.construct.efg_materialize import (
         run_attach_efg_materialization_to_run,
         run_materialize_substrate_manifest,
     )

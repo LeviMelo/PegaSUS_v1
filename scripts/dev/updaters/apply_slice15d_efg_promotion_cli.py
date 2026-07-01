@@ -120,7 +120,7 @@ def cli_block() -> str:
         """Build a non-mutating EFG promotion plan from a materialization manifest."""
         import json
 
-        from pegasus.workflows.efg_promotion import run_plan_efg_promotion
+        from pegasus.workflows.construct.efg_promotion import run_plan_efg_promotion
 
         payload = run_plan_efg_promotion(
             run_dir=run_dir,
@@ -138,7 +138,7 @@ def cli_block() -> str:
         """Attach a non-mutating EFG promotion plan and gate summary to a run bundle."""
         import json
 
-        from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run
+        from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run
 
         payload = run_attach_efg_promotion_plan_to_run(
             run_dir=run_dir,
@@ -156,7 +156,7 @@ def cli_block() -> str:
         """Apply planned EFG promotions to descriptive/quarantined bundle surfaces."""
         import json
 
-        from pegasus.workflows.efg_apply import run_apply_efg_promotion_plan
+        from pegasus.workflows.construct.efg_apply import run_apply_efg_promotion_plan
 
         payload = run_apply_efg_promotion_plan(
             run_dir=run_dir,
@@ -269,8 +269,8 @@ def integration_test() -> str:
     from typer.testing import CliRunner
 
     from pegasus.cli import app
-    import pegasus.workflows.efg_apply as apply_workflow
-    import pegasus.workflows.efg_promotion as promotion_workflow
+    import pegasus.workflows.construct.efg_apply as apply_workflow
+    import pegasus.workflows.construct.efg_promotion as promotion_workflow
 
 
     runner = CliRunner()
@@ -406,8 +406,8 @@ def audit_script() -> str:
             errors.append("compile.py must contain exactly one private _run_compile_impl")
 
         from pegasus.cli import app  # noqa: F401
-        from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run, run_plan_efg_promotion
-        from pegasus.workflows.efg_apply import run_apply_efg_promotion_plan
+        from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run, run_plan_efg_promotion
+        from pegasus.workflows.construct.efg_apply import run_apply_efg_promotion_plan
 
         if "run_dir" not in inspect.signature(run_plan_efg_promotion).parameters:
             errors.append("run_plan_efg_promotion missing run_dir parameter")

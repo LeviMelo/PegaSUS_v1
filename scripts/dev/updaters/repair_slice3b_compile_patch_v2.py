@@ -66,9 +66,9 @@ def write_compile() -> None:
     from pegasus.output.validate import validate_output_bundle
     from pegasus.sidra.facts import write_facts_parquet
     from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
-    from pegasus.workflows.datasus import run_datasus_normalize_sim
+    from pegasus.workflows.acquire.datasus import run_datasus_normalize_sim
     from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
-    from pegasus.workflows.sinasc import run_datasus_normalize_sinasc
+    from pegasus.workflows.acquire.sinasc import run_datasus_normalize_sinasc
 
 
     SIDRA_POPULATION_MACEIO_FLAT_PAYLOAD: list[dict[str, str]] = [

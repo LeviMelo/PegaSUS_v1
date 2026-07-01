@@ -115,7 +115,7 @@ def patch_compile() -> None:
             raise RuntimeError("Cannot patch compile imports: reproducibility import marker not found.")
         text = text.replace(marker, marker + import_a, 1)
 
-    import_b = "from pegasus.workflows.sinasc import run_datasus_normalize_sinasc\n"
+    import_b = "from pegasus.workflows.acquire.sinasc import run_datasus_normalize_sinasc\n"
     if import_b not in text:
         marker = "from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture\n"
         if marker not in text:

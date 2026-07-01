@@ -614,7 +614,7 @@ def self_validate() -> None:
     if src not in sys.path:
         sys.path.insert(0, src)
     from pegasus.efg.materialization_manifest import build_efg_materialization_manifest  # noqa: F401
-    from pegasus.workflows.efg_materialize import run_materialize_substrate_manifest  # noqa: F401
+    from pegasus.workflows.construct.efg_materialize import run_materialize_substrate_manifest  # noqa: F401
 
 
 def main() -> None:

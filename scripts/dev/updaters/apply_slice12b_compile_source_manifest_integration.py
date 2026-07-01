@@ -455,7 +455,7 @@ def patch_cli_py() -> None:
 def source_artifacts_summary(
     manifest: Path = typer.Option(..., "--manifest"),
 ) -> None:
-    from pegasus.workflows.source_artifacts import run_source_manifest_summary
+    from pegasus.workflows.acquire.source_artifacts import run_source_manifest_summary
 
     typer.echo(json.dumps(run_source_manifest_summary(manifest=manifest), indent=2, sort_keys=True))
 '''
@@ -466,7 +466,7 @@ def source_artifacts_compile_reality_plan(
     source_manifest: Path | None = typer.Option(None, "--source-manifest"),
     require_materialized_external: bool = typer.Option(False, "--require-materialized-external"),
 ) -> None:
-    from pegasus.workflows.compile_source import run_compile_source_reality_plan
+    from pegasus.workflows.report.compile_source import run_compile_source_reality_plan
 
     typer.echo(json.dumps(
         run_compile_source_reality_plan(

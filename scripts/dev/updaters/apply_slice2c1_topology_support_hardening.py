@@ -726,7 +726,7 @@ def main() -> None:
 
     from pegasus.output.sidra_denominator_anchor import attach_sidra_population_anchor_to_run
     from pegasus.output.validate import validate_output_bundle
-    from pegasus.workflows.build_efg import build_sim_fixture_efg_run
+    from pegasus.workflows.construct.build_efg import build_sim_fixture_efg_run
 
 
     def run_build_sim_fixture(
@@ -1266,9 +1266,9 @@ def main() -> None:
     from pegasus.output.validate import validate_output_bundle
     from pegasus.registries.validators import validate_registry_tree
     from pegasus.sidra.api import SidraClient, SidraClientConfig
-    from pegasus.workflows.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
+    from pegasus.workflows.acquire.datasus import run_datasus_ingest, run_datasus_normalize_sim, run_datasus_profile
     from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture
-    from pegasus.workflows.sidra import (
+    from pegasus.workflows.acquire.sidra import (
         run_sidra_extract,
         run_sidra_metadata,
         run_sidra_metadata_fixture,
@@ -1598,7 +1598,7 @@ def main() -> None:
     from pegasus.sidra.facts import write_facts_parquet
     from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
     from pegasus.she.population.sidra_anchor import load_sidra_population_total_anchor
-    from pegasus.workflows.build_efg import build_sim_fixture_efg_run
+    from pegasus.workflows.construct.build_efg import build_sim_fixture_efg_run
 
 
     LIVE_SHAPE_PAYLOAD = [
@@ -1786,8 +1786,8 @@ def main() -> None:
             "pegasus.output.sidra_denominator_anchor",
         }
         assert not (set(imported_from) & forbidden)
-        assert "pegasus.workflows.sidra" in imported_from
-        assert "pegasus.workflows.datasus" in imported_from
+        assert "pegasus.workflows.acquire.sidra" in imported_from
+        assert "pegasus.workflows.acquire.datasus" in imported_from
         assert "pegasus.workflows.efg" in imported_from
     ''')
 
@@ -1801,7 +1801,7 @@ def main() -> None:
     from pegasus.output.validate import validate_output_bundle
     from pegasus.sidra.facts import write_facts_parquet
     from pegasus.sidra.normalize import normalize_sidra_payload_to_facts
-    from pegasus.workflows.build_efg import build_sim_fixture_efg_run
+    from pegasus.workflows.construct.build_efg import build_sim_fixture_efg_run
     from pegasus.workflows.efg import run_attach_sidra_denominator
 
 

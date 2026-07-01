@@ -563,7 +563,7 @@ from pathlib import Path
 
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
-from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run
+from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run
 
 
 def test_slice15a_attaches_efg_promotion_plan_without_mutating_first_class_keys(tmp_path: Path) -> None:
@@ -625,7 +625,7 @@ from pathlib import Path
 
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
-from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run
+from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run
 
 
 def _count_defs(path: Path, name: str) -> int:
@@ -705,7 +705,7 @@ def self_validate() -> None:
     if src_path not in sys.path:
         sys.path.insert(0, src_path)
     from pegasus.efg.promotion_plan import build_efg_promotion_plan  # noqa: F401
-    from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run  # noqa: F401
+    from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run  # noqa: F401
 
 
 def main() -> None:

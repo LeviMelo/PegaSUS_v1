@@ -121,7 +121,7 @@ def cli_block() -> str:
         """Build a metadata-only EFG materialization manifest from a substrate manifest."""
         import json
 
-        from pegasus.workflows.efg_materialize import run_materialize_substrate_manifest
+        from pegasus.workflows.construct.efg_materialize import run_materialize_substrate_manifest
 
         payload = run_materialize_substrate_manifest(substrate_manifest=substrate_manifest, output=output)
         print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
@@ -135,7 +135,7 @@ def cli_block() -> str:
         """Attach EFG substrate materialization metadata to an existing run bundle."""
         import json
 
-        from pegasus.workflows.efg_materialize import run_attach_efg_materialization_to_run
+        from pegasus.workflows.construct.efg_materialize import run_attach_efg_materialization_to_run
 
         payload = run_attach_efg_materialization_to_run(run_dir=run_dir, substrate_manifest=substrate_manifest)
         print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
@@ -218,7 +218,7 @@ def unit_test() -> str:
 
 
     def test_slice14c_workflow_api_is_present() -> None:
-        from pegasus.workflows.efg_materialize import (
+        from pegasus.workflows.construct.efg_materialize import (
             run_attach_efg_materialization_to_run,
             run_materialize_substrate_manifest,
         )
@@ -355,7 +355,7 @@ def audit_script() -> str:
         from pegasus.output.bundle import create_empty_output_bundle
         from pegasus.output.validate import validate_output_bundle
         from pegasus.she.substrate import SourceArtifactRef, build_substrate_bundle, write_substrate_bundle_manifest
-        from pegasus.workflows.efg_materialize import run_attach_efg_materialization_to_run, run_materialize_substrate_manifest
+        from pegasus.workflows.construct.efg_materialize import run_attach_efg_materialization_to_run, run_materialize_substrate_manifest
 
         if not callable(run_materialize_substrate_manifest):
             errors.append("run_materialize_substrate_manifest is not callable")

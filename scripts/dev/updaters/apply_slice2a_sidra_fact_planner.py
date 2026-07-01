@@ -772,7 +772,7 @@ def main() -> None:
     from pegasus.sidra.metadata import fixture_sidra_metadata, write_normalized_metadata_tables
     from pegasus.sidra.plan import plan_sidra_chunks
     from pegasus.sidra.schemas import SIDRARequest
-    from pegasus.workflows.build_efg import build_sim_fixture_efg_run
+    from pegasus.workflows.construct.build_efg import build_sim_fixture_efg_run
 
     app = typer.Typer(no_args_is_help=True)
     registries_app = typer.Typer(no_args_is_help=True)

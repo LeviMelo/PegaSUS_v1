@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pegasus.output.bundle import create_empty_output_bundle
 from pegasus.output.validate import validate_output_bundle
-from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run
+from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run
 
 
 def _count_defs(path: Path, name: str) -> int:

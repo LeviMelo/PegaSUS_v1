@@ -39,8 +39,8 @@ def main() -> int:
         errors.append("compile.py must contain exactly one private _run_compile_impl")
 
     from pegasus.cli import app  # noqa: F401
-    from pegasus.workflows.efg_promotion import run_attach_efg_promotion_plan_to_run, run_plan_efg_promotion
-    from pegasus.workflows.efg_apply import run_apply_efg_promotion_plan
+    from pegasus.workflows.construct.efg_promotion import run_attach_efg_promotion_plan_to_run, run_plan_efg_promotion
+    from pegasus.workflows.construct.efg_apply import run_apply_efg_promotion_plan
 
     if "run_dir" not in inspect.signature(run_plan_efg_promotion).parameters:
         errors.append("run_plan_efg_promotion missing run_dir parameter")

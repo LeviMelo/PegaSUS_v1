@@ -1278,7 +1278,7 @@ def main() -> None:
 
     from pegasus.datasus.normalize import normalize_sim_do_events
     from pegasus.output.validate import validate_output_bundle
-    from pegasus.workflows.build_efg import build_sim_fixture_efg_run
+    from pegasus.workflows.construct.build_efg import build_sim_fixture_efg_run
 
 
     def _build(tmp_path: Path) -> Path:

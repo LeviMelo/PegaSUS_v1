@@ -37,7 +37,7 @@ def main() -> int:
     from pegasus.output.bundle import create_empty_output_bundle
     from pegasus.output.validate import validate_output_bundle
     from pegasus.she.substrate import SourceArtifactRef, build_substrate_bundle, write_substrate_bundle_manifest
-    from pegasus.workflows.efg_materialize import run_attach_efg_materialization_to_run, run_materialize_substrate_manifest
+    from pegasus.workflows.construct.efg_materialize import run_attach_efg_materialization_to_run, run_materialize_substrate_manifest
 
     if not callable(run_materialize_substrate_manifest):
         errors.append("run_materialize_substrate_manifest is not callable")

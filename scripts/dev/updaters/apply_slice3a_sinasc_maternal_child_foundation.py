@@ -97,7 +97,7 @@ def patch_cli() -> None:
     path = rel("src/pegasus/cli.py")
     cli = path.read_text(encoding="utf-8")
 
-    import_line = "from pegasus.workflows.sinasc import run_build_sinasc_fixture, run_datasus_normalize_sinasc\n"
+    import_line = "from pegasus.workflows.acquire.sinasc import run_build_sinasc_fixture, run_datasus_normalize_sinasc\n"
     if import_line not in cli:
         marker = "from pegasus.workflows.efg import run_attach_sidra_denominator, run_build_sim_fixture\n"
         if marker not in cli:
@@ -1178,7 +1178,7 @@ def main() -> None:
     import polars as pl
 
     from pegasus.output.validate import validate_output_bundle
-    from pegasus.workflows.sinasc import run_build_sinasc_fixture, run_datasus_normalize_sinasc
+    from pegasus.workflows.acquire.sinasc import run_build_sinasc_fixture, run_datasus_normalize_sinasc
 
 
     def test_slice3a_sinasc_normalize_to_maternal_child_bundle(tmp_path: Path):

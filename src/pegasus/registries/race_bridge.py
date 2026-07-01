@@ -197,7 +197,8 @@ def load_race_bridge_registry(
 
 def select_compile_race_bridge_prior(
     *,
-    municipality_cod6: str,
+    municipality_cod6: str | None = None,
+    uf: str | None = None,
     source_system: str = "SIM-DO",
     source_axis: str = "SIM_ADMIN_RACACOR",
     target_axis: str = "IBGE_SELF_DECLARED_RACE",
@@ -205,7 +206,9 @@ def select_compile_race_bridge_prior(
     repo_root: str | Path = ".",
 ) -> RaceBridgeRegistryEntry:
     entries = load_race_bridge_registry(registry_path, repo_root=repo_root)
-    uf = _uf_from_datasus_cod6(municipality_cod6)
+    # The prior is UF-scoped (region_scope) and its local-pi is computed per-group at
+    # execution, so a state-level compile (no single municipality) selects by UF directly.
+    uf = uf or _uf_from_datasus_cod6(municipality_cod6)
     candidates: list[RaceBridgeRegistryEntry] = []
     for entry in entries:
         if not entry.enabled_for_compile:
@@ -233,7 +236,8 @@ def select_compile_race_bridge_prior(
 def resolve_race_bridge_plan(
     *,
     intent: UserIntent,
-    municipality_cod6: str,
+    municipality_cod6: str | None,
+    uf: str | None = None,
     registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
     repo_root: str | Path = ".",
 ) -> RaceBridgePlan:
@@ -262,6 +266,7 @@ def resolve_race_bridge_plan(
         )
     entry = select_compile_race_bridge_prior(
         municipality_cod6=municipality_cod6,
+        uf=uf,
         registry_path=registry_path,
         repo_root=repo_root,
     )

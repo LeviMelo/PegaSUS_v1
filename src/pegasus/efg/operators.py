@@ -315,6 +315,17 @@ def apply_operator(
             })
             axes[strat_axis] = "demographic_stratifier"
             role.append("demographic_stratified_count")
+            # Race count with a configured Bridge_R prior: the executor will redistribute
+            # admin race onto the census self-declared axis, so mark the axis self-declared
+            # (align then permits the rate against the self-declared population, §3.7.4) and
+            # flag the field as a bridge posterior (not a raw epidemiological observation).
+            race_bridge_prior_path = operator.params.get("race_bridge_prior_path")
+            if strat_axis == "race" and race_bridge_prior_path:
+                support["race_bridge_prior_path"] = str(race_bridge_prior_path)
+                support["race_bridge_id"] = operator.params.get("race_bridge_id")
+                axes[strat_axis] = "self_declared_bridged"
+                axes["race_axis_type"] = "self_declared_bridged"
+                role.append("race_bridge_posterior")
         # Carry the spatial-aggregation level (MSD §3.7) into the support so the
         # executor coarsens the geography cell consistently for every count.
         if operator.params.get("geography_aggregation"):

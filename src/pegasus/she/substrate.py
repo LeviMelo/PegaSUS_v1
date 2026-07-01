@@ -339,6 +339,12 @@ def build_substrate_bundle(
         warnings.append("substrate_no_source_artifacts")
 
     for artifact in refs:
+        # Model-prior artifacts (e.g. the Bridge_R RACE-BRIDGE emission prior) are JSON
+        # configs, not observational source tables -- they carry no fields for the SHE
+        # substrate and are not NDJSON/parquet, so profiling them would crash the reader.
+        # They enter the EFG via their operator (Bridge_R), not the field substrate.
+        if getattr(artifact, "source_system", "") == "RACE-BRIDGE" or getattr(artifact, "artifact_role", "") == "emission_prior":
+            continue
         path = Path(artifact.path)
         if not path.exists():
             exclusions.append(SubstrateFieldExclusion(

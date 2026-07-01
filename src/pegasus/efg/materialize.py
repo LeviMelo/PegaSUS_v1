@@ -478,6 +478,12 @@ def _population_solver_materialized_fields(bundle: SubstrateBundle) -> list[Subs
             if target_axis:
                 axes[target_axis] = "stratified"
                 roles.insert(3, "demographic_stratified")
+                # The SIDRA 9606 population race axis IS IBGE self-declared census race;
+                # declare it explicitly so a Bridge_R self-declared death/birth count can be
+                # divided by it (declaration.evaluate_declaration_compatibility fails closed
+                # when one RN operand's race axis is unlabeled, §3.7.4/EFG-DECL-02).
+                if target_axis == "race":
+                    axes["race_axis_type"] = "ibge_self_declared"
             support = {
                 "support_kind": "population_tensor_solver_output",
                 "source_system": "SIDRA",

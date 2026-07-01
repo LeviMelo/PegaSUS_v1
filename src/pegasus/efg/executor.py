@@ -454,11 +454,45 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
                 ).filter(~pl.col(axis_name).is_in([TOTAL, UNKNOWN]))
                 keys = [*keys, axis_name]
             elif axis_name == "race":
-                # Administrative race/color is NOT self-declared census race: a direct
-                # code->canonical crosswalk here would be silent redistribution
-                # (§3.7.4). Keep the RAW admin code as the stratum so Bridge_R can map it
-                # downstream; this count never divides a self-declared population directly
-                # (align_fields gates race rates on race_bridge_required).
+                prior_path = support.get("race_bridge_prior_path")
+                if prior_path:
+                    # Bridge_R configured: redistribute this cell's admin race codes onto
+                    # the census self-declared race axis (MSD §3.7.4/§2.8.6) per (geo,time)
+                    # group, so the SELF-DECLARED race count divides the self-declared
+                    # population. Posterior counts are a bridge estimate, NOT a raw
+                    # observation -- the field carries the bridge's epistemic warnings.
+                    from pegasus.efg.race_bridge import (
+                        bridge_admin_race_group_counts,
+                        load_race_bridge_prior,
+                    )
+
+                    prior = load_race_bridge_prior(str(prior_path))
+                    state_col = "race_missingness_state" if "race_missingness_state" in df.columns else None
+                    bridged_rows: list[dict[str, Any]] = []
+                    for support_values, group in _fixedc_support_groups(df):
+                        codes = group[raw_column].to_list()
+                        states = group[state_col].to_list() if state_col is not None else None
+                        posterior = bridge_admin_race_group_counts(
+                            race_codes=codes, race_states=states, prior=prior,
+                            support={**support_values, "n_events": int(group.height)},
+                        )
+                        for target in prior.target_categories:
+                            bridged_rows.append({
+                                **support_values,
+                                axis_name: str(target),
+                                VALUE_COLUMN: float(posterior.posterior_counts[target]),
+                            })
+                    schema = {**{k: df.schema[k] for k in base_keys}, axis_name: pl.Utf8, VALUE_COLUMN: pl.Float64}
+                    out = pl.DataFrame(bridged_rows, schema=schema) if bridged_rows else pl.DataFrame(schema=schema)
+                    return out.with_columns([
+                        pl.lit(field.id).alias("field_id"),
+                        pl.lit(field.name).alias("field_name"),
+                        pl.lit(field.operator or "count_measure").alias("operator"),
+                    ])
+                # No bridge prior: administrative race/color is NOT self-declared census
+                # race -- a direct code->canonical crosswalk would be silent redistribution
+                # (§3.7.4). Keep the RAW admin code; align_fields gates the rate on
+                # race_bridge_required so this never divides a self-declared population.
                 df = df.with_columns(
                     pl.col(raw_column).cast(pl.Utf8, strict=False).alias(axis_name)
                 ).filter(pl.col(axis_name).is_not_null())

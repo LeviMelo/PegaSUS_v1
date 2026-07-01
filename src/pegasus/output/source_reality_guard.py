@@ -67,8 +67,22 @@ def _source_mode(root: Path) -> str | None:
     return None
 
 
+# Honest MODEL-PRIOR calibration labels (e.g. a Bridge_R race prior declaring itself an
+# uncalibrated fixture). These are legitimate epistemic metadata, NOT fake SOURCE DATA --
+# the guard exists to catch synthetic/placeholder observations, and forcing these honest
+# caveats to be scrubbed would hide the uncalibration. Neutralized before the scan so a
+# genuine "fixture"/"synthetic" marker on real data content is still caught.
+ALLOWED_MODEL_PRIOR_TOKENS: tuple[str, ...] = (
+    "fixture_prior_not_calibrated",
+    "validation_fixture_only",
+    "race_bridge_prior_uncalibrated_assessment_only",
+)
+
+
 def _contains_forbidden(text: str) -> str | None:
     lowered = text.lower()
+    for token in ALLOWED_MODEL_PRIOR_TOKENS:
+        lowered = lowered.replace(token, "")
     for term in FORBIDDEN_MATERIALIZED_EXTERNAL_TERMS:
         if term in lowered:
             return term

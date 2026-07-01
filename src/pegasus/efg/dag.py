@@ -340,7 +340,7 @@ def _append_race_bridge_fields(
         source=list(dict.fromkeys([*list(parent.source or []), "RaceBridgePrior", str(prior_path or "")])),
         operator="Bridge_R_localPi_posteriorC",
         provenance=list(dict.fromkeys([*list(parent.provenance or []), "BayesianEcologicalRaceBridge"])),
-        state="warning",
+        state="fragile",
         warnings=["race_bridge_posterior_not_raw_epidemiological_observation"],
         lineage=lineage,
         materialization_state="metadata_only",
@@ -663,10 +663,23 @@ def _build_efg_base(
         # demographic axis (sex/age/race) that has a matching population denominator tensor,
         # mapping source category codes to the canonical axis. Enables stratified rates.
         source_system = count_parents[0].source[0] if count_parents[0].source else ""
+        # Race-specific rates need the admin-race death/birth count bridged to the census
+        # self-declared race axis (admin race != self-declared, MSD §3.7.4). When a Bridge_R
+        # prior is configured for this compile, thread its path into the race count so the
+        # executor emits SELF-DECLARED race counts that divide the self-declared population;
+        # without a prior the race count keeps raw admin codes and forms no rate (align gates it).
+        _rb_plan = constraints.get("race_bridge_plan") if isinstance(constraints.get("race_bridge_plan"), dict) else {}
+        _race_bridge_prior_path = (
+            _rb_plan.get("prior_path") if _rb_plan.get("status") in {"planned", "embedded"} else None
+        )
         for axis_name in sorted(available_demographic_axes):
             column = _demo_source_column(axis_name, source_system, registry_root=root)
             if not column:
                 continue
+            extra: dict[str, Any] = {}
+            if axis_name == "race" and _race_bridge_prior_path:
+                extra["race_bridge_prior_path"] = str(_race_bridge_prior_path)
+                extra["race_bridge_id"] = _rb_plan.get("bridge_id")
             demo_operator = OperatorSpec(
                 name=EFGOperator.COUNT_MEASURE.value,
                 role=f"{axis_name}_stratified_event_count",
@@ -678,6 +691,7 @@ def _build_efg_base(
                     stratify_axis=axis_name,
                     stratify_source=source_system,
                     name=f"{source_system}.{Path(artifact).stem}.count.{axis_name}",
+                    **extra,
                 ),
             )
             demo_child = expand(demo_operator, count_parents)

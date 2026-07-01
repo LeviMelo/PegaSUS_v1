@@ -50,6 +50,23 @@ def _axis_values(field: FieldNode) -> dict[str, Any]:
     }
 
 
+def _race_is_self_declared(field: FieldNode) -> bool:
+    """True when a field's race axis is on the IBGE self-declared basis (§3.7.4).
+
+    The census population denominator is self-declared by construction; a Bridge_R
+    posterior death/birth count is explicitly marked ``self_declared_bridged`` by the
+    count operator. Raw administrative death/birth race is NOT self-declared and must
+    still go through the bridge before it can divide a self-declared population.
+    """
+    if getattr(field, "carrier", None) == "Population":
+        return True
+    axes = field.axes or {}
+    axis_type = str(axes.get("race_axis_type") or "")
+    return axis_type in {
+        "self_declared_bridged", "self_declared", "census_self_declared", "ibge_self_declared",
+    }
+
+
 def _support_value(field: FieldNode, *names: str) -> Any:
     value = _value(field.support, tuple(names))
     if value is not None:
@@ -148,6 +165,12 @@ def align_fields(
             relations[axis] = "geospatial_transform_required"
             failures.append("geospatial_transform_required")
             warnings.append("required_module:geo_support_calculus")
+        elif axis == "race" and _race_is_self_declared(left) and _race_is_self_declared(right):
+            # Both sides are on the census self-declared race axis (a Bridge_R posterior
+            # count dividing the self-declared population): a valid stratified join, like
+            # age/sex. Raw administrative race falls through to race_bridge_required below.
+            relations[axis] = "self_declared_race_join"
+            operations.append(f"stratified_join:{axis}")
         elif axis == "race":
             relations[axis] = "race_bridge_required"
             failures.append("race_bridge_required")

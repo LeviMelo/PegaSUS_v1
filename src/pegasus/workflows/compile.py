@@ -337,8 +337,11 @@ def _run_compile_impl(
     intent_payload, intent = _load_intent(intent_path)
     municipality_cod6 = _intent_municipality_filter_cod6(intent)
     geo_scope = _geo_scope_from_intent(intent, municipality_cod6=municipality_cod6)
-    if municipality_cod6 is None and str(intent.race_tensor_mode) != "decoupled":
-        raise ValueError("State-level compile currently supports race_tensor_mode='decoupled' only.")
+    # State-level race bridge: the Bridge_R prior is UF-scoped and its local-pi is computed
+    # per-(municipality,year) group at execution, so a whole-UF compile resolves the plan by
+    # UF (geo_scope.uf) instead of a single municipality -- enabling self-declared race-
+    # specific rates for a state run, not just a single-municipality one.
+    race_bridge_uf = geo_scope.uf if municipality_cod6 is None else None
     include_cnes_sih = _context_policy_enabled(intent, "include_cnes_sih")
     population_tensor_mode = _compile_population_tensor_mode(intent)
     compiler_architecture = _compiler_architecture_metadata()
@@ -353,7 +356,9 @@ def _run_compile_impl(
     )
 
     try:
-        race_bridge_plan = resolve_race_bridge_plan(intent=intent, municipality_cod6=municipality_cod6)
+        race_bridge_plan = resolve_race_bridge_plan(
+            intent=intent, municipality_cod6=municipality_cod6, uf=race_bridge_uf,
+        )
     except RaceBridgeRegistryError as exc:
         raise ValueError(f"Invalid Race Bridge registry plan for {intent_path}: {exc}") from exc
     if race_bridge_plan.status == "blocked":
@@ -398,8 +403,19 @@ def _run_compile_impl(
                 f"plan={race_bridge_plan.source_axis}->{race_bridge_plan.target_axis}; "
                 f"prior={prior.source_axis}->{prior.target_axis}."
             )
-        if str(prior.metadata.get("epistemic_status") or "").lower() in {"validation_fixture_only", "fixture", "synthetic_smoke_fixture"}:
-            raise ValueError("Race bridge emission prior is marked as fixture/validation-only and cannot be used for production compile.")
+        fixture_prior = str(prior.metadata.get("epistemic_status") or "").lower() in {
+            "validation_fixture_only", "fixture", "synthetic_smoke_fixture",
+        }
+        # A fixture/uncalibrated prior may NOT drive a dashboard-safe production run, but it
+        # MAY drive an architecture-assessment run: the bridge posterior fields are already
+        # emitted as non-dashboard-safe sensitivity observers, so the race-specific rates
+        # compute end-to-end while carrying an explicit "uncalibrated" flag and never being
+        # presented as calibrated epidemiological truth. Production profiles still refuse it.
+        if fixture_prior and str(intent.run_profile) == "full":
+            raise ValueError(
+                "Race bridge emission prior is marked fixture/validation-only and cannot "
+                "drive a production (run_profile='full') compile; register a calibrated prior."
+            )
         race_bridge_plan = replace(
             race_bridge_plan,
             bridge_id=prior.bridge_id,
@@ -408,6 +424,7 @@ def _run_compile_impl(
             warnings=[
                 *list(race_bridge_plan.warnings or []),
                 "race_bridge_prior_materialized_external",
+                *(["race_bridge_prior_uncalibrated_assessment_only"] if fixture_prior else []),
             ],
         )
         source_hashes["race_bridge_emission_prior"] = prior_artifact.artifact_hash or prior.prior_hash

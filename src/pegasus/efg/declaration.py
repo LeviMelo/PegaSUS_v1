@@ -56,6 +56,8 @@ def _bridge_applied(field: FieldNode) -> bool:
     provenance = set(field.provenance or [])
     operators = {field.operator} if field.operator else set()
     warnings = set(field.warnings or [])
+    roles = set(field.role or [])
+    axes = field.axes or {}
     return bool(
         provenance
         & {
@@ -71,7 +73,14 @@ def _bridge_applied(field: FieldNode) -> bool:
             "Bridge_R_posteriorC",
             "Bridge_R_localPi_posteriorC",
         }
-    ) or "race_bridge_applied" in warnings
+    ) or "race_bridge_applied" in warnings or (
+        # A race-stratified event count whose admin codes were redistributed onto the
+        # self-declared axis by the count executor's Bridge_R pass (MSD §2.8.6): marked
+        # by the count operator with the race_bridge_posterior role / self_declared_bridged
+        # axis, so its self-declared race count legally divides the self-declared population.
+        "race_bridge_posterior" in roles
+        or str(axes.get("race_axis_type") or "") == "self_declared_bridged"
+    )
 
 
 def evaluate_declaration_compatibility(

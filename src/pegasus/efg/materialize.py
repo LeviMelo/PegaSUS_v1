@@ -436,11 +436,17 @@ def _population_solver_materialized_fields(bundle: SubstrateBundle) -> list[Subs
             continue
         mode = str(frame.get_column("population_tensor_mode")[0])
         solver_id = str(frame.get_column("solver_id")[0])
-        axes = {
-            "geography_axis": "N6",
-            "time_axis": "period",
-            "population_tensor_mode": mode,
-        }
+
+        def _first(col: str, default: Any) -> Any:
+            if col in frame.columns:
+                try:
+                    v = frame.get_column(col).drop_nulls().to_list()
+                    if v:
+                        return v[0]
+                except Exception:
+                    pass
+            return default
+
         demographic_axes: list[str] = []
         for axis in ("age_group", "sex", "race"):
             if axis in frame.columns:
@@ -450,54 +456,75 @@ def _population_solver_materialized_fields(bundle: SubstrateBundle) -> list[Subs
                     values = []
                 if values and values != ["__total__"]:
                     demographic_axes.append(axis)
-                    axes[axis] = "stratified"
-                    axes["population_strata_axis"] = axis
-        support = {
-            "support_kind": "population_tensor_solver_output",
-            "source_system": "SIDRA",
-            "artifact_path": str(artifact.path),
-            "population_tensor_path": str(artifact.path),
-            "PopulationTensorMode": mode,
-            "SolverID": solver_id,
-            "population_tensor_diagnostics": "solver_materialized_tensor",
-        }
-        roles = ["population_tensor", "population_denominator_seed", "population_solver", "source_field"]
-        if demographic_axes:
-            roles.insert(3, "demographic_stratified")
-        lineage = make_lineage(
-            parent_ids=[],
-            operator_type="population_tensor_solver",
-            operator_params=support,
-            registry_versions={"SIDRA": artifact.artifact_hash or artifact.source_manifest_hash or "unknown", "population_solver": solver_id},
-            source_manifest_hashes=_unique([artifact.source_manifest_hash, artifact.artifact_hash]),
-            code_version="population_tensor_solver_v1",
-        )
-        field = make_field_node(
-            name=f"population_tensor_solver_{mode}_{solver_id}",
-            kind="extensive_measure",
-            carrier="Population",
-            unit="persons",
-            support=support,
-            axes=axes,
-            aggregation="additive",
-            role=roles,
-            source=["SIDRA", str(artifact.path), "SIDRA_9606_POPULATION_SOLVER"],
-            operator="population_tensor_solver",
-            provenance=["SHE_SubstrateBundle", "population_tensor", "solver", "SIDRA_9606"],
-            state="warning" if mode == "sim_informed_denominator" else "verified",
-            warnings=["sim_informed_population_feedback_risk"] if mode == "sim_informed_denominator" else [],
-            lineage=lineage,
-            materialization_state="metadata_only",
-            path=None,
-            dashboard_safe="warning" if mode == "sim_informed_denominator" else False,
-        ).model_copy(update={"id": f"population_tensor_solver_{lineage_hash(lineage)[:24]}"})
-        out.append(SubstrateMaterializedField(
-            candidate_id=field.id,
-            field=field,
-            lineage_hash=lineage_hash(field.lineage),
-            materialization_reason="population_tensor_solver",
-            warnings=tuple(field.warnings),
-        ))
+
+        solver_backend = str(_first("solver_backend", "projected_gradient"))
+        sparse_jacobian = bool(_first("sparse_jacobian", False))
+        feedback = bool(_first("denominator_feedback_warning", mode == "sim_informed_denominator"))
+
+        # Emit one denominator field per marginal: a `total` crude denominator (tensor
+        # summed over all demographic axes) plus one per demographic axis (marginalized
+        # over the others). Each is a proper same-axis match for its numerator -- a
+        # sex-stratified death count divides by the sex-marginal population (§3.7.4);
+        # the RN pairing (dag.py) requires the numerator/denominator demographic axes to
+        # be equal, so a single all-axes field would never pair with a single-axis count.
+        for target_axis in [None, *demographic_axes]:
+            axes = {
+                "geography_axis": "N6",
+                "time_axis": "period",
+                "population_tensor_mode": mode,
+                "population_strata_axis": target_axis or "total",
+            }
+            roles = ["population_tensor", "population_denominator_seed", "population_solver", "source_field"]
+            if target_axis:
+                axes[target_axis] = "stratified"
+                roles.insert(3, "demographic_stratified")
+            support = {
+                "support_kind": "population_tensor_solver_output",
+                "source_system": "SIDRA",
+                "artifact_path": str(artifact.path),
+                "population_tensor_path": str(artifact.path),
+                "marginal_demographic_axis": target_axis,
+                "PopulationTensorMode": mode,
+                "SolverID": solver_id,
+                "SolverBackend": solver_backend,
+                "SparseJacobian": sparse_jacobian,
+                "DenominatorFeedbackWarning": feedback,
+                "population_tensor_diagnostics": "solver_materialized_tensor",
+            }
+            lineage = make_lineage(
+                parent_ids=[],
+                operator_type="population_tensor_solver",
+                operator_params=support,
+                registry_versions={"SIDRA": artifact.artifact_hash or artifact.source_manifest_hash or "unknown", "population_solver": solver_id},
+                source_manifest_hashes=_unique([artifact.source_manifest_hash, artifact.artifact_hash]),
+                code_version="population_tensor_solver_v1",
+            )
+            field = make_field_node(
+                name=f"population_tensor_solver_{mode}_{target_axis or 'total'}",
+                kind="extensive_measure",
+                carrier="Population",
+                unit="persons",
+                support=support,
+                axes=axes,
+                aggregation="additive",
+                role=roles,
+                source=["SIDRA", str(artifact.path), "SIDRA_9606_POPULATION_SOLVER"],
+                operator="population_tensor_solver",
+                provenance=["SHE_SubstrateBundle", "population_tensor", "solver", "SIDRA_9606"],
+                state="warning" if mode == "sim_informed_denominator" else "verified",
+                warnings=["sim_informed_population_feedback_risk"] if mode == "sim_informed_denominator" else [],
+                lineage=lineage,
+                materialization_state="metadata_only",
+                path=None,
+                dashboard_safe="warning" if mode == "sim_informed_denominator" else False,
+            ).model_copy(update={"id": f"population_tensor_solver_{target_axis or 'total'}_{lineage_hash(lineage)[:20]}"})
+            out.append(SubstrateMaterializedField(
+                candidate_id=field.id,
+                field=field,
+                lineage_hash=lineage_hash(field.lineage),
+                materialization_reason="population_tensor_solver",
+                warnings=tuple(field.warnings),
+            ))
     return out
 
 

@@ -877,20 +877,25 @@ def solve_population_tensor_from_sidra_strata(
     warnings: list[str] = [*death_warnings, *birth_warnings, *migration_warnings]
     feedback_warning = False
     reconstruction_uncertainty = 0.02
+    # sim_informed REQUIRES a SIM death prior (lambda_D>0). When none is available
+    # (e.g. a real self-declared race axis with no Bridge_R prior -> admin-race deaths
+    # can't be placed on it, MSD §2.8.6), degrade to the independent reconstruction
+    # rather than fail: the denominator is still the disaggregated strata + closure,
+    # just without the death-flow feedback term.
+    if mode == "sim_informed_denominator" and sim_deaths is None:
+        warnings.append("sim_informed_downgraded_to_independent_no_death_prior")
+        mode = "independent_denominator"
     if mode == "sim_informed_denominator":
         feedback_warning = True
         reconstruction_uncertainty = 0.05
         warnings.append("sim_informed_population_feedback_risk")
-        if sim_deaths is None:
-            warnings.append("sim_death_prior_missing")
-        else:
-            rates: list[float | None] = []
-            for deaths, anchor in zip(sim_deaths, anchors, strict=True):
-                if deaths is None or anchor is None or anchor <= 0:
-                    rates.append(None)
-                else:
-                    rates.append(float(deaths) / float(anchor))
-            death_rates = tuple(rates)
+        rates: list[float | None] = []
+        for deaths, anchor in zip(sim_deaths, anchors, strict=True):
+            if deaths is None or anchor is None or anchor <= 0:
+                rates.append(None)
+            else:
+                rates.append(float(deaths) / float(anchor))
+        death_rates = tuple(rates)
 
     problem = PopulationTensorProblem(
         shape=shape,
@@ -958,6 +963,9 @@ def solve_population_tensor_from_sidra_strata(
                             "sim_deaths": None if sim_deaths is None else sim_deaths[idx],
                             "population_tensor_mode": mode,
                             "solver_id": solver.solver_id,
+                            "solver_backend": solver.backend,
+                            "sparse_jacobian": solver.sparse_jacobian,
+                            "denominator_feedback_warning": feedback_warning,
                         })
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows).write_parquet(out_path)

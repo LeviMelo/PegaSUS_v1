@@ -429,28 +429,61 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
     # matching demographic population denominator. Unknown/total categories are dropped.
     stratify_column = support.get("stratify_column")
     if stratify_column:
-        from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, source_category_map
+        from pegasus.registries.demographic_axis import (
+            TOTAL,
+            UNKNOWN,
+            age_group_for_years,
+            canonical_categories,
+            source_category_map,
+        )
 
         axis_name = str(support.get("stratify_axis") or stratify_column)
         source_system = str(support.get("stratify_source") or "")
         raw_column = str(stratify_column)
-        mapping = source_category_map(axis_name, source_system)
-        if raw_column in df.columns and mapping:
-            # Use a distinct temp column so axis_name == raw_column (e.g. both "sex") does
-            # not collide; the canonical values then become the axis column.
+        if raw_column in df.columns:
             tmp = "__canonical_stratum__"
-            map_df = pl.DataFrame(
-                {raw_column: list(mapping.keys()), tmp: list(mapping.values())},
-                schema={raw_column: pl.Utf8, tmp: pl.Utf8},
-            )
-            df = (
-                df.with_columns(pl.col(raw_column).cast(pl.Utf8, strict=False))
-                .join(map_df, on=raw_column, how="left")
-                .with_columns(pl.col(tmp).fill_null(UNKNOWN).alias(axis_name))
-                .filter(~pl.col(axis_name).is_in([TOTAL, UNKNOWN]))
-                .drop(tmp)
-            )
-            keys = [*keys, axis_name]
+            if axis_name == "age_group":
+                # Age is a direct arithmetic bucketing of the source's single-year age
+                # field (SIM/SINASC/SIH carry age_years / maternal_age_years), NOT a
+                # category-code crosswalk (MSD §3.7.4). Bucket to the canonical age_N
+                # basis so the count joins the single-year population denominator.
+                df = df.with_columns(
+                    pl.col(raw_column)
+                    .map_elements(age_group_for_years, return_dtype=pl.Utf8)
+                    .alias(axis_name)
+                ).filter(~pl.col(axis_name).is_in([TOTAL, UNKNOWN]))
+                keys = [*keys, axis_name]
+            elif axis_name == "race":
+                # Administrative race/color is NOT self-declared census race: a direct
+                # code->canonical crosswalk here would be silent redistribution
+                # (§3.7.4). Keep the RAW admin code as the stratum so Bridge_R can map it
+                # downstream; this count never divides a self-declared population directly
+                # (align_fields gates race rates on race_bridge_required).
+                df = df.with_columns(
+                    pl.col(raw_column).cast(pl.Utf8, strict=False).alias(axis_name)
+                ).filter(pl.col(axis_name).is_not_null())
+                keys = [*keys, axis_name]
+            else:
+                # sex (and any future direct-crosswalk axis). Accept BOTH raw source codes
+                # and already-canonical values: the normalizers may emit the canonical
+                # category directly (SIM/SINASC/SIH 'sex' is 'male'/'female', not '1'/'2'),
+                # so identity on the canonical vocabulary keeps a stale/no-op code map from
+                # dropping every row into __unknown__.
+                code_map = source_category_map(axis_name, source_system)
+                mapping = {**{c: c for c in canonical_categories(axis_name)}, **code_map}
+                if mapping:
+                    map_df = pl.DataFrame(
+                        {raw_column: list(mapping.keys()), tmp: list(mapping.values())},
+                        schema={raw_column: pl.Utf8, tmp: pl.Utf8},
+                    )
+                    df = (
+                        df.with_columns(pl.col(raw_column).cast(pl.Utf8, strict=False))
+                        .join(map_df, on=raw_column, how="left")
+                        .with_columns(pl.col(tmp).fill_null(UNKNOWN).alias(axis_name))
+                        .filter(~pl.col(axis_name).is_in([TOTAL, UNKNOWN]))
+                        .drop(tmp)
+                    )
+                    keys = [*keys, axis_name]
     if keys:
         out = df.group_by(keys).agg(pl.len().cast(pl.Float64).alias(VALUE_COLUMN)).sort(keys)
     else:
@@ -966,18 +999,26 @@ def _population_solver_tensor(field: FieldNode, output_dir: Path) -> tuple[Path,
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"population solver tensor missing columns: {sorted(missing)}")
-    keep_axes = []
-    for axis in ("age_group", "sex", "race"):
-        if axis not in df.columns:
-            continue
-        values = set(str(v) for v in df.get_column(axis).drop_nulls().unique().to_list())
-        if values and values != {"__total__"}:
-            keep_axes.append(axis)
-    out = df.select([
-        pl.col("year").cast(pl.Int64, strict=False),
-        pl.col("municipality_cod6").cast(pl.Utf8),
-        *[pl.col(axis).cast(pl.Utf8) for axis in keep_axes],
-        pl.col(VALUE_COLUMN).cast(pl.Float64, strict=False).alias(VALUE_COLUMN),
+    # This field is the MARGINAL population over a single demographic axis (or the
+    # crude total when None): sum the full (age,sex,race) tensor over every axis
+    # except this field's, so a sex-stratified numerator divides by the sex-marginal
+    # population (MSD §3.7.4). `marginal_demographic_axis` is set by the materializer.
+    marginal_axis = support.get("marginal_demographic_axis")
+    keep_axes = [marginal_axis] if (marginal_axis and marginal_axis in df.columns) else []
+    group_keys = ["year", "municipality_cod6", *keep_axes]
+    agg = (
+        df.with_columns(
+            pl.col("year").cast(pl.Int64, strict=False),
+            pl.col("municipality_cod6").cast(pl.Utf8),
+            *[pl.col(axis).cast(pl.Utf8) for axis in keep_axes],
+            pl.col(VALUE_COLUMN).cast(pl.Float64, strict=False),
+        )
+        .group_by(group_keys)
+        .agg(pl.col(VALUE_COLUMN).sum().alias(VALUE_COLUMN))
+    )
+    out = agg.select([
+        *group_keys,
+        pl.col(VALUE_COLUMN),
         pl.lit(field.id).alias("field_id"),
         pl.lit(field.name).alias("field_name"),
         pl.lit("population_tensor_solver").alias("operator"),

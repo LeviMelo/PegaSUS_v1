@@ -155,6 +155,18 @@ def align_fields(
         elif axis == "diagnostic":
             relations[axis] = "diagnostic_topology_incompatible"
             failures.append("diagnostic_topology_incompatible")
+        elif axis in ("age", "sex"):
+            # Both sides carry the same demographic axis (age/sex). The axis *values*
+            # compared here are descriptor labels ("demographic_stratifier" vs
+            # "stratified"), NOT category codes — the executor's RN join matches on the
+            # canonical category column, harmonized across sources via
+            # demographic_axis_maps.yaml (SIM sex 1/2 and SIDRA 4/5 both -> male/female;
+            # ages both -> age_N). A shared sex/age axis is therefore a valid stratified
+            # join (§3.7.4), not an incompatibility. Race is deliberately NOT here:
+            # administrative death race vs IBGE self-declared census race must go through
+            # Bridge_R (the race branch above), never a naive stratified join.
+            relations[axis] = "demographic_stratified_join"
+            operations.append(f"stratified_join:{axis}")
         else:
             relations[axis] = "incompatible"
             failures.append(f"axis_incompatible:{axis}")

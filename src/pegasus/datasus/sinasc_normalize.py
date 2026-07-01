@@ -18,6 +18,8 @@ from typing import Any
 
 import polars as pl
 
+from pegasus.datasus.vec import Cols
+
 ICD_LIKE = re.compile(r"^[A-Z][0-9]{2}[0-9A-Z]?")
 
 
@@ -264,39 +266,15 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def col(name: str) -> pl.Expr:
-        return pl.col(name) if name in df.columns else pl.lit(None)
-
-    def clean(name: str) -> pl.Expr:
-        text = col(name).cast(pl.Utf8).str.strip_chars()
-        return pl.when(text.str.to_lowercase().is_in(["", "nan", "none", "null"])).then(None).otherwise(text)
-
-    def digits(name: str) -> pl.Expr:
-        d = clean(name).str.replace_all(r"\D", "")
-        return pl.when(d == "").then(None).otherwise(d)
-
-    def int_digits(name: str) -> pl.Expr:
-        return digits(name).cast(pl.Int64, strict=False)
-
-    def municipality(prefix: str, raw_col: str) -> list[pl.Expr]:
-        d = digits(raw_col)
-        cod6 = (
-            pl.when(d.str.len_chars() == 6).then(d)
-            .when(d.str.len_chars() == 7).then(d.str.slice(0, 6))
-            .otherwise(None)
-        )
-        ignored = cod6.str.slice(2, 4) == "0000"
-        valid = cod6.is_not_null() & ~ignored
-        return [
-            pl.when(valid).then(cod6).otherwise(None).alias(f"{prefix}_cod6"),
-            pl.when(valid & (d.str.len_chars() == 7)).then(d).otherwise(None).alias(f"{prefix}_cod7"),
-            pl.when(d.is_null()).then(pl.lit("missing"))
-            .when(ignored).then(pl.lit("ignored_municipality"))
-            .when(d.str.len_chars() == 7).then(pl.lit("ibge_cod7"))
-            .when(d.str.len_chars() == 6).then(pl.lit("datasus_cod6"))
-            .otherwise(pl.lit("invalid"))
-            .alias(f"{prefix}_state"),
-        ]
+    # Shared decode primitives (single source of truth, XCUT-02). SINASC carries no
+    # cod6→cod7 crosswalk (only a 7-digit input yields cod7), matching Cols'
+    # crosswalk=None path. The scalar/count2 builders below keep SINASC's own §2.3
+    # output-state vocabulary (missing/sentinel/invalid/valid, MissingCount/…).
+    cx = Cols(df)
+    clean = cx.clean
+    digits = cx.digits
+    int_digits = cx.int_digits
+    municipality = cx.municipality
 
     def scalar(name: str, out_name: str, state_name: str, *, lower: int, upper: int, sentinels: list[str]) -> list[pl.Expr]:
         d = digits(name)

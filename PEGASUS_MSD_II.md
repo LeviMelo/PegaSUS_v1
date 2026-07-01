@@ -291,6 +291,16 @@ The 17-key bundle and its validator (`OUT-01`) are preserved; the hypotheses key
 
 All numerics MUST honor `compute.yaml`: float32, `max_vram_fraction ≤ 0.80` (≈4.8 GB of the RTX 4050's 6 GB), PyTorch backend, CUDA for HSIC/ST-DFM/population/LDO kernels. Any operation whose dense form exceeds the envelope MUST use the structured (separable/sparse/low-rank) form and, at national-monthly scale, the multi-resolution + streaming strategy of §II.7. A run that cannot fit MUST refuse with `scale_exceeds_compute_envelope`, never silently subsample without a warning.
 
+**§II.10.1 Scale profile — where cost actually lives (measured, CPU).** A profiled state-scale all-source run (Alagoas, 102 munis × 8 yrs × 5 sources, ~150 fields) locates the cost precisely and, critically, shows **the statistically hard layer is municipality-*independent*** while the voluminous layer is embarrassingly parallel:
+
+| Stage | Cost driver | Scales with | State (AL) | National (≈55× munis) projection |
+|---|---|---|---|---|
+| SHE substrate profiling | source-table columnar stats | **rows** (≈ munis) | 13 s (after `n_unique` fix; was 128 s) | ~10–15 min, columnar/C-speed, out-of-core-able |
+| EFG materialization | per-field group-by over geo×time | **rows**, field count | 10 s | ~9 min; **embarrassingly parallel over fields** (DAG-scheduled) |
+| LDO precision + low-rank | `O(p³)` eigensolves on the lag-extended `p·(K+1)` matrix | **variables × lags — NOT munis** | 47 s (after vectorization + analytical filter + parallel stability; was 783 s) | **~unchanged** (`p` is muni-invariant; only the vectorized pairwise covariance grows with cells) |
+
+The key architectural consequence: **the LDO — the expensive, GPU-targeted kernel — does not grow with the number of municipalities.** Adding the whole country multiplies the *observation* count `n = S·T` (which the pairwise-complete covariance absorbs as a handful of BLAS products) but leaves the precision/low-rank eigensolve dimension `p·(K+1)` fixed. National feasibility is therefore governed by the **linear-in-rows** ingestion/materialization layers (SHE profiling, EFG group-bys), both of which are columnar, out-of-core-friendly (DuckDB/Arrow, §II.7), and — for the EFG — parallelizable over the field DAG. The 2026-07 optimization pass (vectorized pairwise covariance, analytical-variable filter, parallel stability selection, native-`n_unique` profiling) cut the measured state run from ~16 min to ~1.7 min (~9.5×) and moved national-monthly on a single workstation from "hours, dense-refusing" into range. Remaining scale work (`MII-SCALE-01`): parallelize the EFG field-materialization DAG, and add the row-streaming/tiling ingestion path for the national panel.
+
 ### §II.11 Per-cell provenance & anti-silence (restated invariant)
 
 Every panel cell, every reconstructed value, every link edge carries an explicit state/provenance/certification. Nothing is blank; nothing is promoted without uncertainty; nothing reconstructed is labeled observed. This is the MSD §12 prime directive made operational across the new surfaces.

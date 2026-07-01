@@ -17,7 +17,7 @@ from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
 from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_manifest
 from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.output.validate import validate_output_bundle
-from pegasus.registries.race_bridge import RaceBridgeRegistryError, resolve_race_bridge_plan
+from pegasus.registries.race_bridge import RaceBridgePlan, RaceBridgeRegistryError, resolve_race_bridge_plan
 from pegasus.efg.race_bridge import load_race_bridge_prior
 from pegasus.she.substrate import SourceArtifactRef, build_substrate_bundle, load_source_artifacts_from_manifest
 from pegasus.workflows.msd_inference import run_msd_inference_pipeline
@@ -245,6 +245,7 @@ def _build_population_tensor_artifact(
     artifacts: tuple[SourceArtifactRef, ...],
     run_dir: Path,
     population_mode: str,
+    race_bridge_plan: RaceBridgePlan,
 ) -> tuple[SourceArtifactRef | None, dict[str, Any] | None]:
     solver_mode = _population_tensor_mode_to_solver_mode(population_mode)
     if solver_mode is None:
@@ -268,6 +269,16 @@ def _build_population_tensor_artifact(
         (artifact for artifact in artifacts if artifact.source_system == "SIM-DO" and artifact.artifact_role == "processed_events"),
         None,
     )
+    sinasc_events = next(
+        (artifact for artifact in artifacts if artifact.source_system == "SINASC" and artifact.artifact_role == "processed_events"),
+        None,
+    )
+    # Only the "embedded_*" race_tensor_mode feeds the Bridge_R prior into the
+    # population tensor's own birth/death race stratification (MSD §2.8.5/§2.8.6);
+    # "downstream_bridge" attaches a separate standalone EFG field instead (see
+    # registries.race_bridge.resolve_race_bridge_plan), and "decoupled" runs the
+    # tensor with race left unstratified for DATASUS-origin priors.
+    race_bridge_prior_path = race_bridge_plan.prior_path if race_bridge_plan.status == "embedded" else None
     output_path = run_dir / "Intermediate" / "population_tensor" / f"{solver_mode}.parquet"
     from pegasus.sidra.population_cube import solve_population_tensor_from_sidra_strata
 
@@ -276,6 +287,8 @@ def _build_population_tensor_artifact(
         total_anchor_path=total_anchor.path,
         output_path=output_path,
         sim_events_path=None if sim_events is None else sim_events.path,
+        sinasc_events_path=None if sinasc_events is None else sinasc_events.path,
+        race_bridge_prior_path=race_bridge_prior_path,
         mode=solver_mode,
     ).as_manifest()
     artifact = SourceArtifactRef(
@@ -353,10 +366,10 @@ def _run_compile_impl(
         autonomous_artifacts,
         include_cnes_sih=include_cnes_sih,
         run_profile=intent.run_profile,
-        require_race_bridge_prior=race_bridge_plan.status == "planned",
+        require_race_bridge_prior=race_bridge_plan.status in {"planned", "embedded"},
         excluded_systems=frozenset(getattr(intent, "exclude_systems", None) or ()),
     )
-    if race_bridge_plan.status == "planned":
+    if race_bridge_plan.status in {"planned", "embedded"}:
         prior_artifact = _race_bridge_prior_artifact(autonomous_artifacts)
         if prior_artifact is None:
             raise ValueError("Race bridge compile requires a materialized RACE-BRIDGE:emission_prior artifact.")
@@ -428,6 +441,7 @@ def _run_compile_impl(
             artifacts=autonomous_artifacts,
             run_dir=run_dir,
             population_mode=intent.population_mode,
+            race_bridge_plan=race_bridge_plan,
         )
         if population_tensor_artifact is None:
             telemetry.set_stage("population_solver", "skipped", 0.0)

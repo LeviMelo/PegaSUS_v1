@@ -1872,6 +1872,35 @@ $$
 \eta_{s,t,a,x,r}\in[-E_{s,t},E_{s,t}]
 $$
 
+**Axis identity with §2.12.2/§3.7.4 (architectural note).** $(a,x,r)$ here are not a
+tensor-local convenience — they *are* $\mathcal{A},\mathcal{S},\mathcal{R}$, the same
+canonical demographic axes §2.12.2's Classification Projection Matrix $\Pi_{Clsf\to
+Axis}$ projects SIDRA classification tuples onto, and the same axes §3.7.4 requires a
+DATASUS health-event count to be aligned to before it may be divided by a population
+denominator. This identity is what lets a stratified DATASUS-origin numerator (e.g.
+SIM deaths in one age/sex/race cell) be divided by this tensor's matching cell to
+produce an age/sex/race-specific rate — the numerator and denominator are legal to
+combine only because they share one axis registry, not two independently-labelled
+ones. Implementation: `pegasus.registries.demographic_axis` is the single source of
+truth for the $(a,x,r)$ category labels on both sides (SIDRA-origin denominator
+strata and DATASUS-origin numerator events); `config/registries/demographic_axis_maps.yaml`
+is the registry-driven crosswalk (§3.7.4: "Silent redistribution is forbidden unless a
+declared allocation policy is used" — sex crosswalks the raw DATASUS code directly
+because administrative and declared sex are the same declaration-process object;
+race does not, for the reason given next).
+
+Race is the one axis on this list where the crosswalk is not a simple code map. DATASUS
+administrative race/color (SIM `race_color_admin`, SINASC `newborn_race_admin`) is a
+declaration-process object distinct from IBGE self-declared census race ($\mathcal{R}$
+itself, per §2.12.2's "Race/color projections from SIDRA census tables map to
+$\mathcal{R}^{IBGE}_{self}$, not to administrative health-system race axes"). A
+DATASUS-origin race-stratified numerator may only enter this tensor's $r$ axis through
+`pegasus.efg.race_bridge`'s Bridge_R posterior (§3.7.4's crosswalk-only-when-compatible
+rule) — never a direct category map. §2.8.5 and §2.8.6 below route SINASC/SIM race
+through Bridge_R for exactly this reason; §2.8.8's race composition loss does not, because
+it never touches DATASUS-origin race at all (both sides of that term are SIDRA
+self-declared).
+
 ### 2.8.2 Denominator Independence Modes
 
 PegaSUS distinguishes independent denominators from death-assisted denominators:
@@ -2077,6 +2106,19 @@ $$
 Prov=birth\_race\_conditional\_allocation
 $$
 
+**Implementation.** $B^{newborn}_{s,t,x,r}$ is built from SINASC (`newborn_sex`,
+`newborn_race_admin`, `mun_residence_cod6`, `birth_year`), grouped by (municipality,
+year, sex) and, since newborn race is administrative (§2.8.1's axis-identity note),
+bridged through `pegasus.efg.race_bridge` to $\mathcal{R}$ before landing in a
+race-stratified cell. Without a configured Bridge_R prior (`race_tensor_mode=decoupled`
+or `downstream_bridge`), births cannot be honestly placed on a real (non-degenerate)
+race axis and are left out of $\mathcal{L}_{birth}$ entirely rather than collapsed onto
+an unmodeled total — $\lambda_B=0$ for that run. The $n<30$ conditional-allocation
+race fallback cascade above is not yet implemented as a distinct estimator; Bridge_R's
+own posterior (local-$\pi$ crosswalk with bootstrap uncertainty, MSD-II's Bridge_R spec)
+is used uniformly regardless of local support size. Implementation:
+`pegasus.sidra.population_cube.build._sinasc_birth_priors`.
+
 ### 2.8.6 Death Prior Loss
 
 $$
@@ -2093,6 +2135,19 @@ $$
 This term is a soft prior, never an official identity.
 
 In independent denominator mode, $\lambda_D=0$. In SIM-informed mode, $\lambda_D>0$ and downstream SIM mortality receives feedback-risk warnings.
+
+**Implementation.** $D^{SIM}_{s,t,a,x,r}$ is built from SIM-DO events grouped by
+(municipality, year, sex, single-year age bucket) and, like births, bridged from
+administrative race to $\mathcal{R}$ through `pegasus.efg.race_bridge` — the same
+"no bridge ⇒ left unmodeled on that axis" rule as §2.8.5 applies. $\delta_{s,t,a,x,r}$
+itself is currently estimated as the empirical ratio $D^{SIM}_{s,t,a,x,r}/C_{s,t,a,x,r}$
+against this tensor's own census strata anchor $C$ — a known limitation, not a design
+choice: $C$ is only observed at census years, so this term only activates for deaths
+falling in a year with a coincident census anchor, which is the minority case once
+Tab 6579 intercensal stitching (§2.8.10) is in play. A rate estimator that does not
+require anchor-year coincidence (e.g. a UF/Region/Brazil reference rate, or an
+iterative rate implied by the solver's own current population iterate) is future
+work. Implementation: `pegasus.sidra.population_cube.build._sim_death_priors`.
 
 ### 2.8.7 Migration Smoothness Loss
 
@@ -2129,6 +2184,18 @@ M^{national}_{t,a,x,r}
 \end{cases}
 $$
 
+**Implementation.** No annual, (age,sex,race)-stratified internal-migration flow
+source has been identified in the curated SIDRA compendium or DATASUS (SIDRA's
+migration tables are census-decennial origin-destination counts, not an annual flow
+series compatible with this tensor's per-year reconstruction) — $\Psi^{prior}$ (the
+external migration prior case) is therefore not wired and has no ingestion target
+today. The implemented behavior is the *closed national residual* case: $\eta$ is a
+free variable bounded only by `migration_bounds` (a fraction of the anchor) and
+regularized by $\mathcal{L}_{migration}$'s second-difference smoothness — migration is
+inferred implicitly as whatever residual the aging/birth/death/closure constraints
+require, not observed. This is a real data gap, not an oversight: it is left honestly
+unfilled rather than backed by a fabricated or over-general proxy.
+
 ### 2.8.8 Race/Color Composition Loss
 
 Let:
@@ -2164,6 +2231,18 @@ $$
 
 This is a demographic composition path, not a claim that health administrative race and IBGE self-declared race are identical.
 
+**Implementation.** $z^{bridge}_{s,t,a,x}$ is built entirely from this tensor's own
+SIDRA 9606 self-declared race strata $C$ at whichever census years are present in the
+run — it needs no `pegasus.efg.race_bridge` involvement at all (contrast §2.8.5/§2.8.6):
+both ends of the interpolation are already on the $\mathcal{R}$ axis. A run outside
+$[t_0,t_1]$ (before the first or after the last observed census year) is clamped to the
+nearest census composition rather than left undefined — a conservative extension beyond
+this section's literal two-anchor definition, since $\mathcal{L}_{race}$ is a soft prior
+and a flat carry-forward is preferable to no prior at all for those years. With fewer
+than two census-year race compositions in the run's window (or a degenerate
+total-only race axis), $\lambda_R=0$. Implementation:
+`pegasus.sidra.population_cube.build._census_race_composition_prior`.
+
 ### 2.8.9 Age Smoothness Loss
 
 Let:
@@ -2186,6 +2265,14 @@ P_{s,t,a,x,r}
 P_{s,t,a-2,x,r}
 \right]^2
 $$
+
+**Implementation.** $a-1$ and $a-2$ presuppose $\mathcal{A}$ is ordered chronologically
+(each index one calendar year older than the last) — the same requirement §2.8.4's
+Aging Loss and §2.8.5's Birth Loss (age index 0 = newborn entry) depend on. The
+canonical age labels (`age_0`..`age_99`, `age_100_plus`) do not sort into that order
+under a plain lexical/alphabetical sort (`"age_10" < "age_2"`); the age axis must be
+built with `pegasus.registries.demographic_axis.age_group_sort_key`, not
+`sorted()` on the bare strings.
 
 ### 2.8.10 Closure Constraints
 

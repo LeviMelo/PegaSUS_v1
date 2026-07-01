@@ -211,6 +211,41 @@ def summarize_sim_admin_race_counts(
     return RaceBridgeCounts(raw_admin_counts=raw_counts, missing_count=missing, total_count=int(df.height), support=support)
 
 
+def bridge_admin_race_group_counts(
+    *,
+    race_codes: list[Any],
+    prior: RaceBridgePrior,
+    race_states: list[Any] | None = None,
+    support: dict[str, Any] | None = None,
+) -> RaceBridgePosterior:
+    """Bridge one group's raw administrative race/color codes to self-declared counts.
+
+    Shared entry point for any consumer holding a flat list of administrative
+    race codes for one (locality, time, ...) cell -- e.g. SIM deaths or SINASC
+    newborn births feeding the population tensor (MSD §2.8.5/§2.8.6), or an EFG
+    ``Bridge_R`` field. A code counts as valid administrative race only when its
+    paired state (if given) is ``valid_admin_race``; everything else -- missing,
+    unknown-sentinel, or an unrecognized code -- is folded into ``missing_count``
+    and reallocated via the prior's local-pi, never dropped silently.
+    """
+    raw_counts = {code: 0 for code in ADMIN_RACE_LABELS}
+    missing = 0
+    states = race_states if race_states is not None else [None] * len(race_codes)
+    for code_value, state in zip(race_codes, states, strict=False):
+        code = _canonical_code(code_value)
+        if code in raw_counts and state in (None, "valid_admin_race"):
+            raw_counts[code] += 1
+        else:
+            missing += 1
+    counts = RaceBridgeCounts(
+        raw_admin_counts=raw_counts,
+        missing_count=missing,
+        total_count=len(race_codes),
+        support=support or {},
+    )
+    return fixedc_dynamic_weight_bridge(counts, prior)
+
+
 def fixedc_dynamic_weight_bridge(counts: RaceBridgeCounts, prior: RaceBridgePrior) -> RaceBridgePosterior:
     for source in counts.raw_admin_counts:
         if source not in prior.source_categories:

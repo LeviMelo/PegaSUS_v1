@@ -41,10 +41,16 @@ def test_downstream_bridge_intent_resolves_registry_prior():
     assert plan.prior_hash is not None
 
 
-def test_embedded_modes_block_until_population_tensor_bridge_exists():
+def test_embedded_mode_resolves_the_same_registry_prior_for_the_population_tensor():
+    """MSD §2.8.5/§2.8.6: "embedded_*" feeds the same Bridge_R prior directly into
+    the population tensor's birth/death race stratification (pegasus.sidra.
+    population_cube.build) instead of attaching a standalone EFG field."""
     payload = json.loads(Path("config/intents/alagoas_smoke.json").read_text(encoding="utf-8"))
     payload["race_tensor_mode"] = "embedded_fixedC"
     intent = UserIntent.model_validate(payload)
     plan = resolve_race_bridge_plan(intent=intent, municipality_cod6="270430")
-    assert plan.status == "blocked"
-    assert "embedded" in (plan.reason or "")
+    assert plan.status == "embedded"
+    assert plan.requires_attach is False
+    assert plan.prior_path is not None
+    assert plan.prior_path.exists()
+    assert plan.prior_hash is not None

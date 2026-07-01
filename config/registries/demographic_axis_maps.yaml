@@ -24,9 +24,11 @@ axes:
   sex:
     canonical_categories: [male, female]
     # Normalized event column carrying this axis, per source (for stratifying event counts).
+    # NOTE: SINASC's normalizer names this column for the newborn specifically
+    # (population entry at age 0, MSD §2.8.5), not a generic "sex" column.
     source_columns:
       SIM-DO: sex
-      SINASC: sex
+      SINASC: newborn_sex
       SIH-RD: sex
     source_maps:
       SIM-DO:   {'1': male, '2': female, '0': __unknown__, '9': __unknown__}
@@ -35,10 +37,15 @@ axes:
       SIDRA:    {'4': male, '5': female, '0': __total__, '6794': __total__}
   race:
     canonical_categories: [branca, preta, amarela, parda, indigena]
+    # No SIM-DO/SINASC/SIH-RD source_maps below: administrative race/color
+    # declaration-process semantics are NOT compatible with IBGE self-declared
+    # census race (MSD §3.7.4) -- a direct code->category crosswalk here would be
+    # silent redistribution. DATASUS admin race must instead go through
+    # pegasus.efg.race_bridge (Bridge_R), never through map_category().
     source_columns:
       SIM-DO: race_color_admin
-      SINASC: race_color_admin
-      SIH-RD: race_color_admin
+      SINASC: newborn_race_admin
+      SIH-RD: race_color_billing
     source_maps:
       SIDRA: {'2776': branca, '2777': preta, '2778': amarela, '2779': parda, '2780': indigena, '0': __total__, '95251': __total__}
   age_group:

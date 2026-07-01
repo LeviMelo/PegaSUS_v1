@@ -90,6 +90,46 @@ def map_category(
     return mapping.get(str(code), UNKNOWN)
 
 
+def age_group_sort_key(age_group: str) -> tuple[int, int]:
+    """Numeric ordering key for canonical age_group labels.
+
+    ``tuple(sorted(...))`` on the raw strings is alphabetical, not chronological:
+    "age_10" < "age_2" lexically, which would silently scramble the tensor's age
+    axis for any run with more than ~11 single-year categories present -- fatal
+    for the aging loss (MSD §2.8.4), which assumes index ``a`` transitions into
+    index ``a+1`` as one calendar year older. Sort with this key instead.
+    """
+    if age_group == "age_100_plus":
+        return (0, 100)
+    if age_group.startswith("age_"):
+        try:
+            return (0, int(age_group[len("age_"):]))
+        except ValueError:
+            pass
+    # TOTAL / UNKNOWN / anything unrecognized: keep stable, ordered after real ages.
+    return (1, 0)
+
+
+def age_group_for_years(age_years: Any) -> str:
+    """Bucket a single-year age into the canonical ``age_group`` category.
+
+    Unlike ``sex``/``race`` this axis is a direct arithmetic bucketing of an
+    integer field (SIM/SINASC/SIH already carry ``age_years``), not a source
+    category-code crosswalk, so it needs no registry lookup -- the canonical
+    labels themselves (``age_0``..``age_99``, ``age_100_plus``) are the SIDRA
+    9606 single-year basis declared in ``demographic_axis_maps.yaml``.
+    """
+    if age_years is None:
+        return TOTAL
+    try:
+        years = int(age_years)
+    except (TypeError, ValueError):
+        return UNKNOWN
+    if years < 0:
+        return UNKNOWN
+    return "age_100_plus" if years >= 100 else f"age_{years}"
+
+
 __all__ = [
     "DEMOGRAPHIC_AXES",
     "TOTAL",
@@ -100,4 +140,6 @@ __all__ = [
     "source_category_map",
     "source_column",
     "map_category",
+    "age_group_for_years",
+    "age_group_sort_key",
 ]

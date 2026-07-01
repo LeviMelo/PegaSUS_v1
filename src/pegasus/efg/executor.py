@@ -58,9 +58,7 @@ from pegasus.core.enums import MaterializationState
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.dag import EFGResult
 from pegasus.efg.race_bridge import (
-    ADMIN_RACE_LABELS,
-    RaceBridgeCounts,
-    fixedc_dynamic_weight_bridge,
+    bridge_admin_race_group_counts,
     load_race_bridge_prior,
 )
 
@@ -675,16 +673,6 @@ def _is_race_bridge(field: FieldNode) -> bool:
     )
 
 
-def _admin_code(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() in {"none", "null", "nan"}:
-        return None
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return digits or None
-
-
 def _race_column(field: FieldNode, parent: FieldNode, df: pl.DataFrame) -> str:
     support = _as_dict(parent.support)
     candidates = [
@@ -741,25 +729,17 @@ def _compute_race_bridge_tensor(
     summary_cv: list[float] = []
     summary_width: list[float] = []
     for support_values, group in _fixedc_support_groups(df):
-        raw_counts = {code: 0 for code in ADMIN_RACE_LABELS}
-        missing = 0
         race_values = group[race_column].to_list()
-        states = group[state_col].to_list() if state_col is not None else [None] * len(race_values)
-        for code_value, state in zip(race_values, states, strict=False):
-            code = _admin_code(code_value)
-            if code in raw_counts and (state in (None, "valid_admin_race")):
-                raw_counts[code] += 1
-            else:
-                missing += 1
-        counts = RaceBridgeCounts(
-            raw_admin_counts=raw_counts,
-            missing_count=missing,
-            total_count=int(group.height),
+        states = group[state_col].to_list() if state_col is not None else None
+        posterior = bridge_admin_race_group_counts(
+            race_codes=race_values,
+            race_states=states,
+            prior=prior,
             support={**support_values, "n_events": int(group.height)},
         )
-        posterior = fixedc_dynamic_weight_bridge(counts, prior)
+        raw_counts = posterior.raw_admin_counts
         metadata = posterior.metadata()
-        summary_missing += missing
+        summary_missing += posterior.missing_count
         summary_total += int(group.height)
         summary_cv.append(float(posterior.race_bridge_cv))
         summary_width.append(float(posterior.sensitivity_width))
@@ -771,7 +751,7 @@ def _compute_race_bridge_tensor(
                 "lower_count": float(posterior.lower_counts[target]),
                 "upper_count": float(posterior.upper_counts[target]),
                 "raw_admin_counts_json": json.dumps(raw_counts, sort_keys=True),
-                "missing_count": int(missing),
+                "missing_count": int(posterior.missing_count),
                 "missing_race_share": float(posterior.missing_share),
                 "race_bridge_cv": float(posterior.race_bridge_cv),
                 "sensitivity_width": float(posterior.sensitivity_width),

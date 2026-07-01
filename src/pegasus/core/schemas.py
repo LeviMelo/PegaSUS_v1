@@ -54,6 +54,17 @@ class UserIntent(BaseModel):
 
     execution_scale: Literal["smoke", "state", "region", "national_blocked"]
 
+    # decoupled: population tensor's race axis ignores DATASUS-origin admin race
+    # entirely (§2.8.5/§2.8.6 race-stratified births/deaths unwired, lambda=0).
+    # downstream_bridge: Bridge_R attaches as a standalone EFG field (registries.
+    # race_bridge.resolve_race_bridge_plan status="planned").
+    # embedded_*: the same Bridge_R prior feeds directly into the population
+    # tensor's own birth/death race stratification (MSD §2.8.5/§2.8.6;
+    # sidra.population_cube.build) instead of a separate field
+    # (resolve_race_bridge_plan status="embedded"). The three embedded_* values
+    # are currently equivalent in implementation (all use Bridge_R's point-estimate
+    # posterior); fixedC/posteriorC/sensitivity distinguish how solver-side
+    # uncertainty from the bridge should propagate, which is not yet implemented.
     race_tensor_mode: Literal[
         "decoupled",
         "downstream_bridge",

@@ -688,15 +688,20 @@ def _acquire_sidra_compendium_context(
     }
 
 
+_RACE_BRIDGE_PRIOR_REQUIRED_MODES = frozenset({
+    "downstream_bridge", "embedded_fixedC", "embedded_posteriorC", "embedded_sensitivity",
+})
+
+
 def _race_bridge_prior_artifact(
     *,
     intent: UserIntent,
     municipality_cod6: str | None,
 ) -> dict[str, Any] | None:
-    if intent.race_tensor_mode != "downstream_bridge":
+    if intent.race_tensor_mode not in _RACE_BRIDGE_PRIOR_REQUIRED_MODES:
         return None
     if municipality_cod6 is None:
-        raise LivePipelineError("downstream race bridge live pipeline requires a municipality cod6 scope")
+        raise LivePipelineError("race bridge live pipeline requires a municipality cod6 scope")
     try:
         entry = select_compile_race_bridge_prior(municipality_cod6=municipality_cod6)
         prior = entry.load_prior()
@@ -798,9 +803,14 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
             "latent_context_policy": "dashboard_unsafe_by_default",
         },
         "race_bridge_prior": {
-            "required": intent.race_tensor_mode == "downstream_bridge",
-            "source_system": "RACE-BRIDGE" if intent.race_tensor_mode == "downstream_bridge" else None,
-            "artifact_role": "emission_prior" if intent.race_tensor_mode == "downstream_bridge" else None,
+            "required": intent.race_tensor_mode in _RACE_BRIDGE_PRIOR_REQUIRED_MODES,
+            "source_system": "RACE-BRIDGE" if intent.race_tensor_mode in _RACE_BRIDGE_PRIOR_REQUIRED_MODES else None,
+            "artifact_role": "emission_prior" if intent.race_tensor_mode in _RACE_BRIDGE_PRIOR_REQUIRED_MODES else None,
+            "consumer": (
+                "standalone Bridge_R EFG field" if intent.race_tensor_mode == "downstream_bridge"
+                else "population tensor birth/death race stratification (MSD §2.8.5/§2.8.6)" if intent.race_tensor_mode in _RACE_BRIDGE_PRIOR_REQUIRED_MODES
+                else None
+            ),
             "fixture_policy": "validation-only priors are rejected by live pipeline and compile",
         },
         "municipality_filter_codes": list(intent.geography.codes),

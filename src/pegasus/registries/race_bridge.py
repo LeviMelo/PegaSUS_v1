@@ -81,7 +81,7 @@ class RaceBridgeRegistryEntry:
 
 @dataclass(frozen=True)
 class RaceBridgePlan:
-    status: Literal["not_requested", "planned", "blocked"]
+    status: Literal["not_requested", "planned", "embedded", "blocked"]
     reason: str | None
     intent_mode: str
     source_system: str
@@ -249,16 +249,16 @@ def resolve_race_bridge_plan(
             municipality_cod6=municipality_cod6,
             warnings=[],
         )
-    if mode != "downstream_bridge":
+    if mode not in {"downstream_bridge", "embedded_fixedC", "embedded_posteriorC", "embedded_sensitivity"}:
         return RaceBridgePlan(
             status="blocked",
-            reason=f"race_tensor_mode={mode!r} requires embedded/population-tensor bridge support not implemented in Slice 4B",
+            reason=f"race_tensor_mode={mode!r} is not a recognized Bridge_R plan mode",
             intent_mode=mode,
             source_system="SIM-DO",
             source_axis="SIM_ADMIN_RACACOR",
             target_axis="IBGE_SELF_DECLARED_RACE",
             municipality_cod6=municipality_cod6,
-            warnings=["embedded_race_bridge_mode_blocked"],
+            warnings=["unrecognized_race_tensor_mode"],
         )
     entry = select_compile_race_bridge_prior(
         municipality_cod6=municipality_cod6,
@@ -266,8 +266,15 @@ def resolve_race_bridge_plan(
         repo_root=repo_root,
     )
     prior = entry.load_prior()
+    # "downstream_bridge" attaches a standalone Bridge_R EFG field (a numerator-side
+    # observer). The "embedded_*" modes instead feed the SAME prior directly into the
+    # population tensor's birth/death race stratification (MSD §2.8.5/§2.8.6) via
+    # pegasus.sidra.population_cube.build -- no separate EFG field is attached, so
+    # status is reported distinctly ("embedded") even though the prior resolution is
+    # identical, per §2.12.2/§3.7.4's single canonical Bridge_R prior.
+    status: Literal["planned", "embedded"] = "planned" if mode == "downstream_bridge" else "embedded"
     return RaceBridgePlan(
-        status="planned",
+        status=status,
         reason=None,
         intent_mode=mode,
         source_system=entry.source_system,

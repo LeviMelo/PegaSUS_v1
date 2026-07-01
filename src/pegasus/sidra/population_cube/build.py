@@ -17,7 +17,8 @@ from typing import Any
 import polars as pl
 
 from pegasus.core.hashing import content_hash, sha256_file
-from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, map_category
+from pegasus.efg.race_bridge import RaceBridgePrior, bridge_admin_race_group_counts, load_race_bridge_prior
+from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, age_group_for_years, age_group_sort_key, map_category
 from pegasus.registries.population import assert_dense_population_tensor_allowed, select_population_solver
 from pegasus.she.reconstruction.diagnostics import population_tensor_diagnostics
 from pegasus.she.reconstruction.schema import (
@@ -32,6 +33,14 @@ from pegasus.sidra.population_cube.anchor import load_combined_population_totals
 
 AXES = ("age_group", "sex", "race")
 AXIS_CLASSIFICATIONS = {"sex": "2", "race": "86", "age_group": "287"}
+
+# MSD §2.8.5/§2.8.6: administrative race/color (SIM race_color_admin, SINASC
+# newborn_race_admin) is declaration-process incompatible with this tensor's
+# self-declared IBGE race axis (§3.7.4) -- it may only enter a race-stratified
+# cell through pegasus.efg.race_bridge, never a direct category crosswalk.
+# When the race axis is real (not the degenerate TOTAL-only case) and no bridge
+# prior was supplied, DATASUS-origin priors are left out of that axis entirely
+# rather than silently collapsed onto an unmodeled TOTAL cell.
 
 
 @dataclass(frozen=True)
@@ -108,6 +117,33 @@ def _cell_index(
     return ((((s * t_count) + t) * a_count + a) * x_count + x) * r_count + r
 
 
+def _birth_cell_index(
+    *,
+    locality: str,
+    period: str,
+    sex: str,
+    race: str,
+    locality_index: dict[str, int],
+    period_index: dict[str, int],
+    sex_index: dict[str, int],
+    race_index: dict[str, int],
+    t_count: int,
+    x_count: int,
+    r_count: int,
+) -> int:
+    """Index into the birth tensor's ``(locality, time, sex, race)`` flat support.
+
+    Unlike the population tensor itself, births (MSD §2.8.5) have no age axis --
+    a newborn always enters at age 0, so ``problem.births`` is shaped one axis
+    narrower and indexed independently of ``_cell_index``.
+    """
+    s = locality_index[locality]
+    t = period_index[period]
+    x = sex_index[sex]
+    r = race_index[race]
+    return ((s * t_count + t) * x_count + x) * r_count + r
+
+
 def _read_population_strata(path: str | Path) -> pl.DataFrame:
     frame = pl.read_parquet(path)
     required = {"table_id", "variable_id", "period", "locality_id", "category_tuple", "value_numeric", "value_status"}
@@ -122,6 +158,83 @@ def _read_population_strata(path: str | Path) -> pl.DataFrame:
     )
 
 
+def _resolve_geo_year_columns(frame: pl.DataFrame, *, geo_candidates: tuple[str, ...], year_candidates: tuple[str, ...]) -> pl.DataFrame | None:
+    if "municipality_cod6" not in frame.columns:
+        geo_column = next((column for column in geo_candidates if column in frame.columns), None)
+        if geo_column is None:
+            return None
+        frame = frame.with_columns(pl.col(geo_column).cast(pl.Utf8).str.extract(r"(\d{6})", 1).alias("municipality_cod6"))
+    if "year" not in frame.columns:
+        year_column = next((column for column in year_candidates if column in frame.columns), None)
+        if year_column is None:
+            return None
+        frame = frame.with_columns(pl.col(year_column).cast(pl.Int64, strict=False).alias("year"))
+    if "municipality_cod6" not in frame.columns or "year" not in frame.columns:
+        return None
+    return frame
+
+
+def _stratify_sex_column(frame: pl.DataFrame, *, source_system: str, sex_column: str, sex_index: dict[str, int]) -> pl.DataFrame:
+    from pegasus.registries.demographic_axis import source_category_map
+
+    sex_map = source_category_map("sex", source_system)
+    if sex_column in frame.columns and any(value != TOTAL for value in sex_index) and sex_map:
+        return frame.with_columns(
+            pl.col(sex_column).cast(pl.Utf8, strict=False).replace(sex_map).alias("__sex__")
+        ).filter(pl.col("__sex__").is_in(list(sex_index)))
+    return frame.with_columns(pl.lit(TOTAL).alias("__sex__"))
+
+
+def _stratify_age_column(frame: pl.DataFrame, *, age_column: str, age_index: dict[str, int]) -> pl.DataFrame:
+    if age_column in frame.columns and any(value != TOTAL for value in age_index):
+        return frame.with_columns(
+            pl.col(age_column).map_elements(age_group_for_years, return_dtype=pl.Utf8).alias("__age_group__")
+        ).filter(pl.col("__age_group__").is_in(list(age_index)))
+    return frame.with_columns(pl.lit(TOTAL).alias("__age_group__"))
+
+
+def _bridge_race_stratified_counts(
+    frame: pl.DataFrame,
+    *,
+    race_column: str,
+    race_state_column: str | None,
+    group_keys: list[str],
+    race_bridge_prior: RaceBridgePrior | None,
+    race_index: dict[str, int],
+    warning_code: str,
+) -> tuple[pl.DataFrame | None, str | None]:
+    """Group ``frame`` and, when a real race axis is modeled, bridge each group's
+    raw administrative race codes to the self-declared race categories (MSD
+    §3.7.4 / §2.8.5-§2.8.6). Returns ``(grouped_with_race_and_count, warning)``
+    where the frame has one row per (group_keys..., race, count); ``None`` when
+    the axis cannot be honestly populated (real race axis, no bridge prior).
+    """
+    if not any(value != TOTAL for value in race_index):
+        grouped = frame.group_by(group_keys).agg(pl.len().cast(pl.Float64).alias("__count__"))
+        return grouped.with_columns(pl.lit(TOTAL).alias("__race__")), None
+    if race_bridge_prior is None or race_column not in frame.columns:
+        return None, warning_code
+    agg_exprs = [pl.col(race_column).alias("__race_codes__")]
+    if race_state_column and race_state_column in frame.columns:
+        agg_exprs.append(pl.col(race_state_column).alias("__race_states__"))
+    grouped = frame.group_by(group_keys).agg(*agg_exprs)
+    rows: list[dict[str, Any]] = []
+    for row in grouped.iter_rows(named=True):
+        posterior = bridge_admin_race_group_counts(
+            race_codes=row["__race_codes__"],
+            race_states=row.get("__race_states__"),
+            prior=race_bridge_prior,
+            support={key: row[key] for key in group_keys},
+        )
+        for race, count in posterior.posterior_counts.items():
+            if race not in race_index:
+                continue
+            rows.append({**{key: row[key] for key in group_keys}, "__race__": race, "__count__": float(count)})
+    if not rows:
+        return pl.DataFrame(schema={**{key: frame.schema[key] for key in group_keys}, "__race__": pl.Utf8, "__count__": pl.Float64}), None
+    return pl.DataFrame(rows), None
+
+
 def _sim_death_priors(
     *,
     sim_events_path: str | Path | None,
@@ -131,51 +244,55 @@ def _sim_death_priors(
     sex_index: dict[str, int],
     race_index: dict[str, int],
     shape: tuple[int, int, int, int, int],
-) -> tuple[float | None, ...] | None:
+    race_bridge_prior: RaceBridgePrior | None = None,
+) -> tuple[tuple[float | None, ...] | None, list[str]]:
     if sim_events_path is None:
-        return None
+        return None, []
     path = Path(sim_events_path)
     if not path.exists():
-        return None
-    from pegasus.registries.demographic_axis import source_category_map
+        return None, []
+    frame = _resolve_geo_year_columns(
+        pl.read_parquet(path),
+        geo_candidates=("mun_residence_cod6", "mun_occurrence_cod6", "CODMUNRES", "MUNIC_RES"),
+        year_candidates=("death_year", "event_year", "ANO"),
+    )
+    if frame is None:
+        return None, []
+    frame = _stratify_sex_column(frame, source_system="SIM-DO", sex_column="sex", sex_index=sex_index)
+    frame = _stratify_age_column(frame, age_column="age_years", age_index=age_index)
+    grouped, warning = _bridge_race_stratified_counts(
+        frame,
+        race_column="race_color_admin",
+        race_state_column="race_missingness_state",
+        group_keys=["municipality_cod6", "year", "__sex__", "__age_group__"],
+        race_bridge_prior=race_bridge_prior,
+        race_index=race_index,
+        warning_code="sim_death_race_stratification_unavailable_without_bridge",
+    )
+    if grouped is None:
+        return None, [warning] if warning else []
 
-    frame = pl.read_parquet(path)
-    if "municipality_cod6" not in frame.columns:
-        geo_column = next(
-            (column for column in ("mun_residence_cod6", "mun_occurrence_cod6", "CODMUNRES", "MUNIC_RES") if column in frame.columns),
-            None,
-        )
-        if geo_column is None:
-            return None
-        frame = frame.with_columns(pl.col(geo_column).cast(pl.Utf8).str.extract(r"(\d{6})", 1).alias("municipality_cod6"))
-    if "year" not in frame.columns:
-        year_column = next((column for column in ("death_year", "event_year", "ANO") if column in frame.columns), None)
-        if year_column is None:
-            return None
-        frame = frame.with_columns(pl.col(year_column).cast(pl.Int64, strict=False).alias("year"))
-    if "municipality_cod6" not in frame.columns or "year" not in frame.columns:
-        return None
-    sex_map = source_category_map("sex", "SIM-DO")
-    if "sex" in frame.columns and any(value != TOTAL for value in sex_index) and sex_map:
-        frame = frame.with_columns(
-            pl.col("sex").cast(pl.Utf8, strict=False).replace(sex_map).alias("__sex__")
-        ).filter(pl.col("__sex__").is_in(list(sex_index)))
-    else:
-        frame = frame.with_columns(pl.lit(TOTAL).alias("__sex__"))
-    grouped = frame.group_by(["municipality_cod6", "year", "__sex__"]).agg(pl.len().cast(pl.Float64).alias("deaths"))
     values: list[float | None] = [None] * (shape[0] * shape[1] * shape[2] * shape[3] * shape[4])
     for row in grouped.iter_rows(named=True):
         locality = str(row["municipality_cod6"])
         period = str(row["year"])
         sex = str(row["__sex__"])
-        if locality not in locality_index or period not in period_index or sex not in sex_index:
+        age_group = str(row["__age_group__"])
+        race = str(row["__race__"])
+        if (
+            locality not in locality_index
+            or period not in period_index
+            or sex not in sex_index
+            or age_group not in age_index
+            or race not in race_index
+        ):
             continue
         idx = _cell_index(
             locality=locality,
             period=period,
-            age_group=TOTAL,
+            age_group=age_group,
             sex=sex,
-            race=TOTAL,
+            race=race,
             locality_index=locality_index,
             period_index=period_index,
             age_index=age_index,
@@ -183,7 +300,163 @@ def _sim_death_priors(
             race_index=race_index,
             shape=shape,
         )
-        values[idx] = float(row["deaths"])
+        values[idx] = (values[idx] or 0.0) + float(row["__count__"])
+    if not any(value is not None for value in values):
+        return None, []
+    return tuple(values), []
+
+
+def _sinasc_birth_priors(
+    *,
+    sinasc_events_path: str | Path | None,
+    locality_index: dict[str, int],
+    period_index: dict[str, int],
+    sex_index: dict[str, int],
+    race_index: dict[str, int],
+    t_count: int,
+    x_count: int,
+    r_count: int,
+    race_bridge_prior: RaceBridgePrior | None = None,
+) -> tuple[tuple[float | None, ...] | None, list[str]]:
+    """SINASC newborn birth counts feeding the birth loss's ``B^newborn`` term
+    (MSD §2.8.5): population entry at age 0, stratified by (locality, year, sex,
+    race). Newborn race is administrative (``newborn_race_admin``) and, like SIM
+    death race, requires a RaceBridge prior to enter a real race axis."""
+    if sinasc_events_path is None:
+        return None, []
+    path = Path(sinasc_events_path)
+    if not path.exists():
+        return None, []
+    frame = _resolve_geo_year_columns(
+        pl.read_parquet(path),
+        geo_candidates=("mun_residence_cod6", "CODMUNRES", "MUNIC_RES"),
+        year_candidates=("birth_year", "event_year", "DTNASC"),
+    )
+    if frame is None:
+        return None, []
+    frame = _stratify_sex_column(frame, source_system="SINASC", sex_column="newborn_sex", sex_index=sex_index)
+    grouped, warning = _bridge_race_stratified_counts(
+        frame,
+        race_column="newborn_race_admin",
+        race_state_column="newborn_race_state",
+        group_keys=["municipality_cod6", "year", "__sex__"],
+        race_bridge_prior=race_bridge_prior,
+        race_index=race_index,
+        warning_code="sinasc_birth_race_stratification_unavailable_without_bridge",
+    )
+    if grouped is None:
+        return None, [warning] if warning else []
+
+    n = len(locality_index) * t_count * x_count * r_count
+    values: list[float | None] = [None] * n
+    for row in grouped.iter_rows(named=True):
+        locality = str(row["municipality_cod6"])
+        period = str(row["year"])
+        sex = str(row["__sex__"])
+        race = str(row["__race__"])
+        if locality not in locality_index or period not in period_index or sex not in sex_index or race not in race_index:
+            continue
+        idx = _birth_cell_index(
+            locality=locality,
+            period=period,
+            sex=sex,
+            race=race,
+            locality_index=locality_index,
+            period_index=period_index,
+            sex_index=sex_index,
+            race_index=race_index,
+            t_count=t_count,
+            x_count=x_count,
+            r_count=r_count,
+        )
+        values[idx] = (values[idx] or 0.0) + float(row["__count__"])
+    if not any(value is not None for value in values):
+        return None, []
+    return tuple(values), []
+
+
+def _census_race_composition_prior(
+    *,
+    records: list[dict[str, Any]],
+    locality_index: dict[str, int],
+    period_index: dict[str, int],
+    age_index: dict[str, int],
+    sex_index: dict[str, int],
+    race_index: dict[str, int],
+    shape: tuple[int, int, int, int, int],
+) -> tuple[float | None, ...] | None:
+    """Race composition prior for the race loss (MSD §2.8.8).
+
+    Built purely from this tensor's own SIDRA 9606 self-declared race counts
+    (``records``) -- unlike the death/birth priors this needs no RaceBridge:
+    §2.8.8's ``z^bridge`` is an ILR interpolation between two census self-declared
+    compositions, not a DATASUS-origin administrative crosswalk. Every (locality,
+    age, sex) cell's race distribution is computed at each census year present in
+    ``records``, then linearly interpolated (in proportion space) across the full
+    time axis between the bracketing census years. A run year outside the
+    observed census bracket is clamped to the nearest census composition -- MSD
+    §2.8.8 only defines the interpolated case, so this boundary extension is a
+    deliberate, conservative choice (a flat carry-forward/back of the last known
+    composition), not part of the formula itself.
+    """
+    if not any(value != TOTAL for value in race_index) or len(race_index) < 2:
+        return None
+    # cell_composition[(locality, age, sex)][period] = {race: proportion}
+    totals: dict[tuple[str, str, str], dict[str, float]] = {}
+    for record in records:
+        key = (record["municipality_cod6"], record["age_group"], record["sex"])
+        totals.setdefault(key, {}).setdefault(record["period"], {})
+        totals[key][record["period"]][record["race"]] = totals[key].get(record["period"], {}).get(record["race"], 0.0) + float(record["value"])
+    census_years_sorted = sorted({record["period"] for record in records})
+    if not census_years_sorted:
+        return None
+
+    n = shape[0] * shape[1] * shape[2] * shape[3] * shape[4]
+    values: list[float | None] = [None] * n
+    for (locality, age_group, sex), by_year in totals.items():
+        if locality not in locality_index or age_group not in age_index or sex not in sex_index:
+            continue
+        proportions: dict[str, dict[str, float]] = {}
+        for year, race_counts in by_year.items():
+            total = sum(race_counts.values())
+            if total <= 0:
+                continue
+            proportions[year] = {race: count / total for race, count in race_counts.items()}
+        years_available = sorted(proportions)
+        if not years_available:
+            continue
+        for period in period_index:
+            year_int = int(period)
+            anchors_int = [int(year) for year in years_available]
+            if year_int <= anchors_int[0]:
+                lo = hi = years_available[0]
+                weight = 0.0
+            elif year_int >= anchors_int[-1]:
+                lo = hi = years_available[-1]
+                weight = 0.0
+            else:
+                lo = years_available[max(i for i, y in enumerate(anchors_int) if y <= year_int)]
+                hi = years_available[min(i for i, y in enumerate(anchors_int) if y >= year_int)]
+                weight = 0.0 if lo == hi else (year_int - int(lo)) / (int(hi) - int(lo))
+            lo_dist, hi_dist = proportions[lo], proportions[hi]
+            for race in race_index:
+                p = (1.0 - weight) * lo_dist.get(race, 0.0) + weight * hi_dist.get(race, 0.0)
+                idx = _cell_index(
+                    locality=locality,
+                    period=period,
+                    age_group=age_group,
+                    sex=sex,
+                    race=race,
+                    locality_index=locality_index,
+                    period_index=period_index,
+                    age_index=age_index,
+                    sex_index=sex_index,
+                    race_index=race_index,
+                    shape=shape,
+                )
+                values[idx] = p
+    if not any(value is not None for value in values):
+        return None
     return tuple(values)
 
 
@@ -194,6 +467,8 @@ def solve_population_tensor_from_sidra_strata(
     output_path: str | Path,
     mode: str = "independent_denominator",
     sim_events_path: str | Path | None = None,
+    sinasc_events_path: str | Path | None = None,
+    race_bridge_prior_path: str | Path | None = None,
     solver_id: str | None = None,
     max_iterations: int = 2_000,
     tolerance: float = 1e-5,
@@ -203,6 +478,7 @@ def solve_population_tensor_from_sidra_strata(
     out_path = Path(output_path)
     if mode not in {"independent_denominator", "sim_informed_denominator"}:
         raise ValueError(f"Unsupported population tensor solver mode: {mode}")
+    race_bridge_prior = load_race_bridge_prior(race_bridge_prior_path) if race_bridge_prior_path is not None else None
 
     strata = _read_population_strata(strata_path)
     if strata.height == 0:
@@ -234,7 +510,7 @@ def solve_population_tensor_from_sidra_strata(
     totals = load_combined_population_totals_frame(totals_path)
     localities = tuple(sorted({record["municipality_cod6"] for record in records} | {str(row) for row in totals["municipality_cod6"].to_list()}))
     periods = tuple(sorted({record["period"] for record in records} | {str(int(row)) for row in totals["year"].to_list()}))
-    age_groups = tuple(sorted(categories_by_axis["age_group"] or {TOTAL}))
+    age_groups = tuple(sorted(categories_by_axis["age_group"] or {TOTAL}, key=age_group_sort_key))
     sexes = tuple(sorted(categories_by_axis["sex"] or {TOTAL}))
     races = tuple(sorted(categories_by_axis["race"] or {TOTAL}))
     shape = (len(localities), len(periods), len(age_groups), len(sexes), len(races))
@@ -279,8 +555,29 @@ def solve_population_tensor_from_sidra_strata(
             observed = [value for value in anchors[start:end] if value is not None]
             closure[idx] = float(sum(observed)) if observed else None
 
-    sim_deaths = _sim_death_priors(
+    sim_deaths, death_warnings = _sim_death_priors(
         sim_events_path=sim_events_path,
+        locality_index=locality_index,
+        period_index=period_index,
+        age_index=age_index,
+        sex_index=sex_index,
+        race_index=race_index,
+        shape=shape,
+        race_bridge_prior=race_bridge_prior,
+    )
+    births, birth_warnings = _sinasc_birth_priors(
+        sinasc_events_path=sinasc_events_path,
+        locality_index=locality_index,
+        period_index=period_index,
+        sex_index=sex_index,
+        race_index=race_index,
+        t_count=shape[1],
+        x_count=shape[3],
+        r_count=shape[4],
+        race_bridge_prior=race_bridge_prior,
+    )
+    race_composition_prior = _census_race_composition_prior(
+        records=records,
         locality_index=locality_index,
         period_index=period_index,
         age_index=age_index,
@@ -289,7 +586,7 @@ def solve_population_tensor_from_sidra_strata(
         shape=shape,
     )
     death_rates: tuple[float | None, ...] | None = None
-    warnings: list[str] = []
+    warnings: list[str] = [*death_warnings, *birth_warnings]
     feedback_warning = False
     reconstruction_uncertainty = 0.02
     if mode == "sim_informed_denominator":
@@ -312,18 +609,20 @@ def solve_population_tensor_from_sidra_strata(
         anchors=tuple(anchors),
         hard_anchor_mask=(False,) * n_cells,
         mode=mode,  # type: ignore[arg-type]
+        births=births,
         death_rates=death_rates,
         sim_deaths=sim_deaths,
+        race_composition_prior=race_composition_prior,
         closure_totals=tuple(closure),
         migration_bounds=tuple(max((value or 0.0) * 0.25, 1.0) for value in anchors),
         initial_population=tuple(float(value or 0.0) for value in anchors),
         weights=PopulationObjectiveWeights(
             anchor=10.0,
             aging=1.0 if shape[1] > 1 and shape[2] > 1 else 0.0,
-            birth=0.0,
+            birth=1.0 if births is not None and shape[1] > 1 else 0.0,
             death=1.0 if mode == "sim_informed_denominator" and sim_deaths is not None else 0.0,
             migration=0.1 if shape[1] >= 3 else 0.0,
-            race=0.0,
+            race=0.1 if race_composition_prior is not None else 0.0,
             age_smooth=0.05 if shape[2] >= 3 else 0.0,
         ),
     )
@@ -400,6 +699,8 @@ def solve_population_tensor_from_sidra_strata(
         "population_strata_hash": sha256_file(strata_path),
         "total_anchor_hash": sha256_file(totals_path),
         "sim_events_hash": sha256_file(Path(sim_events_path)) if sim_events_path else None,
+        "sinasc_events_hash": sha256_file(Path(sinasc_events_path)) if sinasc_events_path else None,
+        "race_bridge_prior_hash": race_bridge_prior.prior_hash if race_bridge_prior is not None else None,
         "telemetry": optimized.telemetry.as_manifest(),
     }
     result = PopulationTensorResult(

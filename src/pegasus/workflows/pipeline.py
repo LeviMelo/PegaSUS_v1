@@ -372,11 +372,16 @@ def _ensure_sidra_metadata_tables(
     from pegasus.sidra.metadata import fetch_official_metadata, write_normalized_metadata_tables
 
     missing = sorted(requested - (set(existing.tables) if existing is not None else set()), key=lambda x: int(x) if x.isdigit() else x)
+    # The population denominator tables are load-bearing (required); the compendium
+    # context tables are best-effort -- a dead/renamed/flaky context table is skipped,
+    # not fatal, so a 90-table fetch isn't sunk by one bad table.
+    required = {SIDRA_POPULATION_TABLE, SIDRA_INTERCENSAL_POPULATION_TABLE} & set(missing)
     fetched = fetch_official_metadata(
         table_ids=missing,
         client=client or SidraClient(),
         locality_level="N6",
         raw_dir=data_root / "metadata" / "sidra" / "raw",
+        required_table_ids=required,
     )
     tables = {}
     if existing is not None:
@@ -663,6 +668,71 @@ def _plan_sidra_compendium_from_metadata(
     return plans, blocked
 
 
+def _acquire_one_compendium_table(
+    plan: CompendiumRequestPlan,
+    *,
+    metadata: SIDRAMetadata,
+    uf: str,
+    data_root: Path,
+    sidra_client: SidraClient,
+    chunk_concurrency: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, BlockedCompendiumTable | None]:
+    """Acquire one compendium table's context facts.
+
+    Returns ``(artifact, acquired_manifest, blocked)`` — exactly one of ``artifact``
+    (with manifest) or ``blocked`` is set. A per-table failure is isolated as a
+    blocked entry, never an abort of the whole 94-table fetch.
+    """
+    try:
+        request = plan.request()
+        table_metadata = metadata.tables[plan.table_id]
+        metadata_hash = content_hash({
+            **table_metadata.model_dump(mode="json"),
+            "compendium_request": plan.as_manifest(),
+        })
+        chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+        work_dir = data_root / "sidra" / "context" / f"tier={plan.tier}" / f"uf={uf}" / f"table={plan.table_id}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        results = extract_chunk_plan(
+            chunks,
+            client=sidra_client,
+            concurrency=chunk_concurrency,
+            raw_dir=work_dir / "raw",
+            facts_root=work_dir / "facts",
+            metadata_hash=metadata_hash,
+            unit_by_variable=table_metadata.units_by_variable,
+        )
+        write_extraction_log(results, output_path=work_dir / "extraction_log.json")
+        failures = [r for r in results if r.status != "success"]
+        if failures:
+            return None, None, BlockedCompendiumTable(
+                table_id=plan.table_id,
+                reason=f"extraction failed: {failures[0].status} ({len(failures)} chunk failures)",
+            )
+        facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
+        if not facts_paths:
+            return None, None, BlockedCompendiumTable(table_id=plan.table_id, reason="extraction produced no facts")
+        combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
+        combined_path = work_dir / "context_facts.parquet"
+        combined.write_parquet(combined_path)
+        artifact = inspect_source_artifact(
+            path=combined_path,
+            source_system="SIDRA",
+            artifact_role="context_facts",
+            provenance_mode="materialized_external",
+            source_manifest_hash=metadata_hash,
+        )
+        acquired = {
+            **plan.as_manifest(),
+            "row_count": artifact.as_manifest().get("row_count"),
+            "artifact_path": str(combined_path),
+            "metadata_hash": metadata_hash,
+        }
+        return artifact, acquired, None
+    except Exception as exc:  # isolate: one bad table must not sink the whole fetch
+        return None, None, BlockedCompendiumTable(table_id=plan.table_id, reason=f"{type(exc).__name__}: {exc}")
+
+
 def _acquire_sidra_compendium_context(
     *,
     intent: UserIntent,
@@ -670,7 +740,16 @@ def _acquire_sidra_compendium_context(
     data_root: Path,
     metadata_dir: Path,
     client: SidraClient | None,
+    table_workers: int = 8,
+    chunk_concurrency: int = 6,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Acquire the curated SIDRA compendium's context facts for ``uf``.
+
+    Ruthless 1-time fetch: tables are acquired concurrently (``table_workers``), each
+    over concurrent chunks (``chunk_concurrency``) — SIDRA throttles by cells-per-
+    request, not connections, so wide concurrency is safe. Per-table failures are
+    isolated (recorded as blocked), so one flaky table never aborts the other 93.
+    """
     if not _compendium_enabled(intent):
         return [], {"status": "disabled_by_context_policy", "artifacts": [], "blocked": []}
 
@@ -688,56 +767,31 @@ def _acquire_sidra_compendium_context(
         client=client,
     )
     plans, blocked = _plan_sidra_compendium_from_metadata(intent=intent, uf=uf, metadata=metadata)
+    sidra_client = client or SidraClient()
     artifacts: list[dict[str, Any]] = []
     acquired: list[dict[str, Any]] = []
-    sidra_client = client or SidraClient()
-    for plan in plans:
-        request = plan.request()
-        table_metadata = metadata.tables[plan.table_id]
-        metadata_hash = content_hash({
-            **table_metadata.model_dump(mode="json"),
-            "compendium_request": plan.as_manifest(),
-        })
-        chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
-        work_dir = data_root / "sidra" / "context" / f"tier={plan.tier}" / f"uf={uf}" / f"table={plan.table_id}"
-        work_dir.mkdir(parents=True, exist_ok=True)
-        results = extract_chunk_plan(
-            chunks,
-            client=sidra_client,
-            concurrency=4,
-            raw_dir=work_dir / "raw",
-            facts_root=work_dir / "facts",
-            metadata_hash=metadata_hash,
-            unit_by_variable=table_metadata.units_by_variable,
-        )
-        write_extraction_log(results, output_path=work_dir / "extraction_log.json")
-        failures = [r for r in results if r.status != "success"]
-        if failures:
-            raise LivePipelineError(
-                f"SIDRA compendium extraction failed for table {plan.table_id}: "
-                f"{failures[0].status} ({len(failures)} chunk failures)"
-            )
-        facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
-        if not facts_paths:
-            blocked.append(BlockedCompendiumTable(table_id=plan.table_id, reason="extraction produced no facts"))
-            continue
-        combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
-        combined_path = work_dir / "context_facts.parquet"
-        combined.write_parquet(combined_path)
-        artifact = inspect_source_artifact(
-            path=combined_path,
-            source_system="SIDRA",
-            artifact_role="context_facts",
-            provenance_mode="materialized_external",
-            source_manifest_hash=metadata_hash,
-        )
-        artifacts.append(artifact)
-        acquired.append({
-            **plan.as_manifest(),
-            "row_count": artifact.as_manifest().get("row_count"),
-            "artifact_path": str(combined_path),
-            "metadata_hash": metadata_hash,
-        })
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = max(1, min(table_workers, len(plans))) if plans else 1
+    if workers <= 1:
+        outcomes = [
+            _acquire_one_compendium_table(p, metadata=metadata, uf=uf, data_root=data_root, sidra_client=sidra_client, chunk_concurrency=chunk_concurrency)
+            for p in plans
+        ]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            outcomes = list(pool.map(
+                lambda p: _acquire_one_compendium_table(p, metadata=metadata, uf=uf, data_root=data_root, sidra_client=sidra_client, chunk_concurrency=chunk_concurrency),
+                plans,
+            ))
+    for artifact, acquired_manifest, blocked_entry in outcomes:
+        if artifact is not None:
+            artifacts.append(artifact)
+            acquired.append(acquired_manifest)  # type: ignore[arg-type]
+        elif blocked_entry is not None:
+            blocked.append(blocked_entry)
+
     if plans and not artifacts:
         raise LivePipelineError(
             "SIDRA compendium acquisition produced no context_facts artifacts; "

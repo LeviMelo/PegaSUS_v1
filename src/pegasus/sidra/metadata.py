@@ -182,43 +182,22 @@ def normalize_official_table_metadata(
     )
 
 
-def fetch_official_metadata(
-    *,
-    table_ids: list[str],
-    client: SidraClient,
-    locality_level: str = "N6",
-    raw_dir: str | Path = "data/metadata/sidra/raw",
-) -> SIDRAMetadata:
-    raw_dir = Path(raw_dir)
-    raw_dir.mkdir(parents=True, exist_ok=True)
-
-    tables: dict[str, SIDRATableMetadata] = {}
-
-    for table_id in table_ids:
+def _fetch_one_table_metadata(
+    table_id: str, *, client: SidraClient, locality_level: str, raw_dir: Path
+) -> tuple[str, SIDRATableMetadata | None, str | None]:
+    """Fetch+normalize one table's metadata. Returns ``(id, metadata|None, error|None)``
+    -- a per-table transient failure (after the client's own retry/backoff) is isolated
+    as an error string, never a raised exception that would sink the whole batch."""
+    try:
         meta = client.metadata(table_id)
         periods = client.periods(table_id)
         localities = client.localities(table_id, locality_level)
-
-        (raw_dir / f"{table_id}.metadata.json").write_text(
-            json.dumps(meta.payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        (raw_dir / f"{table_id}.periods.json").write_text(
-            json.dumps(periods.payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        (raw_dir / f"{table_id}.localities.{locality_level}.json").write_text(
-            json.dumps(localities.payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        if meta.status_code >= 400:
-            raise RuntimeError(f"SIDRA metadata request failed for {table_id}: HTTP {meta.status_code}")
-        if periods.status_code >= 400:
-            raise RuntimeError(f"SIDRA periods request failed for {table_id}: HTTP {periods.status_code}")
-        if localities.status_code >= 400:
-            raise RuntimeError(f"SIDRA localities request failed for {table_id}: HTTP {localities.status_code}")
-
+        (raw_dir / f"{table_id}.metadata.json").write_text(json.dumps(meta.payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        (raw_dir / f"{table_id}.periods.json").write_text(json.dumps(periods.payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        (raw_dir / f"{table_id}.localities.{locality_level}.json").write_text(json.dumps(localities.payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        for name, resp in (("metadata", meta), ("periods", periods), ("localities", localities)):
+            if resp.status_code >= 400:
+                return table_id, None, f"{name} HTTP {resp.status_code}"
         table = normalize_official_table_metadata(
             table_id=table_id,
             metadata_json=meta.payload,
@@ -226,8 +205,55 @@ def fetch_official_metadata(
             localities_json=localities.payload,
             locality_level=locality_level,
         )
-        tables[table_id] = table
+        return table_id, table, None
+    except Exception as exc:
+        return table_id, None, f"{type(exc).__name__}: {exc}"
 
+
+def fetch_official_metadata(
+    *,
+    table_ids: list[str],
+    client: SidraClient,
+    locality_level: str = "N6",
+    raw_dir: str | Path = "data/metadata/sidra/raw",
+    required_table_ids: set[str] | frozenset[str] | None = None,
+    max_workers: int = 8,
+) -> SIDRAMetadata:
+    """Fetch official metadata for many tables concurrently.
+
+    Each table's transient failures are retried by the client (`retry_status_codes`
+    incl. 599). A table that still fails is *isolated* (skipped, not fatal) so one
+    dead/renamed table never aborts a 94-table compendium fetch -- unless it is in
+    ``required_table_ids`` (e.g. the population denominator), which must succeed.
+    """
+    raw_dir = Path(raw_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    tables: dict[str, SIDRATableMetadata] = {}
+    errors: dict[str, str] = {}
+    workers = max(1, min(int(max_workers), len(table_ids))) if table_ids else 1
+    if workers <= 1:
+        outcomes = [_fetch_one_table_metadata(t, client=client, locality_level=locality_level, raw_dir=raw_dir) for t in table_ids]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            outcomes = list(pool.map(
+                lambda t: _fetch_one_table_metadata(t, client=client, locality_level=locality_level, raw_dir=raw_dir),
+                table_ids,
+            ))
+    for table_id, table, error in outcomes:
+        if table is not None:
+            tables[table_id] = table
+        else:
+            errors[table_id] = error or "unknown"
+
+    required = set(required_table_ids or ())
+    missing_required = sorted(required & set(errors))
+    if missing_required:
+        raise RuntimeError(
+            f"SIDRA metadata fetch failed for required tables {missing_required}: "
+            + "; ".join(f"{t}={errors[t]}" for t in missing_required)
+        )
     return SIDRAMetadata(tables=tables)
 
 

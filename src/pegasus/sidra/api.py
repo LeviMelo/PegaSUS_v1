@@ -24,7 +24,12 @@ class SidraClientConfig:
     base_url: str = DEFAULT_BASE_URL
     view_mode: str = "flat"
     timeout_seconds: int = 60
-    retry_status_codes: tuple[int, ...] = (429, 500, 502, 503, 504)
+    # 599 is the client-synthesized code for a transport-level failure (connection
+    # reset / timeout / DNS) -- see get_json's `except: status = 599`. SIDRA's front
+    # end throws these intermittently under heavy concurrency, so they MUST be
+    # retried (they are transient), not surfaced as a hard failure that aborts a
+    # 94-table metadata fetch.
+    retry_status_codes: tuple[int, ...] = (429, 500, 502, 503, 504, 599)
     max_retries: int = 5
     backoff_initial_seconds: float = 0.25
     backoff_max_seconds: float = 10.0
@@ -35,7 +40,7 @@ class SidraClientConfig:
             base_url=str(payload.get("base_url", DEFAULT_BASE_URL)),
             view_mode=str(payload.get("view_mode", "flat")),
             timeout_seconds=int(payload.get("timeout_seconds", 60)),
-            retry_status_codes=tuple(int(x) for x in payload.get("retry_status_codes", [429, 500, 502, 503, 504])),
+            retry_status_codes=tuple(int(x) for x in payload.get("retry_status_codes", [429, 500, 502, 503, 504, 599])),
             max_retries=int(payload.get("max_retries", 5)),
             backoff_initial_seconds=float(payload.get("backoff_initial_seconds", 0.25)),
             backoff_max_seconds=float(payload.get("backoff_max_seconds", 10.0)),

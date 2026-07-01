@@ -14,6 +14,7 @@ from pegasus.pirs.ldo.certify import (
     certify_links,
 )
 from pegasus.pirs.ldo.orchestrator import LDORun, run_ldo
+from pegasus.pirs.ldo.resolution import MultiResolutionRun, restrict_variables, run_multiresolution_ldo
 from pegasus.pirs.ldo.records import LINK_RECORD_COLUMNS, EdgeType, LinkRecord
 
 __all__ = [
@@ -40,6 +41,9 @@ __all__ = [
     "LDOCertificationError",
     "run_ldo",
     "LDORun",
+    "run_multiresolution_ldo",
+    "MultiResolutionRun",
+    "restrict_variables",
     "LinkRecord",
     "EdgeType",
     "LINK_RECORD_COLUMNS",

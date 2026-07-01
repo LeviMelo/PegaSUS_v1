@@ -204,6 +204,35 @@ class Cols:
         v = rawv.str.replace_all(",", ".").cast(pl.Float64, strict=False)
         return pl.when(rawv.is_null()).then(pl.lit("missing")).when(v >= 0).then(pl.lit("valid")).otherwise(pl.lit("invalid"))
 
+    # -- boolean service flags --------------------------------------------
+    def flag_int(self, *names: str) -> tuple[pl.Expr, pl.Expr]:
+        """Decode a boolean service flag to 0/1 (matches ``clamp_bool``): textual
+        false/true tokens, then a numeric path where a non-integer float is
+        Unparseable and an integer outside {0,1} is InvalidFlagState. Returns
+        ``(value, state)`` with the DecodedBoolean state vocabulary."""
+        c = self.clean(*names)
+        low = c.str.to_lowercase()
+        f = c.str.replace_all(",", ".").cast(pl.Float64, strict=False)
+        is_false = low.is_in(["0", "não", "nao", "no", "false", "f"])
+        is_true = low.is_in(["1", "sim", "yes", "true", "t"])
+        int_ok = f.is_not_null() & (f == f.floor())
+        value = (
+            pl.when(is_true).then(1)
+            .when(is_false).then(0)
+            .when(int_ok & f.is_in([0.0, 1.0])).then(f.cast(pl.Int64))
+            .otherwise(None)
+        )
+        state = (
+            pl.when(c.is_null()).then(pl.lit("MissingFlag"))
+            .when(is_true).then(pl.lit("ValidTrue"))
+            .when(is_false).then(pl.lit("ValidFalse"))
+            .when(~int_ok).then(pl.lit("UnparseableFlag"))
+            .when(f == 1.0).then(pl.lit("ValidTrue"))
+            .when(f == 0.0).then(pl.lit("ValidFalse"))
+            .otherwise(pl.lit("InvalidFlagState"))
+        )
+        return value, state
+
     # -- CNPJ (the §2.4.0.5 linkage gate) ---------------------------------
     def cnpj(self, *names: str) -> tuple[pl.Expr, pl.Expr]:
         """Validate a 14-digit CNPJ *including mod-11 check digits* (matches
@@ -280,17 +309,19 @@ def row_hash(source_manifest_hash: str, index_col: str = "_i") -> pl.Expr:
 
 def _cnpj_check_ok(d: pl.Expr) -> pl.Expr:
     """Boolean expr: the 14-digit string ``d`` has valid mod-11 CNPJ check digits
-    and is not a single repeated digit. Mirrors ``_valid_cnpj_check_digits``."""
-    def dig(i: int) -> pl.Expr:
-        return d.str.slice(i, 1).cast(pl.Int64, strict=False)
+    and is not a single repeated digit. Mirrors ``_valid_cnpj_check_digits``.
+
+    Each digit position is sliced once and reused across both weighted sums so the
+    expression stays cheap on large panels."""
+    dig = [d.str.slice(i, 1).cast(pl.Int64, strict=False) for i in range(14)]
 
     w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
-    s1 = sum((dig(i) * w for i, w in enumerate(w1)), pl.lit(0))
+    s1 = sum((dig[i] * w for i, w in enumerate(w1)), pl.lit(0))
     r1 = s1 % 11
     dv1 = pl.when(r1 < 2).then(0).otherwise(11 - r1)
 
     w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3]
-    s2 = sum((dig(i) * w for i, w in enumerate(w2)), pl.lit(0)) + 2 * dv1
+    s2 = sum((dig[i] * w for i, w in enumerate(w2)), pl.lit(0)) + 2 * dv1
     r2 = s2 % 11
     dv2 = pl.when(r2 < 2).then(0).otherwise(11 - r2)
 
@@ -298,4 +329,4 @@ def _cnpj_check_ok(d: pl.Expr) -> pl.Expr:
     # guard). The Rust regex engine has no backreferences, so compare against the
     # first character repeated 14×.
     uniform = d == pl.concat_str([d.str.slice(0, 1)] * 14)
-    return (d.str.len_chars() == 14) & ~uniform & (dig(12) == dv1) & (dig(13) == dv2)
+    return (d.str.len_chars() == 14) & ~uniform & (dig[12] == dv1) & (dig[13] == dv2)

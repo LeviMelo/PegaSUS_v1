@@ -88,7 +88,7 @@ class BlockedCompendiumTable:
         return {"table_id": self.table_id, "reason": self.reason}
 
 
-def load_sidra_compendium(path: str | Path = "config/registries/sidra_compendium.json") -> tuple[CompendiumTable, ...]:
+def load_sidra_compendium(path: str | Path = "config/registries/sidra/sidra_compendium.json") -> tuple[CompendiumTable, ...]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     tables = payload.get("tables") or {}
     order = payload.get("table_order") or sorted(tables)

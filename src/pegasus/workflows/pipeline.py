@@ -61,6 +61,16 @@ SIDRA_POPULATION_TOTAL_CLASSIFICATIONS: dict[str, list[str]] = {
     "287": ["100362"], # Idade — Total
 }
 
+# SIDRA 6579 ("Estimativas de População", post-censal series): resident-population
+# TOTAL only, annual, for the intercensal years 9606 (census years only) doesn't
+# cover. See sidra.population_cube.anchor for the verified-live coverage gaps
+# (IBGE publishes no 2007 estimate; census years and the immediate post-census
+# processing lag are also absent from 6579 -- 9606 covers the former). Neither
+# table's gaps are hardcoded here: both tables' own live SIDRA `periods` metadata
+# is trusted directly (config/registries/sidra/sidra_stitching.yaml documents the policy).
+SIDRA_INTERCENSAL_POPULATION_TABLE = "6579"
+SIDRA_INTERCENSAL_POPULATION_VARIABLE = "9324"
+
 
 def _population_tensor_requested(intent: UserIntent) -> bool:
     return intent.population_mode in {"independent_population_tensor", "sim_informed_population_tensor"}
@@ -267,14 +277,15 @@ def _acquire_datasus(
     return artifacts
 
 
-def _sidra_population_localities(metadata, uf: str) -> tuple[str, list[str]]:
+def _sidra_population_localities(metadata, uf: str, *, table_id: str = SIDRA_POPULATION_TABLE) -> tuple[str, list[str]]:
     """All N6 municipalities of the UF (preferred) or the N3 UF locality.
 
     Filters the table's official N6 locality list to those whose IBGE code begins
     with the UF's 2-digit code, so the population denominator covers the whole
-    state at municipal resolution."""
+    state at municipal resolution. Works for any population-denominator table
+    (9606 or the intercensal 6579) — both declare N6 locality support."""
     cod2 = GeoScope.from_uf(uf).ibge_uf_cod2
-    table = metadata.tables[SIDRA_POPULATION_TABLE]
+    table = metadata.tables[table_id]
     by_level = table.localities_by_level
     n6 = [str(loc) for loc in by_level.get("N6", []) if str(loc).startswith(str(cod2))]
     if n6:
@@ -282,7 +293,7 @@ def _sidra_population_localities(metadata, uf: str) -> tuple[str, list[str]]:
     n3 = [str(loc) for loc in by_level.get("N3", []) if str(loc) == str(cod2)]
     if n3:
         return "N3", n3
-    raise LivePipelineError(f"SIDRA 9606 metadata has no N6/N3 localities for UF {uf} (cod2={cod2})")
+    raise LivePipelineError(f"SIDRA {table_id} metadata has no N6/N3 localities for UF {uf} (cod2={cod2})")
 
 
 def _select_population_period(metadata, intent: UserIntent) -> str:
@@ -293,6 +304,38 @@ def _select_population_period(metadata, intent: UserIntent) -> str:
         raise LivePipelineError("SIDRA 9606 metadata declares no periods")
     eligible = [p for p in periods if p.isdigit() and int(p) <= intent.time.end_year]
     return eligible[-1] if eligible else periods[0]
+
+
+def _select_table_periods_in_window(metadata, table_id: str, intent: UserIntent) -> list[str]:
+    """Every period ``table_id`` declares within ``[intent.time.start_year,
+    intent.time.end_year]``, sorted ascending. No hardcoded gap-year exclusion --
+    whatever years the table's own live SIDRA metadata does not list are simply
+    absent from the result (see SIDRA_INTERCENSAL_POPULATION_TABLE docstring)."""
+    table = metadata.tables.get(table_id)
+    if table is None:
+        return []
+    return sorted(
+        str(p) for p in table.periods
+        if str(p).isdigit() and intent.time.start_year <= int(str(p)) <= intent.time.end_year
+    )
+
+
+def _population_period_plan(metadata, intent: UserIntent) -> dict[str, list[str]]:
+    """Census (9606) vs intercensal (6579) periods for the intent's full year
+    window (MSD §2.8.10 closure data source). 9606 takes priority on any year
+    both tables declare (a safety net -- 6579's own live periods already exclude
+    census years)."""
+    census = _select_table_periods_in_window(metadata, SIDRA_POPULATION_TABLE, intent)
+    intercensal = [
+        p for p in _select_table_periods_in_window(metadata, SIDRA_INTERCENSAL_POPULATION_TABLE, intent)
+        if p not in set(census)
+    ]
+    if not census and not intercensal:
+        raise LivePipelineError(
+            f"Neither SIDRA {SIDRA_POPULATION_TABLE} (census) nor {SIDRA_INTERCENSAL_POPULATION_TABLE} "
+            f"(intercensal) declares a period within {intent.time.start_year}-{intent.time.end_year}."
+        )
+    return {SIDRA_POPULATION_TABLE: census, SIDRA_INTERCENSAL_POPULATION_TABLE: intercensal}
 
 
 def _ensure_sidra_metadata_tables(
@@ -333,38 +376,43 @@ def _ensure_sidra_metadata_tables(
 
 def _ensure_sidra_metadata(*, metadata_dir: Path, data_root: Path, client: SidraClient | None):
     return _ensure_sidra_metadata_tables(
-        table_ids=[SIDRA_POPULATION_TABLE],
+        table_ids=[SIDRA_POPULATION_TABLE, SIDRA_INTERCENSAL_POPULATION_TABLE],
         metadata_dir=metadata_dir,
         data_root=data_root,
         client=client,
     )
 
 
-def _acquire_sidra_population(
+def _acquire_sidra_population_table(
     *,
-    intent: UserIntent,
+    table_id: str,
+    variable_id: str,
+    classifications: dict[str, list[str]],
+    periods: list[str],
+    metadata,
     uf: str,
     data_root: Path,
-    metadata_dir: Path,
     client: SidraClient | None,
-) -> dict[str, Any]:
-    metadata = _ensure_sidra_metadata(metadata_dir=metadata_dir, data_root=data_root, client=client)
-    if SIDRA_POPULATION_TABLE not in metadata.tables:
-        raise LivePipelineError(f"SIDRA metadata is missing required population table {SIDRA_POPULATION_TABLE}")
-    locality_level, localities = _sidra_population_localities(metadata, uf)
-    period = _select_population_period(metadata, intent)
+    work_dir_label: str,
+) -> Path | None:
+    """Acquire one population-denominator table's facts for ``periods``, or None
+    if the table has no periods in this window (e.g. an intent entirely inside
+    the intercensal gap has no 9606 rows at all, which is expected, not an error)."""
+    if not periods:
+        return None
+    locality_level, localities = _sidra_population_localities(metadata, uf, table_id=table_id)
     request = SIDRARequest(
-        table_id=SIDRA_POPULATION_TABLE,
-        variables=[SIDRA_POPULATION_VARIABLE],
-        periods=[period],
+        table_id=table_id,
+        variables=[variable_id],
+        periods=periods,
         locality_level=locality_level,
         localities=localities,
-        classifications=dict(SIDRA_POPULATION_TOTAL_CLASSIFICATIONS),
+        classifications=dict(classifications),
     )
-    table_metadata = metadata.tables[SIDRA_POPULATION_TABLE]
+    table_metadata = metadata.tables[table_id]
     metadata_hash = content_hash(table_metadata.model_dump(mode="json"))
     chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
-    work_dir = data_root / "sidra" / f"population_{uf}_{period}"
+    work_dir = data_root / "sidra" / f"{work_dir_label}_{uf}_{table_id}"
     work_dir.mkdir(parents=True, exist_ok=True)
     results = extract_chunk_plan(
         chunks,
@@ -377,15 +425,54 @@ def _acquire_sidra_population(
     )
     failures = [r for r in results if r.status != "success"]
     if failures:
-        raise LivePipelineError(f"SIDRA population extraction failed: {failures[0].status} ({len(failures)} chunk failures)")
+        raise LivePipelineError(f"SIDRA {table_id} extraction failed: {failures[0].status} ({len(failures)} chunk failures)")
     facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
     if not facts_paths:
-        raise LivePipelineError("SIDRA population extraction produced no facts")
-    # Compile requires exactly one SIDRA normalized_facts artifact — concatenate
-    # the chunk facts into a single facts parquet covering the whole state.
+        raise LivePipelineError(f"SIDRA {table_id} extraction produced no facts")
     combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
+    combined_path = work_dir / "facts.parquet"
+    combined.write_parquet(combined_path)
+    return combined_path
+
+
+def _acquire_sidra_population(
+    *,
+    intent: UserIntent,
+    uf: str,
+    data_root: Path,
+    metadata_dir: Path,
+    client: SidraClient | None,
+) -> dict[str, Any]:
+    """Population-total denominator across the intent's full year window: census
+    years from 9606 (full sex/race/age matrix, filtered to Total/Total/Total) plus
+    intercensal years from 6579 (annual, total-only) -- MSD §2.8.10's E_{s,t}
+    closure source. A single combined normalized_facts artifact carries both
+    tables' rows; `sidra.population_cube.anchor.load_combined_population_totals_frame`
+    stitches them into one per-year panel."""
+    metadata = _ensure_sidra_metadata(metadata_dir=metadata_dir, data_root=data_root, client=client)
+    plan = _population_period_plan(metadata, intent)
+    work_dir = data_root / "sidra" / f"population_{uf}_{intent.time.start_year}_{intent.time.end_year}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    census_path = _acquire_sidra_population_table(
+        table_id=SIDRA_POPULATION_TABLE, variable_id=SIDRA_POPULATION_VARIABLE,
+        classifications=SIDRA_POPULATION_TOTAL_CLASSIFICATIONS, periods=plan[SIDRA_POPULATION_TABLE],
+        metadata=metadata, uf=uf, data_root=data_root, client=client, work_dir_label="population_totals",
+    )
+    intercensal_path = _acquire_sidra_population_table(
+        table_id=SIDRA_INTERCENSAL_POPULATION_TABLE, variable_id=SIDRA_INTERCENSAL_POPULATION_VARIABLE,
+        classifications={}, periods=plan[SIDRA_INTERCENSAL_POPULATION_TABLE],
+        metadata=metadata, uf=uf, data_root=data_root, client=client, work_dir_label="population_totals",
+    )
+    parts = [p for p in (census_path, intercensal_path) if p is not None]
+    combined = pl.concat([pl.read_parquet(p) for p in parts], how="vertical_relaxed")
     combined_path = work_dir / "population_facts.parquet"
     combined.write_parquet(combined_path)
+    metadata_hash = content_hash({
+        SIDRA_POPULATION_TABLE: metadata.tables[SIDRA_POPULATION_TABLE].model_dump(mode="json") if SIDRA_POPULATION_TABLE in metadata.tables else None,
+        SIDRA_INTERCENSAL_POPULATION_TABLE: metadata.tables[SIDRA_INTERCENSAL_POPULATION_TABLE].model_dump(mode="json") if SIDRA_INTERCENSAL_POPULATION_TABLE in metadata.tables else None,
+        "population_period_plan": plan,
+    })
     return inspect_source_artifact(
         path=combined_path,
         source_system="SIDRA",
@@ -409,12 +496,15 @@ def _acquire_sidra_population_strata(
     if SIDRA_POPULATION_TABLE not in metadata.tables:
         raise LivePipelineError(f"SIDRA metadata is missing required population table {SIDRA_POPULATION_TABLE}")
     locality_level, localities = _sidra_population_localities(metadata, uf)
-    period = _select_population_period(metadata, intent)
+    # Every census year inside the intent window (there can be more than one for a
+    # long window); if none falls exactly inside, fall back to the nearest census
+    # year overall so the tensor still gets a demographic-shape prior.
+    periods = _select_table_periods_in_window(metadata, SIDRA_POPULATION_TABLE, intent) or [_select_population_period(metadata, intent)]
     classifications = _sidra_population_demographic_strata_classifications(metadata)
     request = SIDRARequest(
         table_id=SIDRA_POPULATION_TABLE,
         variables=[SIDRA_POPULATION_VARIABLE],
-        periods=[period],
+        periods=periods,
         locality_level=locality_level,
         localities=localities,
         classifications=classifications,
@@ -423,9 +513,10 @@ def _acquire_sidra_population_strata(
     metadata_hash = content_hash({
         **table_metadata.model_dump(mode="json"),
         "population_strata_basis": "sex_race_single_year_age_nonoverlapping",
+        "population_strata_periods": periods,
     })
     chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
-    work_dir = data_root / "sidra" / f"population_strata_demographic_{uf}_{period}"
+    work_dir = data_root / "sidra" / f"population_strata_demographic_{uf}_{'_'.join(periods)}"
     work_dir.mkdir(parents=True, exist_ok=True)
     results = extract_chunk_plan(
         chunks,
@@ -671,7 +762,13 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
             "table_id": SIDRA_POPULATION_TABLE,
             "variable": SIDRA_POPULATION_VARIABLE,
             "classifications": SIDRA_POPULATION_TOTAL_CLASSIFICATIONS,
-            "period_selection": f"latest census period <= {intent.time.end_year}",
+            "intercensal_table_id": SIDRA_INTERCENSAL_POPULATION_TABLE,
+            "intercensal_variable": SIDRA_INTERCENSAL_POPULATION_VARIABLE,
+            "period_selection": (
+                f"every {SIDRA_POPULATION_TABLE} (census) or {SIDRA_INTERCENSAL_POPULATION_TABLE} "
+                f"(intercensal) period in [{intent.time.start_year}, {intent.time.end_year}]; "
+                "census wins on overlap (MSD §2.8.10 closure stitching)"
+            ),
             "locality_scope": f"all N6 municipalities of UF {uf}",
         },
         "sidra_population_strata": {

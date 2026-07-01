@@ -2,7 +2,7 @@
 
 The compendium is a curated catalog of 96 epidemiologically-relevant SIDRA/IBGE
 tables with national (5,570-municipality) coverage. This script converts it,
-reproducibly, into ``config/registries/sidra_compendium.json`` so ingestion and
+reproducibly, into ``config/registries/sidra/sidra_compendium.json`` so ingestion and
 EFG context-field construction can be driven from data rather than hand-typed
 view entries. Re-run whenever the compendium changes.
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "SIDRA_COMPENDIUM.md"
-OUTPUT = ROOT / "config" / "registries" / "sidra_compendium.json"
+OUTPUT = ROOT / "config" / "registries" / "sidra" / "sidra_compendium.json"
 
 _GROUP_RE = re.compile(r"^###\s+GROUP\s+\d+:\s*(.+?)\s*$")
 _TAB_RE = re.compile(r"^####\s+Tab\s+(\d+)\s*\|\s*(.+?)\s*$")

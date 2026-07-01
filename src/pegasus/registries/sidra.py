@@ -15,19 +15,22 @@ REGISTRY_FILES = (
 )
 
 
-def load_sidra_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:
+SIDRA_REGISTRY_ROOT = "config/registries/sidra"
+
+
+def load_sidra_entries(*, root: str | Path = SIDRA_REGISTRY_ROOT, required: bool = False) -> tuple[RegistryEntry, ...]:
     return load_entries(REGISTRY_FILES, root=root, required=required)
 
 
-def active_sidra_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:
+def active_sidra_entries(*, root: str | Path = SIDRA_REGISTRY_ROOT, required: bool = False) -> tuple[RegistryEntry, ...]:
     return active_entries(REGISTRY_FILES, root=root, required=required)
 
 
-def get_sidra_entry(entry_id: str, *, root: str | Path = "config/registries", required: bool = True) -> RegistryEntry:
+def get_sidra_entry(entry_id: str, *, root: str | Path = SIDRA_REGISTRY_ROOT, required: bool = True) -> RegistryEntry:
     return get_entry(REGISTRY_FILES, entry_id, root=root, required=required)
 
 
-def sidra_registry_manifest(*, root: str | Path = "config/registries", required: bool = False) -> dict:
+def sidra_registry_manifest(*, root: str | Path = SIDRA_REGISTRY_ROOT, required: bool = False) -> dict:
     return registry_manifest(REGISTRY_FILES, root=root, required=required)
 
 

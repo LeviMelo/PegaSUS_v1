@@ -29,10 +29,12 @@ def load_registries(root: str | Path = "config/registries") -> RegistryBundle:
     root = Path(root)
     registries: dict[str, dict[str, Any]] = {}
     hashes: dict[str, str] = {}
-    for path in sorted(root.glob("*.yaml")):
+    # Recursive: registries may live in a domain subdirectory (e.g. sidra/) rather
+    # than flat under root.
+    for path in sorted(root.rglob("*.yaml")):
         registries[path.stem] = load_registry_file(path)
         hashes[path.stem] = sha256_file(path)
-    seed = root / "sidra_table_seed.jsonl"
+    seed = root / "sidra" / "sidra_table_seed.jsonl"
     if seed.exists():
         hashes["sidra_table_seed"] = sha256_file(seed)
     return RegistryBundle(root=root, registries=registries, hashes=hashes)

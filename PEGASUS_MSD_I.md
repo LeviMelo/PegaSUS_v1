@@ -2227,6 +2227,22 @@ $$
 warning=zero\_anchor\_reopened\_by\_vital\_flow
 $$
 
+**Annual closure source (multi-table SIDRA stitching).** The annual total $E_{s,t}$ that the closure constraint anchors to is not observed by a single SIDRA table for every $t$. The canonical municipal-population source, SIDRA Tab 9606 (the full Sex × Race × Age matrix, §2.8.1's $Race\times Sex\times Age$ support), exists only for census years — verified live against IBGE SIDRA, currently $\{2010, 2022\}$. For every other year in a run's window, $E_{s,t}$ is instead taken from SIDRA Tab 6579 ("Estimativas de População", post-censal series): an annual, total-only resident-population estimate with no sex/race/age disaggregation.
+
+$$
+E_{s,t}
+=
+\begin{cases}
+E^{9606}_{s,t} & t\ \text{is a census year covered by Tab 9606} \\
+E^{6579}_{s,t} & \text{otherwise, when Tab 6579 covers}\ t \\
+\text{unanchored} & \text{neither table covers}\ t
+\end{cases}
+$$
+
+Tab 9606 takes priority whenever both tables cover the same year (a safety net: Tab 6579's own official periods already exclude census years). A year neither table covers — e.g. the 2007 IBGE estimation gap, or the processing lag immediately after a census (currently 2023) — is simply left with no closure anchor for that year, exactly as any other missing closure cell in this section: the reconstruction (aging/birth/death/migration/smoothness losses, §2.8.4–§2.8.9) interpolates it rather than requiring every year anchored. Neither table's exact gap years are hardcoded anywhere in the implementation — the acquisition layer trusts each table's own live SIDRA period metadata, so a resumed Tab 6579 estimate or a new census year requires no spec or code change. Implementation: `pegasus.sidra.population_cube` (`anchor.py` loads each table; `build.py` stitches them into one closure panel); the stitching policy is recorded in `config/registries/sidra/sidra_stitching.yaml`.
+
+Only Tab 9606 supplies the $(a,x,r)$ disaggregation itself (§2.8.1's full support); intercensal years contribute a closure total only, with the age/sex/race breakdown for those years being a *reconstruction*, not an observation — consistent with this tensor's purpose.
+
 ### 2.8.11 Hyperparameter Tuning
 
 $$

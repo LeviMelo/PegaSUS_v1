@@ -8,13 +8,13 @@ import yaml
 from pegasus.sidra.schemas import SIDRARequest
 
 
-def load_sidra_view_registry(path: str | Path = "config/registries/sidra_views.yaml") -> dict[str, Any]:
+def load_sidra_view_registry(path: str | Path = "config/registries/sidra/sidra_views.yaml") -> dict[str, Any]:
     payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     entries = payload.get("entries", [])
     return {str(entry["id"]): entry for entry in entries if "id" in entry}
 
 
-def request_from_view(view_id: str, *, registry_path: str | Path = "config/registries/sidra_views.yaml") -> SIDRARequest:
+def request_from_view(view_id: str, *, registry_path: str | Path = "config/registries/sidra/sidra_views.yaml") -> SIDRARequest:
     registry = load_sidra_view_registry(registry_path)
     if view_id not in registry:
         raise KeyError(f"SIDRA view not found in registry: {view_id}")

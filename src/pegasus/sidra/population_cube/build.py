@@ -27,7 +27,7 @@ from pegasus.she.reconstruction.schema import (
     PopulationTensorResult,
 )
 from pegasus.she.reconstruction.solvers import solve_population_tensor_problem
-from pegasus.sidra.population_cube.anchor import load_sidra_population_total_anchor, load_sidra_population_totals_frame
+from pegasus.sidra.population_cube.anchor import load_combined_population_totals_frame, load_sidra_population_total_anchor
 
 
 AXES = ("age_group", "sex", "race")
@@ -226,8 +226,14 @@ def solve_population_tensor_from_sidra_strata(
     if not records:
         raise ValueError("population strata artifact has no registry-projectable demographic cells")
 
-    localities = tuple(sorted({record["municipality_cod6"] for record in records}))
-    periods = tuple(sorted({record["period"] for record in records}))
+    # `totals` stitches the census-year (9606) and intercensal (6579) population
+    # totals into one (municipality, year) closure panel (MSD §2.8.10); its period
+    # coverage is a superset of the strata's (strata/disaggregation only exists for
+    # census years) -- the tensor's time axis must span BOTH so intercensal years
+    # get a real closure anchor instead of silently having none.
+    totals = load_combined_population_totals_frame(totals_path)
+    localities = tuple(sorted({record["municipality_cod6"] for record in records} | {str(row) for row in totals["municipality_cod6"].to_list()}))
+    periods = tuple(sorted({record["period"] for record in records} | {str(int(row)) for row in totals["year"].to_list()}))
     age_groups = tuple(sorted(categories_by_axis["age_group"] or {TOTAL}))
     sexes = tuple(sorted(categories_by_axis["sex"] or {TOTAL}))
     races = tuple(sorted(categories_by_axis["race"] or {TOTAL}))
@@ -257,7 +263,6 @@ def solve_population_tensor_from_sidra_strata(
         )
         anchors[idx] = (anchors[idx] or 0.0) + float(record["value"])
 
-    totals = load_sidra_population_totals_frame(totals_path)
     closure: list[float | None] = [None] * (shape[0] * shape[1])
     for row in totals.iter_rows(named=True):
         locality = str(row["municipality_cod6"])

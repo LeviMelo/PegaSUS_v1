@@ -331,7 +331,7 @@
       "tier": "T1_CORE",
       "research": "Estimativas de População",
       "subject": "Geral",
-      "periods": "2001–2025 (excl. census years)",
+      "periods": "2001–2025 excl. 2007 (IBGE estimation gap), 2010/2022 (census years, superseded by Tab 9606), 2023 (post-2022-census processing lag) — verified live against IBGE SIDRA on 2026-07-01; do not re-hardcode this list in code, trust the table's own live `periods` metadata",
       "localities": "5570",
       "variables": [
         {

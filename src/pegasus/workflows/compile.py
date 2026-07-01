@@ -41,12 +41,12 @@ def _load_intent(intent_path: Path) -> tuple[dict[str, Any], UserIntent]:
 def _registry_hashes() -> dict[str, str]:
     candidates = [
         Path("config/registries/registry_manifest.yaml"),
-        Path("config/registries/sidra_views.yaml"),
+        Path("config/registries/sidra/sidra_views.yaml"),
         Path("config/registries/source_fields.yaml"),
         Path("config/registries/quality_permissions.yaml"),
         Path("config/registries/race_axis_registry.yaml"),
         Path("config/registries/race_bridge_priors.yaml"),
-        Path("config/registries/sidra_compendium.json"),
+        Path("config/registries/sidra/sidra_compendium.json"),
         Path("config/registries/demographic_axis_maps.yaml"),
     ]
     return {str(path): sha256_file(path) for path in candidates if path.exists()}

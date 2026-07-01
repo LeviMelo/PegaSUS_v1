@@ -97,9 +97,10 @@ To optimize readability and density, the following abbreviations and acronyms ar
 ### GROUP 2: DEMOGRAPHICS, POPULATION STRUCTURE & GEOGRAPHY
 
 #### Tab 6579 | Resident population estimates (Post-censal series)
-* **Tier**: T1_CORE | **Res**: Estimativas de População | **Subj**: Geral | **Per**: 2001–2025 (excl. census years) | **Locs**: 5570
+* **Tier**: T1_CORE | **Res**: Estimativas de População | **Subj**: Geral | **Per**: 2001–2025 excl. 2007 (IBGE estimation gap), 2010/2022 (census years, superseded by Tab 9606), 2023 (post-2022-census processing lag) — verified live against IBGE SIDRA on 2026-07-01; do not re-hardcode this list in code, trust the table's own live `periods` metadata | **Locs**: 5570
 * **Vars**: `9324` (População residente estimada; U: Px, Type: c, DK: Y)
 * **Clsfs**: None
+* **Cube role**: intercensal total-only population anchor, paired with Tab 9606 (census years, full sex/race/age disaggregation) in the population denominator tensor (MSD §2.8.10). See `config/registries/sidra/sidra_stitching.yaml`.
 
 #### Tab 4714 | Land Area, Resident Population & Demographic Density
 *   **Tier**: T1_CORE | **Res**: Censo Demográfico | **Subj**: Território | **Per**: 2022 | **Locs**: 5570

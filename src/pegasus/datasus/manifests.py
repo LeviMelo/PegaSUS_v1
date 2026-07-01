@@ -204,24 +204,33 @@ def build_datasus_manifests(
     uf = normalize_uf(uf)
     parsed_years = parse_years(years)
 
-    # SIM-DO and SINASC are annual UF files for this compiler path.
-    # SIH-RD and CNES-ST are monthly DATASUS systems and must not be requested
-    # as a year-only chunk. Each monthly request is independently cached and
-    # materialized, then downstream workflows concatenate normalized rows.
+    # SIM-DO and SINASC are annual UF files. SIH-RD and CNES-ST are monthly
+    # DATASUS systems: the R bridge fetches an entire month RANGE in one R session
+    # (it loops the 12 monthly DBCs internally), so requesting one chunk per YEAR
+    # (Jan–Dec) instead of one per month cuts the R process count ~12x per system
+    # (208 -> 32 requests for a 4-system 8-year run) — the R cold-start + package
+    # reload is the dominant fixed cost, and per-worker download concurrency is
+    # unchanged. Set PEGASUS_DATASUS_MONTHLY_CHUNKS=1 to restore per-month chunks
+    # (finer cache granularity, slower).
     if system in {"SIH-RD", "CNES-ST"}:
+        import os
+
+        per_month = os.environ.get("PEGASUS_DATASUS_MONTHLY_CHUNKS", "0") == "1"
+        if per_month:
+            return [
+                build_datasus_request_manifest(
+                    system=system, uf=uf, year_start=year, year_end=year,
+                    month_start=month, month_end=month, config=config, data_root=data_root,
+                )
+                for year in parsed_years
+                for month in range(1, 13)
+            ]
         return [
             build_datasus_request_manifest(
-                system=system,
-                uf=uf,
-                year_start=year,
-                year_end=year,
-                month_start=month,
-                month_end=month,
-                config=config,
-                data_root=data_root,
+                system=system, uf=uf, year_start=year, year_end=year,
+                month_start=1, month_end=12, config=config, data_root=data_root,
             )
             for year in parsed_years
-            for month in range(1, 13)
         ]
 
     return [

@@ -34,11 +34,43 @@ _BLANK = {"", "NA", "NAN", "NULL", "NONE"}
 
 @lru_cache(maxsize=4)
 def load_codebook(registry_root: str = "config/registries") -> dict[str, Any]:
-    """Load and cache the codebook YAML (concepts + per-system bindings)."""
+    """Load and cache the codebook YAML (concepts + per-system bindings + reference-
+    table lookups)."""
     data = load_yaml(Path(registry_root) / "datasus_codebook.yaml")
     concepts = data.get("concepts", {})
     bindings = data.get("bindings", {})
-    return {"concepts": concepts, "bindings": bindings}
+    lookups = data.get("lookups", {})
+    return {"concepts": concepts, "bindings": bindings, "lookups": lookups}
+
+
+@lru_cache(maxsize=8)
+def load_reference_table(table: str, registry_root: str = "config/registries") -> dict[str, str]:
+    """Load a large open code→name reference table (tabCBO/tabNaturalidade/
+    tabOcupacao, mirrored 1:1 from microdatasus's shipped data) as a ``{code: name}``
+    dict. These are joins (occupation/country/municipality NAME lookups), distinct
+    from the small closed `concepts` categorical dictionaries above."""
+    path = Path(registry_root) / "datasus_reference" / f"{table}.parquet"
+    df = pl.read_parquet(path)
+    return dict(zip(df["code"].to_list(), df["name"].to_list()))
+
+
+def lookup_for(system: str, raw_column: str, registry_root: str = "config/registries") -> str | None:
+    """Return the reference table bound to ``raw_column`` for ``system``, or None."""
+    return load_codebook(registry_root)["lookups"].get(system, {}).get(raw_column)
+
+
+def lookup_name(table: str, code: Any, *, registry_root: str = "config/registries") -> str | None:
+    """Record-level reference-table lookup: raw code → name, or None if absent."""
+    text = _clean_code(code)
+    if text is None:
+        return None
+    return load_reference_table(table, registry_root).get(text)
+
+
+def lookup_expr(table: str, code: pl.Expr, *, registry_root: str = "config/registries") -> pl.Expr:
+    """Vectorized twin of :func:`lookup_name`."""
+    mapping = load_reference_table(table, registry_root)
+    return code.replace_strict(mapping, default=None, return_dtype=pl.Utf8)
 
 
 def _concept(name: str, registry_root: str = "config/registries") -> dict[str, Any]:
@@ -46,6 +78,17 @@ def _concept(name: str, registry_root: str = "config/registries") -> dict[str, A
     if concept is None:
         raise KeyError(f"unknown codebook concept: {name}")
     return concept
+
+
+def _strip_leading_zeros(code: str) -> str:
+    """Int-normalize a purely-numeric code ("00" -> "0", "01" -> "1").
+
+    Several SIH/CNES raw columns are fixed-width DBC fields (e.g. MARCA_UTI, ESPEC)
+    that store a zero-padded code, while the case_match dictionary keys its bare
+    digit form ("0"/"1"). Matching falls back to this normalized form so those rows
+    don't silently read as 'invalid' despite being valid, common codes. Non-numeric
+    codes ("A", "S", "D19"...) are returned unchanged."""
+    return str(int(code)) if code.isdigit() else code
 
 
 def concept_for(system: str, raw_column: str, registry_root: str = "config/registries") -> str | None:
@@ -69,9 +112,13 @@ def translate(concept: str, code: Any, *, registry_root: str = "config/registrie
     if text is None:
         return None, "missing"
     values = spec.get("values", {})
+    unknown = set(spec.get("unknown", []))
+    norm = _strip_leading_zeros(text)
     if text in values:
         return values[text], "valid"
-    if text in set(spec.get("unknown", [])):
+    if norm in values:
+        return values[norm], "valid"
+    if text in unknown or norm in unknown:
         return None, "unknown"
     return None, "invalid"
 
@@ -83,16 +130,29 @@ def categorical_exprs(concept: str, code: pl.Expr, *, registry_root: str = "conf
     values = spec.get("values", {})
     unknown = list(spec.get("unknown", []))
     is_bool = spec.get("dtype") == "bool"
+    return_dtype = pl.Boolean if is_bool else pl.Utf8
+
+    # Zero-padded fixed-width DBC fields ("00"/"01") don't match the bare-digit
+    # dictionary keys ("0"/"1") microdatasus's case_match uses -- fall back to the
+    # int-normalized code when the exact code doesn't match.
+    code_norm = (
+        pl.when(code.str.contains(r"^\d+$"))
+        .then(code.cast(pl.Int64, strict=False).cast(pl.Utf8))
+        .otherwise(code)
+    )
 
     if values:
-        value = code.replace_strict(values, default=None, return_dtype=pl.Boolean if is_bool else pl.Utf8)
+        exact = code.replace_strict(values, default=None, return_dtype=return_dtype)
+        normed = code_norm.replace_strict(values, default=None, return_dtype=return_dtype)
+        value = pl.coalesce([exact, normed])
     else:
-        value = pl.lit(None, dtype=pl.Boolean if is_bool else pl.Utf8)
+        value = pl.lit(None, dtype=return_dtype)
 
+    known_codes = list(values.keys())
     state = (
         pl.when(code.is_null()).then(pl.lit("missing"))
-        .when(code.is_in(list(values.keys()))).then(pl.lit("valid"))
-        .when(code.is_in(unknown) if unknown else pl.lit(False)).then(pl.lit("unknown"))
+        .when(code.is_in(known_codes) | code_norm.is_in(known_codes)).then(pl.lit("valid"))
+        .when((code.is_in(unknown) | code_norm.is_in(unknown)) if unknown else pl.lit(False)).then(pl.lit("unknown"))
         .otherwise(pl.lit("invalid"))
     )
     return value, state

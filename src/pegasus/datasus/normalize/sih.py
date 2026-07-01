@@ -11,9 +11,43 @@ import polars as pl
 
 from pegasus.datasus.decoders import decode_datasus_sex, decode_sih_age, filter_cnpj
 from pegasus.datasus.icd_parser import parse_icd
+from pegasus.datasus.normalize.codebook import lookup_name, translate
 from pegasus.datasus.normalize.completeness import check_raw_completeness
 from pegasus.datasus.normalize.primitives import Cols, read_raw_table, row_hash
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
+
+# output field -> (raw column, codebook concept). In-house replacement for
+# microdatasus's process_sih categorical translation (MSD codebook registry);
+# shared contract between the record oracle and the vectorized frame so both
+# translate identically. MORTE/SEXO/COD_IDADE/RACA_COR keep their existing
+# dedicated decoders (death flag, decode_datasus_sex, decode_sih_age, and the
+# billing-race axis is intentionally left raw) rather than routing through here.
+_SIH_CATEGORICAL: dict[str, tuple[str, str]] = {
+    "admission_character": ("CAR_INT", "sih_rd_car_int"),
+    "discharge_motive": ("COBRANCA", "sih_rd_cobranca"),
+    "complexity_level": ("COMPLEX", "sih_rd_complex"),
+    "contraceptive_method_1": ("CONTRACEP1", "sih_rd_contracep1"),
+    "contraceptive_method_2": ("CONTRACEP2", "sih_rd_contracep1"),
+    "bed_specialty": ("ESPEC", "sih_rd_espec"),
+    "indigenous_ethnicity": ("ETNIA", "sih_rd_etnia"),
+    "faec_financing_subtype": ("FAEC_TP", "sih_rd_faec_tp"),
+    "financing_type": ("FINANC", "sih_rd_financ"),
+    "management_type": ("GESTAO", "sih_rd_gestao"),
+    "manager_selection_rule": ("GESTOR_COD", "sih_rd_gestor_cod"),
+    "homonym_flag": ("HOMONIMO", "sih_rd_homonimo"),
+    "aih_type": ("IDENT", "sih_rd_ident"),
+    "vdrl_test_positive": ("IND_VDRL", "sih_rd_ind_vdrl"),
+    "high_risk_pregnancy": ("GESTRISCO", "sih_rd_ind_vdrl"),
+    "hospital_acquired_infection": ("INFEHOSP", "sih_rd_ind_vdrl"),
+    "education_level": ("INSTRU", "sih_rd_instru"),
+    "uci_type_mark": ("MARCA_UCI", "sih_rd_marca_uci"),
+    "nationality": ("NACIONAL", "sih_rd_nacional"),
+    "establishment_nature": ("NATUREZA", "sih_rd_natureza"),
+    "legal_nature": ("NAT_JUR", "sih_rd_nat_jur"),
+    "contractual_billing_rule": ("REGCT", "sih_rd_regct"),
+    "aih5_sequence": ("SEQ_AIH5", "sih_rd_seq_aih5"),
+    "employment_bond_type": ("VINCPREV", "sih_rd_vincprev"),
+}
 
 SECONDARY_DIAG_COLUMNS = tuple(f"DIAGSEC{i}" for i in range(1, 10))
 SECONDARY_TYPE_COLUMNS = tuple(f"TPDISEC{i}" for i in range(1, 10))
@@ -133,7 +167,7 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
             secondary_raw[col] = None if row.get(col) is None else str(row.get(col))
             secondary_norm[col] = parsed.normalized
             secondary_states[col] = parsed.parse_state
-    secondary_type = {col: _clean(row.get(col)) for col in SECONDARY_TYPE_COLUMNS if col in row}
+    secondary_type = {col: translate("sih_rd_tpdisec1", row.get(col))[0] for col in SECONDARY_TYPE_COLUMNS if col in row}
     stay_days, stay_state = _int_nonnegative(row.get("DIAS_PERM") or row.get("QT_DIARIAS") or row.get("stay_length_days"))
     icu_days_month, icu_month_state = _int_nonnegative(row.get("UTI_MES_TO"))
     icu_days_adm, icu_adm_state = _int_nonnegative(row.get("UTI_INT_TO"))
@@ -159,7 +193,9 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
     record_state = "valid"
     if admission_year is None or cod6 is None or principal.parse_state in {"missing", "blank", "unparseable", "invalid"}:
         record_state = "invalid_identity_or_principal_diagnosis"
+    categorical = {field: translate(concept, row.get(col))[0] for field, (col, concept) in _SIH_CATEGORICAL.items()}
     return {
+        **categorical,
         "admission_id": f"SIH-{admission_id}",
         "source_system": "SIH-RD",
         "admission_date": admission_date,
@@ -197,7 +233,8 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
         "procedure_performed": _clean(row.get("PROC_REA")),
         "stay_length_days": stay_days,
         "stay_length_state": stay_state,
-        "icu_type_mark": _clean(row.get("MARCA_UTI")),
+        "icu_type_mark": translate("sih_rd_marca_uti", row.get("MARCA_UTI"))[0],
+        "professional_occupation_name": lookup_name("tabCBO", row.get("CBOR")),
         "icu_days_month_total": icu_days_month,
         "icu_days_month_state": icu_month_state,
         "icu_days_hospitalization_total": icu_days_adm,
@@ -315,11 +352,13 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
         (pl.struct([clean(col).alias(col) for col in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_raw_json"),
         (pl.struct([icd_norm(col).alias(col) for col in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_norm_json"),
         (pl.struct([icd_state(col).alias(col) for col in sec_cols]).struct.json_encode() if sec_cols else pl.lit("{}")).alias("secondary_icd_parse_states_json"),
-        (pl.struct([clean(col).alias(col) for col in type_cols]).struct.json_encode() if type_cols else pl.lit("{}")).alias("secondary_diagnosis_type_json"),
+        (pl.struct([cx.categorical_value("sih_rd_tpdisec1", col).alias(col) for col in type_cols]).struct.json_encode() if type_cols else pl.lit("{}")).alias("secondary_diagnosis_type_json"),
         clean("PROC_SOLIC").alias("procedure_requested"),
         clean("PROC_REA").alias("procedure_performed"),
         stay_v.alias("stay_length_days"), stay_s.alias("stay_length_state"),
-        clean("MARCA_UTI").alias("icu_type_mark"),
+        cx.categorical_value("sih_rd_marca_uti", "MARCA_UTI").alias("icu_type_mark"),
+        cx.lookup("tabCBO", "CBOR").alias("professional_occupation_name"),
+        *[cx.categorical_value(concept, col).alias(field) for field, (col, concept) in _SIH_CATEGORICAL.items()],
         icu_m_v.alias("icu_days_month_total"), icu_m_s.alias("icu_days_month_state"),
         icu_h_v.alias("icu_days_hospitalization_total"), icu_h_s.alias("icu_days_hospitalization_state"),
         pl.when(death.is_in(["1", "sim", "yes", "true", "t", "morte", "death"])).then(True)
@@ -353,11 +392,13 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
         "race_axis_type", "principal_icd_raw", "principal_icd_norm", "principal_icd_parse_state",
         "secondary_icd_raw_json", "secondary_icd_norm_json", "secondary_icd_parse_states_json",
         "secondary_diagnosis_type_json", "procedure_requested", "procedure_performed", "stay_length_days",
-        "stay_length_state", "icu_type_mark", "icu_days_month_total", "icu_days_month_state",
+        "stay_length_state", "icu_type_mark", "professional_occupation_name",
+        "icu_days_month_total", "icu_days_month_state",
         "icu_days_hospitalization_total", "icu_days_hospitalization_state", "death_flag", "death_flag_state",
         "hospital_service_cost_real", "professional_service_cost_real", "icu_cost_real",
-        "total_admission_cost_real", "cost_state_json", "cost_raw_json", "record_state",
-        "source_manifest_hash", "row_hash", "raw_json",
+        "total_admission_cost_real", "cost_state_json", "cost_raw_json",
+        *_SIH_CATEGORICAL.keys(),
+        "record_state", "source_manifest_hash", "row_hash", "raw_json",
     ]
     return out.rename({"mun_residence_state": "municipality_code_state"} if "mun_residence_state" in out.columns else {}).select(ordered)
 

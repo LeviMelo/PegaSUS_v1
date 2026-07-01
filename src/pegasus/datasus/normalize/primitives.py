@@ -222,6 +222,13 @@ class Cols:
         """The canonical value from :meth:`categorical` (drops the state)."""
         return self.categorical(concept, *names, registry_root=registry_root)[0]
 
+    def lookup(self, table: str, *names: str, registry_root: str = "config/registries") -> pl.Expr:
+        """Reference-table lookup (occupation/country name via tabCBO/tabNaturalidade
+        etc, mirrored from microdatasus's shipped data): raw code → name."""
+        from pegasus.datasus.normalize.codebook import lookup_expr
+
+        return lookup_expr(table, self.clean(*names), registry_root=registry_root)
+
     # -- numbers ----------------------------------------------------------
     def nonneg_int(self, *names: str) -> tuple[pl.Expr, pl.Expr]:
         """Sign-preserving non-negative integer (matches ``_int_nonnegative``): a

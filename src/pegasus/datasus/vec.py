@@ -28,9 +28,30 @@ yields a null literal rather than a crash) and exposes the primitives as methods
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence
 
 import polars as pl
+
+
+def read_raw_table(path: str | Path) -> pl.DataFrame:
+    """Read a raw DATASUS source table for normalization.
+
+    Single reader for every system. CSV/TXT are read with ``infer_schema_length=0``
+    so *all* columns come back as Utf8 — DATASUS fields are coded strings, and
+    schema inference is actively harmful here (it turns a zero-padded ``01012022``
+    date into the integer ``1012022``, silently dropping the leading zero). Parquet
+    keeps its stored types; JSON/NDJSON are supported for completeness.
+    """
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        return pl.read_parquet(path)
+    if suffix in {".csv", ".txt"}:
+        return pl.read_csv(path, infer_schema_length=0, ignore_errors=False)
+    if suffix in {".json", ".ndjson"}:
+        return pl.read_ndjson(path)
+    raise ValueError(f"Unsupported DATASUS input format: {path}")
 
 # Canonical blank/sentinel tokens. Matches ``decoders._none_or_blank`` (strip +
 # case-insensitive {"", NA, NAN, NULL}) plus the historical "NONE" that the SIH/CNES

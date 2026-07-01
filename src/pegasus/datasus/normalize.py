@@ -15,6 +15,7 @@ from typing import Any
 
 import polars as pl
 
+from pegasus.datasus.vec import read_raw_table
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7
 
 
@@ -120,17 +121,7 @@ def _stable_hash(value: Any) -> str:
 
 
 def _read_table(path: str | Path) -> pl.DataFrame:
-    path = Path(path)
-    suffix = path.suffix.lower()
-
-    if suffix == ".parquet":
-        return pl.read_parquet(path)
-    if suffix in {".csv", ".txt"}:
-        return pl.read_csv(path, infer_schema_length=1000, ignore_errors=False)
-    if suffix in {".json", ".ndjson"}:
-        return pl.read_ndjson(path)
-
-    raise ValueError(f"Unsupported SIM-DO input format: {path}")
+    return read_raw_table(path)
 
 
 def _parse_datasus_date(value: Any) -> str | None:

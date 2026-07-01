@@ -9,7 +9,7 @@ from typing import Any
 import polars as pl
 
 from pegasus.datasus.decoders import clamp_bool, filter_cnpj
-from pegasus.datasus.vec import Cols, row_hash, struct_json
+from pegasus.datasus.vec import Cols, read_raw_table, row_hash, struct_json
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
 
 CAPACITY_PREFIXES = ("QTINST", "QTLEIT")
@@ -40,12 +40,7 @@ def _stable_hash(value: Any) -> str:
 
 
 def _read_table(path: str | Path) -> pl.DataFrame:
-    path = Path(path)
-    if path.suffix.lower() == ".parquet":
-        return pl.read_parquet(path)
-    if path.suffix.lower() in {".csv", ".txt"}:
-        return pl.read_csv(path, infer_schema_length=0, ignore_errors=False)
-    raise ValueError(f"Unsupported CNES-ST input format: {path}")
+    return read_raw_table(path)
 
 
 def _period(value: Any) -> tuple[int | None, int | None, str]:

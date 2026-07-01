@@ -11,7 +11,7 @@ import polars as pl
 
 from pegasus.datasus.decoders import decode_datasus_sex, decode_sih_age, filter_cnpj
 from pegasus.datasus.icd_parser import parse_icd
-from pegasus.datasus.vec import Cols, row_hash
+from pegasus.datasus.vec import Cols, read_raw_table, row_hash
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
 
 SECONDARY_DIAG_COLUMNS = tuple(f"DIAGSEC{i}" for i in range(1, 10))
@@ -42,12 +42,7 @@ def _stable_hash(value: Any) -> str:
 
 
 def _read_table(path: str | Path) -> pl.DataFrame:
-    path = Path(path)
-    if path.suffix.lower() == ".parquet":
-        return pl.read_parquet(path)
-    if path.suffix.lower() in {".csv", ".txt"}:
-        return pl.read_csv(path, infer_schema_length=0, ignore_errors=False)
-    raise ValueError(f"Unsupported SIH-RD input format: {path}")
+    return read_raw_table(path)
 
 
 def _parse_date(value: Any) -> tuple[str | None, int | None, str]:

@@ -18,7 +18,7 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.datasus.vec import Cols
+from pegasus.datasus.vec import Cols, read_raw_table
 
 ICD_LIKE = re.compile(r"^[A-Z][0-9]{2}[0-9A-Z]?")
 
@@ -46,13 +46,7 @@ def _stable_hash(value: Any) -> str:
 
 
 def _read_table(path: str | Path) -> pl.DataFrame:
-    path = Path(path)
-    suffix = path.suffix.lower()
-    if suffix == ".parquet":
-        return pl.read_parquet(path)
-    if suffix == ".csv":
-        return pl.read_csv(path, infer_schema_length=0, ignore_errors=False)
-    raise ValueError(f"Unsupported SINASC input format: {path}")
+    return read_raw_table(path)
 
 
 def _raw(row: dict[str, Any], *names: str) -> Any:

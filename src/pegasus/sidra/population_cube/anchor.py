@@ -54,7 +54,7 @@ def _loads_tuple(value: Any) -> list[tuple[str, str]]:
         parsed = json.loads(value)
     else:
         parsed = value
-    return [tuple(map(str, x)) for x in parsed]
+    return [(str(x[0]), str(x[1])) for x in parsed if len(x) >= 2]
 
 
 def _is_total_9606(row: dict[str, Any]) -> bool:

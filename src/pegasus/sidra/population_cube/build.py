@@ -81,7 +81,7 @@ def _pairs(value: Any) -> list[tuple[str, str]]:
         parsed = json.loads(value) if isinstance(value, str) else value
     except Exception:
         return []
-    return [tuple(map(str, item)) for item in (parsed or []) if len(item) >= 2]
+    return [(str(item[0]), str(item[1])) for item in (parsed or []) if len(item) >= 2]
 
 
 def _category_by_classification(raw: Any) -> dict[str, str]:

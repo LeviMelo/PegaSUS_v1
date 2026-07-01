@@ -1046,7 +1046,7 @@ def execute_efg_result(
 
     scope_token = _GEO_SCOPE_PREFIXES.set(_scope_prefixes_from_intent(intent))
     try:
-        return _execute_efg_result_impl(efg, out_dir=out_dir, require_materialized=require_materialized)
+        return _execute_efg_result_impl(efg, out_dir=out_dir, require_materialized=require_materialized, intent=intent)
     finally:
         _GEO_SCOPE_PREFIXES.reset(scope_token)
 
@@ -1056,6 +1056,7 @@ def _execute_efg_result_impl(
     *,
     out_dir: Path,
     require_materialized: bool,
+    intent: Any = None,
 ) -> tuple[EFGResult, EFGExecutionReport]:
     fields_by_id: dict[str, FieldNode] = {field.id: field for field in efg.fields}
     executed: list[ExecutedField] = []

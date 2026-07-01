@@ -41,6 +41,7 @@ from pegasus.sidra.metadata import read_normalized_metadata_tables
 from pegasus.sidra.plan import plan_sidra_chunks
 from pegasus.sidra.schemas import SIDRAMetadata, SIDRARequest
 from pegasus.source_artifacts.contracts import (
+    SourceArtifact,
     inspect_source_artifact,
     write_source_artifact_manifest,
 )
@@ -454,7 +455,7 @@ def _acquire_sidra_population(
     data_root: Path,
     metadata_dir: Path,
     client: SidraClient | None,
-) -> dict[str, Any]:
+) -> SourceArtifact:
     """Population-total denominator across the intent's full year window: census
     years from 9606 (full sex/race/age matrix, filtered to Total/Total/Total) plus
     intercensal years from 6579 (annual, total-only) -- MSD §2.8.10's E_{s,t}
@@ -511,7 +512,7 @@ def _acquire_sidra_civil_registry_vital(
     data_root: Path,
     metadata_dir: Path,
     client: SidraClient | None,
-) -> dict[str, dict[str, Any] | None]:
+) -> dict[str, SourceArtifact | None]:
     """Acquire SIDRA civil-registry births (2609) and deaths (2683), total-only per
     municipality-year, for the net-migration residual (MSD §2.8.7). Gated on the
     population tensor being requested. Each table is independent: a table absent for
@@ -522,7 +523,7 @@ def _acquire_sidra_civil_registry_vital(
         table_ids=[SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE, SIDRA_CIVIL_REGISTRY_DEATHS_TABLE],
         metadata_dir=metadata_dir, data_root=data_root, client=client,
     )
-    out: dict[str, dict[str, Any] | None] = {}
+    out: dict[str, SourceArtifact | None] = {}
     for key, table_id, variable_id, role in (
         ("births", SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE, SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE, "civil_registry_births"),
         ("deaths", SIDRA_CIVIL_REGISTRY_DEATHS_TABLE, SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE, "civil_registry_deaths"),
@@ -554,7 +555,7 @@ def _acquire_sidra_population_strata(
     data_root: Path,
     metadata_dir: Path,
     client: SidraClient | None,
-) -> dict[str, Any] | None:
+) -> SourceArtifact | None:
     if not _population_tensor_requested(intent):
         return None
     metadata = _ensure_sidra_metadata(metadata_dir=metadata_dir, data_root=data_root, client=client)
@@ -762,7 +763,7 @@ def _race_bridge_prior_artifact(
     *,
     intent: UserIntent,
     municipality_cod6: str | None,
-) -> dict[str, Any] | None:
+) -> SourceArtifact | None:
     if intent.race_tensor_mode not in _RACE_BRIDGE_PRIOR_REQUIRED_MODES:
         return None
     if municipality_cod6 is None:

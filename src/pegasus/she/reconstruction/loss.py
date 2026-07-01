@@ -106,7 +106,7 @@ def evaluate_population_loss(
 
     gp = np.zeros(n, dtype=np.float64)
     gm = np.zeros(n, dtype=np.float64)
-    terms = {name: 0.0 for name in ("anchor", "aging", "birth", "death", "migration", "migration_total", "race", "age_smooth")}
+    terms = {name: 0.0 for name in ("anchor", "composition", "aging", "birth", "death", "migration", "migration_total", "race", "age_smooth")}
     w = problem.weights
     shape = problem.shape
     s_count, t_count, a_count, x_count, r_count = shape
@@ -123,6 +123,22 @@ def evaluate_population_loss(
         residual = P[anchor_mask] - anchors_np[anchor_mask]
         terms["anchor"] = float(w.anchor * np.sum(residual**2))
         gp[anchor_mask] += 2.0 * w.anchor * residual
+
+    # 1b. Demographic composition (intercensal structure propagation, MSD §2.8.10).
+    # Census strata exist only at census years; without this term the solver splits
+    # each intercensal year's closure total uniformly across (age,sex,race) cells
+    # (aging/age_smooth are too weak to carry the census structure across a multi-year
+    # gap from a single anchor). This pulls every cell with a census composition toward
+    # closure_total * census joint share, so intercensal denominators reflect the real
+    # demographic structure. Targets sum to the closure per (locality,year), so this
+    # shapes the distribution while projection keeps the total exact.
+    if w.composition > 0 and problem.composition_prior is not None:
+        comp = np.array([c if c is not None else np.nan for c in problem.composition_prior], dtype=np.float64)
+        comp_mask = ~np.isnan(comp)
+        if comp_mask.any():
+            residual = P[comp_mask] - comp[comp_mask]
+            terms["composition"] = float(w.composition * np.sum(residual**2))
+            gp[comp_mask] += 2.0 * w.composition * residual
 
     # 2. Aging
     if w.aging > 0 and t_count > 1 and a_count > 1:

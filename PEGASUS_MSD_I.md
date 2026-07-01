@@ -2226,6 +2226,47 @@ starved of migration headroom. Implementation:
 $\Psi^{prior}$ remains unwired (no stratified source); the closed-national case
 $M^{national}=0$ is still available when no residual is observed.
 
+**Migration flow layer — latent origin→destination reconstruction.** The net
+residual $\widehat{\text{NetMig}}_{s,t}$ is a single scalar per node: the balance
+$\text{inflow}-\text{outflow}$. Migration is intrinsically a *directed bilateral
+field* $F_{i\to j,t}$ (who moves from where to where), and that field — not the net
+scalar — is what carries fine demographic-shift structure and induces functional
+adjacency between municipalities. PegaSUS reconstructs $F$ from the net marginals as a
+CTR instance (§II.3), latent $F\ge 0$ over directed candidate pairs, minimizing
+
+$$
+\lambda_G \big\| F - G \big\|^2
+\;+\;
+\lambda_{net}\big\| S\,F - \widehat{\text{NetMig}} \big\|^2
+\;+\;
+\lambda_C\big\| \Pi_C F - F^{census} \big\|^2 ,
+\qquad F\ge 0,
+$$
+
+where $S$ is the net operator $(S F)_j=\sum_i F_{i\to j}-\sum_k F_{j\to k}$ (the
+balancing identity as a *hard* structural map, so any feasible $F$ reproduces the
+observed nets); $G$ is a **production-constrained gravity prior**, each origin $i$
+emitting $\rho\,\mathrm{Pop}_{i}$ migrants allocated over destinations by
+$\mathrm{Pop}_j/\mathrm{hops}(i,j)^\gamma$ (mass-attracting, distance-decaying, on the
+contiguity-hop metric since no coordinates exist); and $\Pi_C F=F^{census}$ optionally
+anchors the genuine bilateral flows IBGE publishes decennially. Candidate pairs are
+restricted to within $\mathrm{hops}\le h$ of the contiguity graph — both tractability
+and demographic truth (migration is short-range).
+
+**Identifiability, stated honestly.** The net marginal is invariant to balanced
+circulation, so it fixes each node's *level* but not the *gross* volume $\sum F$;
+gross scale is set by the gravity prior's rate $\rho$ (a literature/assumed
+$\sim$1–2%/yr) unless a census $F^{census}$ carries the true scale, in which case the
+prior is rescaled to match the census mass on anchored pairs (so the anchor's scale
+propagates to unanchored pairs rather than fighting the prior). Consequently, *without*
+a census anchor $F$ is a gravity-structured, net-consistent **estimate** (validated to
+recover the relative structure of gravity-generated flows at correlation $>0.85$ from
+net marginals alone), flagged as such; *with* a census anchor it is an interpolation
+pinned to real bilateral flows. Implementation:
+`she.reconstruction.instances.migration_flow_instance` +
+`pegasus.sidra.population_cube.migration`; the reconstructed field feeds the
+migration-affinity spatial kernel (MSD-II §II.4).
+
 ### 2.8.8 Race/Color Composition Loss
 
 Let:

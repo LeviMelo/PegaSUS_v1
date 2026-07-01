@@ -299,6 +299,10 @@ def _build_population_tensor_artifact(
         civil_registry_births_path=None if civil_births is None else civil_births.path,
         civil_registry_deaths_path=None if civil_deaths is None else civil_deaths.path,
         race_bridge_prior_path=race_bridge_prior_path,
+        # Reconstruct the O->D migration flow field + affinity kernel from the net
+        # residual (MSD §2.8.7 flow layer). Bounded and safe: the pair-count guard
+        # skips gracefully for scopes too large for the dense reconstruction.
+        reconstruct_migration=True,
         mode=solver_mode,
     ).as_manifest()
     artifact = SourceArtifactRef(

@@ -202,6 +202,14 @@ These sections are written to be appended to `MSD.md` as a numbered block. They 
 
 **Circularity guard (`§II.4.1`, critical).** A `context_derived` graph (weight depends on a substantive variable: population, GDP, flows) MUST be rejected for any test/edge whose outcome or covariate shares the graph's provenance. Default spatial structure for all inference is `structural` (contiguity). **New §10 abort:** "context-derived spatial weight shares provenance with the tested variable." This guard applies inside the LDO's spatial prior exactly as it applies to a pairwise test.
 
+**Migration-affinity graph (`§II.4.2`, the first realized `context_derived` graph).** The population tensor's reconstructed origin→destination migration field (MSD-I §2.8.7 flow layer) induces a *functional* adjacency that is deeper than geographic contiguity: two municipalities are close to the degree that people move between them, border or not (a capital↔satellite corridor can dominate a shared border with an empty neighbour). The kernel is the mass-normalized symmetrized flow
+
+$$
+\text{affinity}(i,j)=\frac{F_{i\to j}+F_{j\to i}}{\sqrt{\mathrm{Pop}_i\,\mathrm{Pop}_j}},
+$$
+
+a per-capita interchange *propensity* (not raw volume, which would merely rank the largest cities), summed across the run's years. It is a weighted `SpatialWeightGraph` with `legality_class=context_derived` and `provenance={migration_flow, population}`, so the §II.4.1 guard forbids it from smoothing any migration- or population-derived variable (notably the population denominator itself) while allowing it for provenance-disjoint outcomes (mortality, morbidity, socioeconomic context) — where migration corridors are exactly the right diffusion structure. `SpatialWeightGraph` now carries optional edge weights (the `weight` view returns the raw kernel; `symmetric`/`row_standardized`/`laplacian` carry them, `binary` remains 0/1 presence), and the unweighted structural contiguity graph is the `_weights=None` special case — identical behaviour as before. Implementation: `geo.migration_affinity.build_migration_affinity_graph`; produced as an artifact of the population-tensor compile stage.
+
 ### §II.5 Concept grammar + DataScope/ExecutionStage
 
 *Extends MSD §3.3, §3.10, §1.5; absorbs `ARCH-CONCEPT-*`, `ARCH-PROFILE-01`; sharpens `EFG-REG-01`.*

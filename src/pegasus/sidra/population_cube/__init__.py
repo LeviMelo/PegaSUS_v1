@@ -11,6 +11,9 @@ instances (age-bin disaggregation, ST-DFM) and lives in ``pegasus.she.reconstruc
 - ``fields``: admits disaggregated SIDRA facts as a canonical Population FieldNode.
 - ``build``: orchestrates strata/anchor facts (+ optional SIM death priors) into a
   ``PopulationTensorProblem`` and runs the reconstruction solver.
+- ``migration``: reconstructs the origin→destination migration flow field from the
+  tensor's net-migration residual (MSD §2.8.7 flow layer); its output induces the
+  migration-affinity spatial kernel (``pegasus.geo.migration_affinity``).
 """
 
 from __future__ import annotations
@@ -26,6 +29,11 @@ from pegasus.sidra.population_cube.build import (
     solve_population_tensor_from_sidra_strata,
 )
 from pegasus.sidra.population_cube.fields import build_sidra_demographic_population_fields
+from pegasus.sidra.population_cube.migration import (
+    MigrationFlowReconstruction,
+    reconstruct_migration_flows,
+    reconstruct_migration_flows_for_year,
+)
 
 __all__ = [
     "SidraPopulationAnchor",
@@ -35,4 +43,7 @@ __all__ = [
     "solve_population_tensor_from_sidra_strata",
     "solve_population_tensor_from_sidra_anchor",
     "build_sidra_demographic_population_fields",
+    "MigrationFlowReconstruction",
+    "reconstruct_migration_flows",
+    "reconstruct_migration_flows_for_year",
 ]

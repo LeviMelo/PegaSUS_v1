@@ -38,7 +38,7 @@ class SpatialCircularityError(SpatialGraphError):
     """Raised when a context-derived graph shares provenance with the tested variable (§II.4.1)."""
 
 
-_VIEWS = ("binary", "symmetric", "row_standardized", "laplacian")
+_VIEWS = ("binary", "symmetric", "row_standardized", "laplacian", "weight")
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,12 @@ class SpatialWeightGraph:
     node_ids: tuple[str, ...]
     _adjacency: dict[str, tuple[str, ...]]
     directed: bool = False
+    # Optional edge weights (node -> {neighbour: weight}). None => unweighted
+    # contiguity (every present edge = 1.0), the structural default. A weighted
+    # graph is inherently ``context_derived`` (its weights encode a substantive
+    # quantity, e.g. migration affinity) and so is subject to the §II.4.1
+    # circularity guard.
+    _weights: dict[str, dict[str, float]] | None = None
 
     @property
     def n(self) -> int:
@@ -58,34 +64,54 @@ class SpatialWeightGraph:
     def index(self) -> dict[str, int]:
         return {node: i for i, node in enumerate(self.node_ids)}
 
+    @property
+    def weighted(self) -> bool:
+        return self._weights is not None
+
     def neighbors(self, node: str) -> tuple[str, ...]:
         return self._adjacency.get(node, ())
 
-    def view(self, kind: str = "binary") -> np.ndarray:
-        """Return the requested weight-matrix view over ``node_ids`` order."""
-        if kind not in _VIEWS:
-            raise SpatialGraphError(f"unknown spatial view '{kind}'; expected one of {_VIEWS}")
+    def _base_matrix(self) -> np.ndarray:
+        """n×n edge matrix: the declared weight if weighted, else 1.0 per present edge."""
         idx = self.index
         n = self.n
-        binary = np.zeros((n, n), dtype=np.float64)
+        matrix = np.zeros((n, n), dtype=np.float64)
         for node, neighbours in self._adjacency.items():
             i = idx.get(node)
             if i is None:
                 continue
+            weights = (self._weights or {}).get(node, {})
             for other in neighbours:
                 j = idx.get(other)
                 if j is not None and i != j:
-                    binary[i, j] = 1.0
-        if kind in {"binary", "symmetric"}:
-            # Undirected contiguity is already symmetric; enforce it defensively.
-            return np.maximum(binary, binary.T) if not self.directed else binary
+                    matrix[i, j] = float(weights.get(other, 1.0)) if self._weights is not None else 1.0
+        return matrix
+
+    def view(self, kind: str = "binary") -> np.ndarray:
+        """Return the requested weight-matrix view over ``node_ids`` order.
+
+        ``binary`` is always 0/1 edge presence (structure only). ``weight`` returns
+        the raw (possibly asymmetric) edge weights. ``symmetric``/``row_standardized``/
+        ``laplacian`` carry the edge weights when the graph is weighted, else fall
+        back to 0/1 — so an unweighted contiguity graph behaves exactly as before.
+        """
+        if kind not in _VIEWS:
+            raise SpatialGraphError(f"unknown spatial view '{kind}'; expected one of {_VIEWS}")
+        base = self._base_matrix()
+        if kind == "binary":
+            presence = (base != 0.0).astype(np.float64)
+            return np.maximum(presence, presence.T) if not self.directed else presence
+        if kind == "weight":
+            return base
+        if kind == "symmetric":
+            return np.maximum(base, base.T) if not self.directed else base
         if kind == "row_standardized":
-            degree = binary.sum(axis=1, keepdims=True)
+            degree = base.sum(axis=1, keepdims=True)
             with np.errstate(invalid="ignore", divide="ignore"):
-                row = np.where(degree > 0, binary / degree, 0.0)
+                row = np.where(degree > 0, base / degree, 0.0)
             return row
-        # laplacian: L = D - A (combinatorial), the GMRF precision skeleton κI + L.
-        adjacency = np.maximum(binary, binary.T)
+        # laplacian: L = D - W (weighted combinatorial), the GMRF precision skeleton κI + L.
+        adjacency = np.maximum(base, base.T) if not self.directed else base
         degree = np.diag(adjacency.sum(axis=1))
         return degree - adjacency
 

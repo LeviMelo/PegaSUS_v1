@@ -55,10 +55,27 @@ def _to_gaussian_field(
     raise TypeError(f"run_ldo cannot consume {type(source).__name__}")
 
 
+def _adaptive_lag_order(requested_K: int, *, p: int, T: int) -> int:
+    """Cap the lag order to what the panel can support and afford.
+
+    A lag-``k`` link needs ``k < T`` distinct time points (``fit_lagged_links``
+    requires ``T > K``), so annual multi-year panels can't carry K=8. And the
+    precision solve is ``O((p·(K+1))^3)`` — for a context-heavy panel (large ``p``)
+    every extra lag is expensive and context associations are overwhelmingly
+    cross-sectional, so shrink K as ``p`` grows. Never increases the request.
+    """
+    k = max(1, min(requested_K, T - 2)) if T > 2 else max(1, min(requested_K, 1))
+    if p > 200:
+        k = min(k, 1)
+    elif p > 130:
+        k = min(k, 2)
+    return k
+
+
 def run_ldo(
     source: CommonPanel | LDOField | GaussianField,
     *,
-    K: int = 8,
+    K: int = 3,
     kappa: float = 1.0,
     lambda1: float = 0.1,
     lambda2: float = 0.1,
@@ -73,10 +90,15 @@ def run_ldo(
     enforce_envelope: bool = True,
     keep_variables: set[str] | frozenset[str] | None = None,
     max_workers: int | None = None,
+    adaptive_k: bool = True,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass."""
     gf = _to_gaussian_field(source, seed=seed, keep_variables=keep_variables)
     p, S, T = gf.shape
+
+    requested_K = K
+    if adaptive_k:
+        K = _adaptive_lag_order(K, p=p, T=T)
 
     # §II.10: refuse a run whose dense form exceeds the compute envelope rather
     # than silently subsampling; the caller should tile/multi-resolve (§II.7).
@@ -112,7 +134,7 @@ def run_ldo(
 
     n_eff = int(np.isfinite(gf.Z).any(axis=0).sum())
     diagnostics = {
-        "p": p, "S": S, "T": T, "K": K,
+        "p": p, "S": S, "T": T, "K": K, "K_requested": requested_K,
         "n_eff": n_eff,
         "lowrank_factors": int(lagged.fit.factor_loadings.shape[1]),
         "lowrank_converged": bool(lagged.fit.converged),

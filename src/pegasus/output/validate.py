@@ -7,7 +7,14 @@ from typing import Any
 from pegasus.storage import read_table
 
 from pegasus.output.reproducibility import COMPILE_TELEMETRY_STAGES, TERMINAL_STAGE_STATUSES
-from pegasus.output.schemas import OUTPUT_BUNDLE_FILES, OutputSchemaRegistry, OutputValidationResult
+from pegasus.output.schemas import (
+    INFERENCE_KEYS,
+    OUTPUT_BUNDLE_FILES,
+    PROFILE_NONEMPTY,
+    OutputSchemaRegistry,
+    OutputValidationResult,
+    required_nonempty_keys,
+)
 from pegasus.output.source_reality_guard import materialized_external_semantic_errors
 
 REQUIRED_V_FIELDS_COLUMNS = {"field_id", "name", "kind", "carrier", "unit", "aggregation", "role", "source", "support_json", "axes_json", "operator", "provenance", "state", "dashboard_safe", "warnings", "lineage_hash", "registry_hash", "materialization_state", "path"}
@@ -19,33 +26,8 @@ FIELD_REFERENCE_COLUMNS = {"field_id", "parent_field_id", "child_field_id", "out
 RACE_BRIDGE_POSTERIOR_KEYS = {"numerator_axis_source", "denominator_axis_target", "bridge_operator", "emission_matrix_registry_version", "bridge_mode", "missing_race_share", "race_bridge_cv", "sensitivity_width", "race_axis_warning", "bayesian_ecological_bridge_warning", "prior_hash", "lower_count", "upper_count"}
 RUN_CONFIG_RACE_BRIDGE_KEYS = {"bridge_id", "mode", "prior_hash", "source_axis", "target_axis", "missing_race_share", "sensitivity_width", "race_bridge_cv", "raw_admin_counts_preserved", "missing_category_preserved", "attach_stage"}
 RUN_PROFILES = {"core_vital", "contextual", "full"}
-PROFILE_NONEMPTY = {
-    "core_vital": {
-        "V_fields",
-        "E_DAG",
-        "Q_tensor",
-        "P_vector",
-        "UserIntent",
-        "VariableDictionary",
-        "RunConfig",
-        "ReproducibilityManifest",
-    },
-    "contextual": {
-        "V_fields",
-        "E_DAG",
-        "Q_tensor",
-        "P_vector",
-        "UserIntent",
-        "Warnings",
-        "ModelAssociations",
-        "Hypotheses",
-        "Tables",
-        "VariableDictionary",
-        "RunConfig",
-        "ReproducibilityManifest",
-    },
-    "full": set(OUTPUT_BUNDLE_FILES),
-}
+# PROFILE_NONEMPTY / INFERENCE_KEYS / required_nonempty_keys now live in output.schemas
+# (single source of truth shared with the bundle manager).
 
 def _read(path: Path):
     return read_table(path)
@@ -454,11 +436,6 @@ def _first_class_artifact_nonempty(root: Path, key: str) -> bool:
     return bool(getattr(table, "num_rows", 0))
 
 
-# Inference keys are required-non-empty only at ExecutionStage=investigate
-# (MSD-II §II.5); at validate/compile they may be empty with an empty_by_stage row.
-INFERENCE_KEYS = {"ModelAssociations", "ResidualAssociations", "Hypotheses"}
-
-
 def _empty_keys_for_code(warnings_table, code: str) -> set[str]:
     if "code" not in warnings_table.column_names:
         return set()
@@ -481,16 +458,14 @@ def _empty_by_profile_keys(warnings_table) -> set[str]:
 def _validate_profile_nonempty_contract(
     *, root: Path, run_profile: str, execution_stage: str, warnings_table, errors: list[str]
 ) -> None:
-    required = PROFILE_NONEMPTY.get(run_profile)
-    if required is None:
+    if run_profile not in PROFILE_NONEMPTY:
         errors.append(f"unsupported run_profile for output profile validation: {run_profile}")
         return
-    required = set(required)
-    # ExecutionStage gate (MSD-II §II.5): below `investigate`, inference keys are
-    # not required non-empty — but an empty one must still carry an empty_by_stage
-    # reason (anti-silence), which is admitted via declared_empty below.
-    if execution_stage != "investigate":
-        required = required - INFERENCE_KEYS
+    # Single source of truth (output.schemas): legacy inference tables are never
+    # required (LinkRecord-authoritative, MII-OUT-01); remaining inference outputs
+    # only at investigate. An empty non-required key must still carry a declared
+    # empty_by_profile / empty_by_stage reason (anti-silence).
+    required = required_nonempty_keys(run_profile, execution_stage)
     declared_empty = _empty_by_profile_keys(warnings_table) | _empty_keys_for_code(warnings_table, "empty_by_stage")
     for key in OUTPUT_BUNDLE_FILES:
         try:

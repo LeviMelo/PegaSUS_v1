@@ -20,7 +20,6 @@ from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgePlan, RaceBridgeRegistryError, resolve_race_bridge_plan
 from pegasus.efg.race_bridge import load_race_bridge_prior
 from pegasus.she.substrate import SourceArtifactRef, build_substrate_bundle, load_source_artifacts_from_manifest
-from pegasus.workflows.msd_inference import run_msd_inference_pipeline
 
 
 
@@ -535,23 +534,22 @@ def _run_compile_impl(
     # selectors. The schema-seed writes a stub UserIntent.json that omits them, and
     # the canonical serialization happens after PIRS — without this the PIRS stage
     # workspace copies the stub and the forced outcome is silently dropped.
+    # Surface the full intent (incl. force_selectors) into the bundle before output
+    # serialization so downstream stages (and the LDO at investigate) see them.
     _seed_user_intent_for_pirs(bundle_manager, run_dir, intent_payload)
-    pirs_hsic_metadata = run_msd_inference_pipeline(
-        run_dir=run_dir,
-        compiler_stage_plan=compiler_stage_plan,
-        telemetry=telemetry,
-        budget=str(intent.budget),
-        bundle=bundle_manager,
-    )
-    telemetry.resource_summary["msd_inference_pipeline"] = {
-        "manifest_path": pirs_hsic_metadata.get("manifest_path"),
-        "pirs_model_status": (pirs_hsic_metadata.get("pirs_model") or {}).get("status"),
-        "pirs_hsic_status": (pirs_hsic_metadata.get("pirs_hsic") or {}).get("status"),
-    }
+    # Inference is an ExecutionStage=investigate concern (MSD-II §II.5). The compile
+    # stage materializes V_fields/Q_tensor only; the Lattice Dependency Operator (the
+    # LDO, run below after the bundle flush) is the single inference engine, replacing
+    # the retired PIRS/HSIC slice-zoo (MII-LDO-06). At compile/validate stage the
+    # inference keys stay empty with an empty_by_stage row (anti-silence).
     telemetry.resource_summary["skipped_reasons"] = skipped_reasons
     telemetry.flush()
 
     with telemetry.stage("output_serialization"):
+        # Ensure the run directory exists for the pre-flush serialization writes. The
+        # retired PIRS pipeline used to create it as a side effect; the LDO runs only
+        # after the flush, so create it explicitly here (idempotent).
+        run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "UserIntent.json").write_text(
             json.dumps(intent_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
@@ -660,8 +658,6 @@ def _run_compile_impl(
         final_extras["population_tensor"] = population_tensor_metadata
     if autonomous_efg_metadata is not None:
         final_extras["autonomous_efg"] = autonomous_efg_metadata
-    if "pirs_hsic_metadata" in locals() and pirs_hsic_metadata is not None:
-        final_extras["msd_inference_pipeline"] = pirs_hsic_metadata
     write_reproducibility_manifest(
         run_dir=run_dir,
         run_id=run_id,
@@ -677,6 +673,24 @@ def _run_compile_impl(
         attach_compile_source_reality(run_dir=run_dir, source_reality=compile_source_reality)
         bundle_manager.collect_missing_from_run(run_dir)
         run_dir = bundle_manager.flush_to_disk(run_dir)
+
+    # ExecutionStage=investigate: run the LDO over the freshly-flushed CommonPanel and
+    # write the typed LinkRecords to Hypotheses (MSD-II §II.6/§II.8, MII-LDO-06). The
+    # LDO needs the panel on disk, so it runs after the flush and before validation.
+    ldo_metadata: dict[str, Any] | None = None
+    if str(intent.execution_stage) == "investigate":
+        from pegasus.workflows.investigate import run_investigate
+
+        inv = run_investigate(run_dir, intent=intent)
+        ldo_metadata = {
+            "n_link_records": inv.n_link_records,
+            "n_selected": inv.n_selected,
+            "panel_cells": inv.panel_cells,
+            "panel_fields": inv.panel_fields,
+            "diagnostics": inv.diagnostics,
+        }
+        telemetry.resource_summary["ldo"] = ldo_metadata
+
     validation = validate_output_bundle(run_dir=str(run_dir))
     return {
         "status": "success" if validation.ok else "failed",

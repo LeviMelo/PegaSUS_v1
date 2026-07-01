@@ -40,11 +40,20 @@ def run_investigate(
     *,
     intent: Any = None,
     resolution: Resolution = "year",
-    K: int = 8,
+    K: int = 3,
+    lambda1: float = 0.1,
+    lambda2: float = 1.0,
     write: bool = True,
     **ldo_kwargs,
 ) -> InvestigateResult:
-    """Run the LDO over a compiled run and (optionally) write the Hypotheses key."""
+    """Run the LDO over a compiled run and (optionally) write the Hypotheses key.
+
+    Production defaults: ``K=3`` (adaptively capped by the panel's time span / size,
+    see ``run_ldo``) and ``lambda2=1.0`` — the raw ``run_ldo`` default of 0.1 lets the
+    low-rank layer over-absorb on noisy real panels (nearly full rank, collapsing
+    every relationship into latent_shared), so a stronger nuclear-norm penalty is the
+    right production default; callers may override.
+    """
     run_dir = Path(run_dir)
     prefixes = _geography_prefixes(intent)
     panel = compile_common_panel(run_dir, resolution=resolution, geography_prefixes=prefixes)
@@ -55,7 +64,7 @@ def run_investigate(
     if keep_variables is None:
         keep_variables = analytical_variable_ids(run_dir)
 
-    ldo_run = run_ldo(panel, K=K, keep_variables=keep_variables, **ldo_kwargs)
+    ldo_run = run_ldo(panel, K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables, **ldo_kwargs)
 
     hypotheses_path = run_dir / "Hypotheses.parquet"
     if write:

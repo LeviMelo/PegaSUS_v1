@@ -14,7 +14,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from pegasus.core.io_utils import atomic_replace
-from pegasus.output.schemas import OUTPUT_BUNDLE_FILES
+from pegasus.output.schemas import INFERENCE_KEYS, OUTPUT_BUNDLE_FILES, required_nonempty_keys
 from pegasus.storage import write_table
 
 
@@ -34,33 +34,8 @@ TABLE_KEYS = {
 
 JSON_KEYS = {"UserIntent", "RunConfig", "P_vector", "ReproducibilityManifest"}
 DIRECTORY_KEYS = {"Tables", "Maps"}
-PROFILE_NONEMPTY = {
-    "core_vital": {
-        "V_fields",
-        "E_DAG",
-        "Q_tensor",
-        "P_vector",
-        "UserIntent",
-        "VariableDictionary",
-        "RunConfig",
-        "ReproducibilityManifest",
-    },
-    "contextual": {
-        "V_fields",
-        "E_DAG",
-        "Q_tensor",
-        "P_vector",
-        "UserIntent",
-        "Warnings",
-        "ModelAssociations",
-        "Hypotheses",
-        "Tables",
-        "VariableDictionary",
-        "RunConfig",
-        "ReproducibilityManifest",
-    },
-    "full": set(OUTPUT_BUNDLE_FILES),
-}
+# PROFILE_NONEMPTY / required_nonempty_keys are the single-source-of-truth output
+# contract in output.schemas (shared with the validator so the two never drift).
 
 PRIMARY_KEYS = {
     "V_fields": "field_id",
@@ -264,26 +239,22 @@ class OutputBundleManager:
         return "investigate"
 
     def _append_empty_by_profile_warnings(self) -> None:
-        # Inference outputs (Hypotheses/ModelAssociations/ResidualAssociations) are
-        # produced only at the `investigate` stage (the LDO), so below that they are
-        # legitimately empty even when the run_profile lists them as required. Emit an
-        # `empty_by_stage` row for each so the anti-silence contract is satisfied and
-        # the validator (which drops INFERENCE_KEYS from `required` below investigate)
-        # does not flag them as silently-empty. MSD-II §II.5 / MII-SCOPE-01.
-        _INFERENCE_KEYS = {"ModelAssociations", "ResidualAssociations", "Hypotheses"}
+        # Emit a declared-empty row for every empty first-class key that is NOT
+        # required non-empty for this (run_profile, execution_stage) -- so the
+        # anti-silence contract holds and the validator (which shares
+        # required_nonempty_keys) never flags a silently-empty artifact. Inference
+        # outputs empty below `investigate` are tagged empty_by_stage; everything
+        # else empty_by_profile. MSD-II §II.5 / MII-SCOPE-01 / MII-OUT-01.
         run_profile = self._run_profile()
         execution_stage = self._execution_stage()
-        required = set(PROFILE_NONEMPTY.get(run_profile, PROFILE_NONEMPTY["core_vital"]))
+        required = required_nonempty_keys(run_profile, execution_stage)
         existing = self.tables.get("Warnings", [])
         existing_ids = {str(row.get("warning_id")) for row in existing}
         rows = list(existing)
         for key in OUTPUT_BUNDLE_FILES:
-            if key == "Warnings" or self._artifact_nonempty_in_manager(key):
+            if key == "Warnings" or key in required or self._artifact_nonempty_in_manager(key):
                 continue
-            below_investigate_inference = execution_stage != "investigate" and key in _INFERENCE_KEYS
-            if key in required and not below_investigate_inference:
-                continue
-            if below_investigate_inference:
+            if execution_stage != "investigate" and key in INFERENCE_KEYS:
                 warning_id = f"empty_by_stage::{execution_stage}::{key}"
                 code = "empty_by_stage"
                 message = f"{key} is empty because execution_stage={execution_stage} does not run inference (produced at investigate)."

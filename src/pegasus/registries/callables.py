@@ -42,8 +42,8 @@ _EXPLICIT: dict[str, tuple[str, str]] = {
     "decode_sex": ("pegasus.datasus.decoders", "decode_datasus_sex"),
     "decode_datasus_sex": ("pegasus.datasus.decoders", "decode_datasus_sex"),
     # Compound decoders (multiple raw fields → multiple canonical fields).
-    "decode_sim_cause_chain": ("pegasus.datasus.declarative_normalize", "_sim_cause_chain_decode"),
-    "decode_sim_associated": ("pegasus.datasus.declarative_normalize", "_sim_associated_decode"),
+    "decode_sim_cause_chain": ("pegasus.datasus.normalize.records", "_sim_cause_chain_decode"),
+    "decode_sim_associated": ("pegasus.datasus.normalize.records", "_sim_associated_decode"),
 }
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pegasus.datasus.declarative_normalize import normalize_sim_do_record as _registry_normalize_sim_do_record, normalize_sinasc_record as _registry_normalize_sinasc_record
+from pegasus.datasus.normalize.records import normalize_sim_do_record as _registry_normalize_sim_do_record, normalize_sinasc_record as _registry_normalize_sinasc_record
 from pegasus.datasus.decoders import (
     DecodedScalar,
     canonical_scalar_state,
@@ -18,7 +18,8 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.datasus.vec import Cols, read_raw_table
+from pegasus.datasus.normalize.completeness import check_raw_completeness
+from pegasus.datasus.normalize.primitives import Cols, read_raw_table
 
 ICD_LIKE = re.compile(r"^[A-Z][0-9]{2}[0-9A-Z]?")
 
@@ -257,6 +258,7 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
     SINASC columns; clinical indicators (low birth weight, prematurity, cesarean,
     maternal-age bands) are computed per §2.6 definitions as 0/1 additive flags."""
     df = _read_table(input_path).with_row_index("_row_idx")
+    missing_columns = check_raw_completeness(df, "SINASC")
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -418,6 +420,7 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
         "output_path": str(out_path),
         "column_count": len(out.columns),
         "columns": out.columns,
+        "missing_required_columns": missing_columns,
     }
 
 # ---- Hardline MSD SHE registry-routed entrypoint ----

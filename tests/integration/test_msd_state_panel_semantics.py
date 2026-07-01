@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pegasus.datasus.sinasc_normalize import decode_anomaly_flag, normalize_anomaly_icd
+from pegasus.datasus.normalize import decode_anomaly_flag, normalize_anomaly_icd
 from pegasus.geo.state_panel import clean_datasus_municipalities, is_valid_datasus_municipality_cod6
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pegasus.datasus.cnes_normalize import normalize_cnes_st_events
-from pegasus.datasus.sih_normalize import normalize_sih_rd_events
+from pegasus.datasus.normalize import normalize_cnes_st_events
+from pegasus.datasus.normalize import normalize_sih_rd_events
 
 
 def run_datasus_normalize_cnes(

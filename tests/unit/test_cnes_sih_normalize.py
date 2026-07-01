@@ -1,7 +1,7 @@
 from pathlib import Path
 import polars as pl
-from pegasus.datasus.cnes_normalize import normalize_cnes_st_events
-from pegasus.datasus.sih_normalize import normalize_sih_rd_events
+from pegasus.datasus.normalize import normalize_cnes_st_events
+from pegasus.datasus.normalize import normalize_sih_rd_events
 
 
 def test_cnes_normalization_preserves_capacity_flags_and_cnpj(tmp_path: Path):

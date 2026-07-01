@@ -11,7 +11,8 @@ import polars as pl
 
 from pegasus.datasus.decoders import decode_datasus_sex, decode_sih_age, filter_cnpj
 from pegasus.datasus.icd_parser import parse_icd
-from pegasus.datasus.vec import Cols, read_raw_table, row_hash
+from pegasus.datasus.normalize.completeness import check_raw_completeness
+from pegasus.datasus.normalize.primitives import Cols, read_raw_table, row_hash
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
 
 SECONDARY_DIAG_COLUMNS = tuple(f"DIAGSEC{i}" for i in range(1, 10))
@@ -371,7 +372,9 @@ def normalize_sih_rd_events(
     the record-level authority (``normalize_sih_rd_record``) for single-record use
     and as the correctness oracle the equivalence test pins.
     """
-    frame = _sih_vectorized_frame(_read_table(input_path), source_manifest_hash=source_manifest_hash)
+    df = _read_table(input_path)
+    missing = check_raw_completeness(df, "SIH-RD")
+    frame = _sih_vectorized_frame(df, source_manifest_hash=source_manifest_hash)
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(out_path)
@@ -384,4 +387,5 @@ def normalize_sih_rd_events(
         "valid_rows": int((frame["record_state"] == "valid").sum()),
         "deaths": int(frame["death_flag"].cast(pl.Int64, strict=False).fill_null(0).sum()),
         "cost_components": list(COST_COMPONENTS),
+        "missing_required_columns": missing,
     }

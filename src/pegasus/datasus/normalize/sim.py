@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pegasus.datasus.declarative_normalize import (
+from pegasus.datasus.normalize.records import (
     normalize_record,
     normalize_sim_do_record as _registry_normalize_sim_do_record,
     normalize_sinasc_record as _registry_normalize_sinasc_record,
@@ -15,7 +15,8 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.datasus.vec import read_raw_table
+from pegasus.datasus.normalize.completeness import check_raw_completeness
+from pegasus.datasus.normalize.primitives import read_raw_table
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7
 
 
@@ -397,7 +398,7 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     Python loop. `normalize_sim_do_record` / `_assemble_sim_do_record` remain the
     record-level correctness oracle the equivalence stress-check pins against.
     """
-    from pegasus.datasus.vec import Cols, row_hash
+    from pegasus.datasus.normalize.primitives import Cols, row_hash
 
     cx = Cols(df)
     crosswalk = _load_sim_crosswalk()
@@ -574,7 +575,9 @@ def normalize_sim_do_events(
     column operations."""
     input_path = Path(input_path)
     output_path = Path(output_path)
-    out = _sim_vectorized_frame(_read_table(input_path), source_manifest_hash=source_manifest_hash)
+    df = _read_table(input_path)
+    missing = check_raw_completeness(df, "SIM-DO")
+    out = _sim_vectorized_frame(df, source_manifest_hash=source_manifest_hash)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     out.write_parquet(output_path)
     return {
@@ -583,6 +586,7 @@ def normalize_sim_do_events(
         "row_count": out.height,
         "column_count": len(out.columns),
         "columns": out.columns,
+        "missing_required_columns": missing,
     }
 
 # ---- Hardline MSD SHE registry-routed entrypoint ----

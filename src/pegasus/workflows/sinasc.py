@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pegasus.datasus.sinasc_normalize import normalize_sinasc_events
+from pegasus.datasus.normalize import normalize_sinasc_events
 
 
 def run_datasus_normalize_sinasc(

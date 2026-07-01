@@ -166,9 +166,9 @@ def _years_token(intent: UserIntent) -> str:
 # Raw→canonical SHE normalizers per system (vectorized Polars decoders).
 _NORMALIZERS: dict[str, tuple[str, str]] = {
     "SIM-DO": ("pegasus.datasus.normalize", "normalize_sim_do_events"),
-    "SINASC": ("pegasus.datasus.sinasc_normalize", "normalize_sinasc_events"),
-    "SIH-RD": ("pegasus.datasus.sih_normalize", "normalize_sih_rd_events"),
-    "CNES-ST": ("pegasus.datasus.cnes_normalize", "normalize_cnes_st_events"),
+    "SINASC": ("pegasus.datasus.normalize", "normalize_sinasc_events"),
+    "SIH-RD": ("pegasus.datasus.normalize", "normalize_sih_rd_events"),
+    "CNES-ST": ("pegasus.datasus.normalize", "normalize_cnes_st_events"),
 }
 
 

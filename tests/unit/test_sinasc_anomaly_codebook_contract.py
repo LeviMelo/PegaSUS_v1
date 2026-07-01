@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pegasus.datasus.sinasc_normalize import decode_anomaly_flag, normalize_anomaly_icd
+from pegasus.datasus.normalize import decode_anomaly_flag, normalize_anomaly_icd
 
 
 def test_idanomal_official_codebook() -> None:

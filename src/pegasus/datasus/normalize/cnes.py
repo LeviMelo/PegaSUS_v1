@@ -9,7 +9,8 @@ from typing import Any
 import polars as pl
 
 from pegasus.datasus.decoders import clamp_bool, filter_cnpj
-from pegasus.datasus.vec import Cols, read_raw_table, row_hash, struct_json
+from pegasus.datasus.normalize.completeness import check_raw_completeness
+from pegasus.datasus.normalize.primitives import Cols, read_raw_table, row_hash, struct_json
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
 
 CAPACITY_PREFIXES = ("QTINST", "QTLEIT")
@@ -98,7 +99,9 @@ def _flag_columns(columns: list[str]) -> list[str]:
 def normalize_cnes_st_record(row: dict[str, Any], *, source_manifest_hash: str) -> dict[str, Any]:
     raw_payload = {str(k): v for k, v in row.items()}
     year, month, period_state = _period(row.get("COMPETEN") or row.get("ANO_CMPT") or row.get("year"))
-    cod6, cod7, mun_state = _mun(row.get("CODMUN") or row.get("MUNIC_RES") or row.get("facility_municipality"))
+    # CNES-ST carries the facility municipality in CODUFMUN (6-digit UF+município);
+    # CODMUN/MUNIC_RES are accepted as fallbacks but are not the real column name.
+    cod6, cod7, mun_state = _mun(row.get("CODUFMUN") or row.get("CODMUN") or row.get("MUNIC_RES") or row.get("facility_municipality"))
     facility = _clean(row.get("CNES") or row.get("facility_id"))
     cnpj = filter_cnpj(row.get("CPF_CNPJ") or row.get("facility_cnpj"))
     cnpj_man = filter_cnpj(row.get("CNPJ_MAN") or row.get("maintainer_cnpj"))
@@ -190,7 +193,7 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
         if flag_cols else pl.lit(0)
     )
     facility = cx.clean("CNES", "facility_id")
-    mun = cx.municipality("mun_facility", "CODMUN", "MUNIC_RES", "facility_municipality", crosswalk=load_municipality_crosswalk())
+    mun = cx.municipality("mun_facility", "CODUFMUN", "CODMUN", "MUNIC_RES", "facility_municipality", crosswalk=load_municipality_crosswalk())
 
     out = df.with_row_index("_i").with_columns(
         facility.alias("facility_id"),
@@ -243,7 +246,9 @@ def normalize_cnes_st_events(
     linkage gate. ``normalize_cnes_st_record`` is retained as the record-level
     correctness oracle the equivalence stress-check pins against.
     """
-    frame = _cnes_vectorized_frame(_read_table(input_path), source_manifest_hash=source_manifest_hash)
+    df = _read_table(input_path)
+    missing = check_raw_completeness(df, "CNES-ST")
+    frame = _cnes_vectorized_frame(df, source_manifest_hash=source_manifest_hash)
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(out_path)
@@ -261,4 +266,5 @@ def normalize_cnes_st_events(
         "zero_facility_cnpj_rows": int((frame["facility_cnpj_state"] == "NullifiedZeroCNPJ").sum()),
         "invalid_flag_rows": int((frame["invalid_flag_count"] > 0).sum()),
         "capacity_components": sorted(capacity_components),
+        "missing_required_columns": missing,
     }

@@ -3,7 +3,7 @@ from pathlib import Path
 import polars as pl
 
 from pegasus.datasus.normalize import normalize_sim_do_events
-from pegasus.datasus.sinasc_normalize import normalize_sinasc_events
+from pegasus.datasus.normalize import normalize_sinasc_events
 from pegasus.she.maternal_child_linkage import summarize_maternal_child_linkage
 
 

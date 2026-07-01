@@ -2,7 +2,7 @@ from pathlib import Path
 
 import polars as pl
 
-from pegasus.datasus.sinasc_normalize import normalize_sinasc_events
+from pegasus.datasus.normalize import normalize_sinasc_events
 
 
 def test_sinasc_fixture_normalization_preserves_decoder_states(tmp_path: Path):

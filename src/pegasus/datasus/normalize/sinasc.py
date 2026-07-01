@@ -385,6 +385,13 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
         .when(pl.col("anomaly_flag") == False).then(pl.lit("valid_non_q_absent"))
         .otherwise(pl.lit("valid_non_q_not_anomaly")).alias("anomaly_icd_state"),
         ((pl.col("anomaly_flag") == True) | pl.col("anomaly_icd_code").str.starts_with("Q")).fill_null(False).alias("anomaly_positive"),
+        # Codebook-driven additions (in-house microdatasus process_sinasc port):
+        # LOCNASC/ESTCIVMAE weren't decoded at all before; delivery_mode_label is a
+        # canonical-label sibling to the existing delivery_mode_code (kept as-is —
+        # downstream cesarean-rate logic compares its raw "1"/"2" digits).
+        cx.categorical_value("local_of_birth", "LOCNASC").alias("place_of_birth"),
+        cx.categorical_value("marital_status", "ESTCIVMAE").alias("maternal_marital_status"),
+        cx.categorical_value("delivery_type", "PARTO").alias("delivery_mode_label"),
         pl.when(pl.col("_birth_year").is_not_null() & pl.col("mun_residence_cod6").is_not_null()).then(pl.lit("valid")).otherwise(pl.lit("invalid_identity")).alias("record_state"),
         pl.lit(source_manifest_hash).alias("source_manifest_hash"),
         pl.concat_str([pl.lit(source_manifest_hash), pl.lit(":"), pl.col("_row_idx").cast(pl.Utf8)]).hash().cast(pl.Utf8).alias("row_hash"),
@@ -397,13 +404,14 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
         "newborn_race_admin", "newborn_race_state", "maternal_race_admin", "maternal_race_state",
         "birth_weight_g", "birth_weight_grams", "birth_weight_state", "gestational_weeks",
         "gestational_age_state", "apgar_1min", "apgar_1min_state", "apgar_5min",
-        "apgar_5min_state", "delivery_mode_code", "delivery_mode_state",
+        "apgar_5min_state", "delivery_mode_code", "delivery_mode_state", "delivery_mode_label",
         "prenatal_consult_count", "prenatal_consult_state", "prenatal_consult_raw_digits",
         "prenatal_visit_group", "live_children_count", "live_children_state",
         "deceased_children_count", "deceased_children_state", "prior_pregnancy_count",
         "prior_pregnancy_state", "prior_vaginal_delivery_count", "prior_vaginal_delivery_state",
         "prior_cesarean_delivery_count", "prior_cesarean_delivery_state", "anomaly_flag",
         "anomaly_flag_state", "anomaly_icd_code", "anomaly_icd_state", "anomaly_positive",
+        "place_of_birth", "maternal_marital_status",
         "record_state", "source_manifest_hash", "row_hash", "raw_json",
     ])
     out.write_parquet(out_path)

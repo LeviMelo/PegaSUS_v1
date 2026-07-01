@@ -6,6 +6,7 @@ import json
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from pegasus.efg.dag import EFGResult
 from pegasus.efg.executor import VALUE_COLUMN, execute_efg_result
 from pegasus.efg.lineage import lineage_hash
 from pegasus.geo.adjacency import load_adjacency
+from pegasus.geo.spatial_graph import load_spatial_graph
 from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.storage import write_table
 
@@ -180,9 +182,38 @@ def _declared_adjacency_path(root: Path, intent: Any, efg: EFGResult) -> Path | 
     return None
 
 
+@lru_cache(maxsize=2)
+def _structural_adjacency_cod6() -> tuple[tuple[str, tuple[str, ...]], ...] | None:
+    """Structural queen-contiguity fallback (SPG default), keyed by municipality_cod6.
+
+    The SpatialWeightGraph is keyed by IBGE cod7; the EFG panel keys geography by
+    ``municipality_cod6`` (cod7 minus the check digit), so we down-map cod7→cod6.
+    This makes Moran's I (and the §3.12.3 n_eff correction) live-by-default from
+    the single declared structural graph instead of silently absent whenever an
+    intent omits an adjacency path.
+    """
+    try:
+        graph = load_spatial_graph("contiguity_queen")
+    except Exception:
+        return None
+    cod6: dict[str, set[str]] = {}
+    for node in graph.node_ids:
+        left = node[:6]
+        for neighbour in graph.neighbors(node):
+            right = neighbour[:6]
+            if left != right:
+                cod6.setdefault(left, set()).add(right)
+    if not cod6:
+        return None
+    return tuple((key, tuple(sorted(values))) for key, values in sorted(cod6.items()))
+
+
 def _load_declared_adjacency(root: Path, intent: Any, efg: EFGResult) -> tuple[dict[str, tuple[str, ...]] | None, str | None]:
     path = _declared_adjacency_path(root, intent, efg)
     if path is None:
+        structural = _structural_adjacency_cod6()
+        if structural is not None:
+            return dict(structural), None
         return None, "moran_i_not_computed_no_declared_adjacency"
     try:
         return load_adjacency(path), None

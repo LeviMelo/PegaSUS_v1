@@ -1,0 +1,31 @@
+schema_version: '1.0'
+registry_id: spatial_graphs
+registry_version: spatial_weight_graph_v1
+created_at: '2026-06-30'
+updated_at: '2026-06-30'
+provenance: >-
+  SpatialWeightGraph registry (MSD-II §II.4 / MII-SPG-01). One declared base graph
+  per spatial structure, with derived views (binary/row_standardized/symmetric/
+  laplacian) and a legality_class. Structural graphs (contiguity) are
+  provenance-disjoint from every substantive variable and are the default spatial
+  structure for all inference (§II.4.1 circularity guard).
+
+graphs:
+  contiguity_queen:
+    description: >-
+      IBGE municipality queen contiguity (shared boundary). The structural default
+      spatial base graph for Moran's I, ICAR/GMRF precision, HSIC spatial nulls,
+      cross-fit folds, and the LDO spatial prior.
+    legality_class: structural
+    directed: false
+    node_id: ibge_cod7
+    artifact: spatial/municipality_contiguity_queen.parquet
+    artifact_format: edge_list
+    left_column: left_id
+    right_column: right_id
+    provenance:
+      - ibge_malhas_v3
+      - geometric_contiguity
+    # A structural graph shares no provenance with any substantive variable, so it
+    # is legal for every test/edge (population, GDP, flows, health counts, ...).
+    circularity_safe: true

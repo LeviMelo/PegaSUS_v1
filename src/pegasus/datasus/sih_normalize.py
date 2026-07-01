@@ -220,183 +220,39 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
     }
 
 
-def normalize_sih_rd_events(*, input_path: str | Path, output_path: str | Path, source_manifest_hash: str) -> dict[str, Any]:
-    """Real vectorized SIH-RD raw→canonical SHE decoder (MSD §2.4.2).
+def normalize_sih_rd_events(
+    *, input_path: str | Path, output_path: str | Path, source_manifest_hash: str
+) -> dict[str, Any]:
+    """Batch SIH-RD raw→canonical SHE normalizer (MSD §2.4.2).
 
-    Hospital admissions: competence year, residence cod6, principal diagnosis,
-    in-hospital death flag, length of stay, and the four distinct economic cost
-    components (VAL_SH/SP/UTI/TOT) kept separate per §2.4.2 (not pooled)."""
-    df = _read_table(input_path).with_row_index("_row_idx")
-    def col(name: str) -> pl.Expr:
-        return pl.col(name) if name in df.columns else pl.lit(None)
+    SHE-NORM-01 / XCUT-02: there is a single record-level decode authority,
+    ``normalize_sih_rd_record``, which routes every field through the shared
+    composite decoders (``decode_sih_age`` with the mandatory ``COD_IDADE`` unit,
+    ``parse_icd`` for principal + secondary topology, ``filter_cnpj`` for the
+    §2.4.0.5 linkage gate, ``decode_datasus_sex``). This batch function only maps
+    that authority over the raw rows and writes the parquet — it does not decode
+    anything itself.
 
-    def first(*names: str) -> pl.Expr:
-        return pl.coalesce([col(name) for name in names])
-
-    def clean_expr(expr: pl.Expr) -> pl.Expr:
-        text = expr.cast(pl.Utf8).str.strip_chars()
-        return pl.when(text.str.to_uppercase().is_in(["", "NA", "NAN", "NULL", "NONE"])).then(None).otherwise(text)
-
-    def clean(*names: str) -> pl.Expr:
-        return clean_expr(first(*names))
-
-    def digits_expr(expr: pl.Expr) -> pl.Expr:
-        d = clean_expr(expr).str.replace_all(r"\D", "")
-        return pl.when(d == "").then(None).otherwise(d)
-
-    def digits(*names: str) -> pl.Expr:
-        return digits_expr(first(*names))
-
-    def parsed_date(*names: str) -> pl.Expr:
-        d = digits(*names)
-        ymd = d.str.strptime(pl.Date, "%Y%m%d", strict=False)
-        dmy = d.str.strptime(pl.Date, "%d%m%Y", strict=False)
-        return pl.coalesce([ymd, dmy])
-
-    def municipality(prefix: str, *names: str) -> list[pl.Expr]:
-        d = digits(*names)
-        cod6 = (
-            pl.when(d.str.len_chars() == 6).then(d)
-            .when(d.str.len_chars() == 7).then(d.str.slice(0, 6))
-            .otherwise(None)
-        )
-        ignored = cod6.str.slice(2, 4) == "0000"
-        valid = cod6.is_not_null() & ~ignored
-        return [
-            pl.when(valid).then(cod6).otherwise(None).alias(f"{prefix}_cod6"),
-            pl.when(valid & (d.str.len_chars() == 7)).then(d).otherwise(None).alias(f"{prefix}_cod7"),
-            pl.when(d.is_null()).then(pl.lit("missing"))
-            .when(ignored).then(pl.lit("ignored_municipality"))
-            .when(d.str.len_chars() == 7).then(pl.lit("ibge_cod7"))
-            .when(d.str.len_chars() == 6).then(pl.lit("datasus_cod6"))
-            .otherwise(pl.lit("invalid"))
-            .alias(f"{prefix}_state"),
-        ]
-
-    def nonnegative_int(out_name: str, *names: str) -> list[pl.Expr]:
-        raw = clean(*names)
-        value = raw.str.replace_all(",", ".").cast(pl.Float64, strict=False)
-        valid = value.is_not_null() & (value >= 0)
-        return [
-            pl.when(valid).then(value.cast(pl.Int64)).otherwise(None).alias(out_name),
-            pl.when(raw.is_null()).then(pl.lit("missing"))
-            .when(valid).then(pl.lit("valid"))
-            .otherwise(pl.lit("invalid")).alias(f"{out_name}_state"),
-        ]
-
-    def money(out_name: str, *names: str) -> pl.Expr:
-        value = clean(*names).str.replace_all(",", ".").cast(pl.Float64, strict=False)
-        return pl.when(value >= 0).then(value).otherwise(None).alias(out_name)
-
-    def cnpj_state(prefix: str, *names: str) -> list[pl.Expr]:
-        raw = clean(*names)
-        return [
-            raw.map_elements(lambda value: filter_cnpj(value).cnpj, return_dtype=pl.Utf8).alias(f"{prefix}_cnpj"),
-            raw.map_elements(lambda value: filter_cnpj(value).state, return_dtype=pl.Utf8).alias(f"{prefix}_cnpj_state"),
-        ]
-
-    admission_dt = parsed_date("DT_INTER", "DTINTERN", "admission_date")
-    discharge_dt = parsed_date("DT_SAIDA", "DTSAIDA", "discharge_date")
-    principal_raw = clean("DIAG_PRINC", "principal_icd")
-    principal_norm = principal_raw.str.to_uppercase().str.replace_all(r"[^A-Z0-9]", "").str.extract(r"([A-Z][0-9]{2}[0-9A-Z]?)", 1)
-    death_raw = clean("MORTE", "OBITO")
-    stay = nonnegative_int("stay_length_days", "DIAS_PERM", "QT_DIARIAS", "stay_length_days")
-    icu_month = nonnegative_int("icu_days_month_total", "UTI_MES_TO")
-    icu_adm = nonnegative_int("icu_days_hospitalization_total", "UTI_INT_TO")
-    out = df.with_columns(
-        admission_dt.alias("_admission_dt"),
-        discharge_dt.alias("_discharge_dt"),
-        admission_dt.dt.year().alias("admission_year"),
-        *municipality("mun_residence", "MUNIC_RES", "CODMUNRES", "municipality"),
-        *municipality("mun_movement", "MUNIC_MOV", "MUNIC_MOVI", "mun_movement"),
-        principal_raw.alias("principal_icd_raw"),
-        principal_norm.alias("principal_icd_norm"),
-        *stay,
-        *icu_month,
-        *icu_adm,
-        *cnpj_state("hospital", "CGC_HOSP", "hospital_cnpj"),
-        *cnpj_state("maintainer", "CNPJ_MANT", "GESTOR_CPF", "maintainer_cnpj"),
-    ).with_columns(
-        pl.concat_str([pl.lit("SIH-"), pl.coalesce([clean("AIH", "N_AIH", "admission_id"), pl.col("_row_idx").cast(pl.Utf8) + pl.lit(f"_{source_manifest_hash[:8]}")])]).alias("admission_id"),
-        pl.lit("SIH-RD").alias("source_system"),
-        pl.col("_admission_dt").cast(pl.Utf8).alias("admission_date"),
-        pl.col("_discharge_dt").cast(pl.Utf8).alias("discharge_date"),
-        pl.when(clean("DT_INTER", "DTINTERN", "admission_date").is_null()).then(pl.lit("missing"))
-        .when(pl.col("_admission_dt").is_null()).then(pl.lit("invalid"))
-        .otherwise(pl.lit("valid")).alias("admission_date_state"),
-        pl.when(clean("DT_SAIDA", "DTSAIDA", "discharge_date").is_null()).then(pl.lit("missing"))
-        .when(pl.col("_discharge_dt").is_null()).then(pl.lit("invalid"))
-        .otherwise(pl.lit("valid")).alias("discharge_date_state"),
-        clean("CNES", "facility_code").alias("facility_cnes"),
-        pl.lit(None, dtype=pl.Float64).alias("age_days"),
-        clean("IDADE", "age").cast(pl.Float64, strict=False).alias("age_years"),
-        clean("COD_IDADE", "CODIDADE").alias("age_unit"),
-        pl.when(clean("IDADE", "age").is_null()).then(pl.lit("MissingAge")).otherwise(pl.lit("valid")).alias("age_state"),
-        pl.when(digits("SEXO") == "1").then(pl.lit("male"))
-        .when(digits("SEXO") == "2").then(pl.lit("female"))
-        .otherwise(None).alias("sex"),
-        pl.when(digits("SEXO").is_null()).then(pl.lit("missing"))
-        .when(digits("SEXO").is_in(["1", "2"])).then(pl.lit("valid"))
-        .when(digits("SEXO") == "9").then(pl.lit("unknown"))
-        .otherwise(pl.lit("invalid")).alias("sex_state"),
-        clean("RACA_COR").alias("race_color_billing"),
-        pl.lit("sih_billing_race_color").alias("race_axis_type"),
-        pl.when(pl.col("principal_icd_norm").is_null()).then(pl.lit("missing")).otherwise(pl.lit("valid")).alias("principal_icd_parse_state"),
-        pl.lit("{}", dtype=pl.Utf8).alias("secondary_icd_raw_json"),
-        pl.lit("{}", dtype=pl.Utf8).alias("secondary_icd_norm_json"),
-        pl.lit("{}", dtype=pl.Utf8).alias("secondary_icd_parse_states_json"),
-        pl.lit("{}", dtype=pl.Utf8).alias("secondary_diagnosis_type_json"),
-        clean("PROC_SOLIC").alias("procedure_requested"),
-        clean("PROC_REA").alias("procedure_performed"),
-        clean("MARCA_UTI").alias("icu_type_mark"),
-        pl.when(death_raw.str.to_lowercase().is_in(["1", "sim", "yes", "true", "t", "morte", "death"])).then(True)
-        .when(death_raw.str.to_lowercase().is_in(["0", "não", "nao", "no", "false", "f"])).then(False)
-        .otherwise(None).alias("death_flag"),
-        pl.when(death_raw.is_null()).then(pl.lit("missing"))
-        .when(death_raw.str.to_lowercase().is_in(["1", "sim", "yes", "true", "t", "morte", "death", "0", "não", "nao", "no", "false", "f"])).then(pl.lit("valid"))
-        .otherwise(pl.lit("invalid")).alias("death_flag_state"),
-        money("hospital_service_cost_real", "VAL_SH"),
-        money("professional_service_cost_real", "VAL_SP"),
-        money("icu_cost_real", "VAL_UTI"),
-        money("total_admission_cost_real", "VAL_TOT"),
-        pl.lit("{}", dtype=pl.Utf8).alias("cost_state_json"),
-        pl.lit("{}", dtype=pl.Utf8).alias("cost_raw_json"),
-        pl.when(pl.col("admission_year").is_not_null() & pl.col("mun_residence_cod6").is_not_null() & pl.col("principal_icd_norm").is_not_null())
-        .then(pl.lit("valid")).otherwise(pl.lit("invalid_identity_or_principal_diagnosis")).alias("record_state"),
-        pl.lit(source_manifest_hash).alias("source_manifest_hash"),
-        pl.concat_str([pl.lit(source_manifest_hash), pl.lit(":"), pl.col("_row_idx").cast(pl.Utf8)]).hash().cast(pl.Utf8).alias("row_hash"),
-        pl.lit(None, dtype=pl.Utf8).alias("raw_json"),
-    ).rename({
-        "hospital_cnpj": "hospital_cnpj",
-        "maintainer_cnpj": "maintainer_cnpj",
-        "mun_residence_state": "municipality_code_state",
-    }).select([
-        "admission_id", "source_system", "admission_date", "discharge_date", "admission_year",
-        "admission_date_state", "discharge_date_state", "mun_residence_cod6", "mun_residence_cod7",
-        "municipality_code_state", "mun_movement_cod6", "mun_movement_cod7", "mun_movement_state",
-        "facility_cnes", "hospital_cnpj", "hospital_cnpj_state", "maintainer_cnpj", "maintainer_cnpj_state",
-        "age_days", "age_years", "age_unit", "age_state", "sex", "sex_state", "race_color_billing",
-        "race_axis_type", "principal_icd_raw", "principal_icd_norm", "principal_icd_parse_state",
-        "secondary_icd_raw_json", "secondary_icd_norm_json", "secondary_icd_parse_states_json",
-        "secondary_diagnosis_type_json", "procedure_requested", "procedure_performed", "stay_length_days",
-        "stay_length_days_state", "icu_type_mark", "icu_days_month_total", "icu_days_month_total_state",
-        "icu_days_hospitalization_total", "icu_days_hospitalization_total_state", "death_flag",
-        "death_flag_state", "hospital_service_cost_real", "professional_service_cost_real", "icu_cost_real",
-        "total_admission_cost_real", "cost_state_json", "cost_raw_json", "record_state",
-        "source_manifest_hash", "row_hash", "raw_json",
-    ]).rename({
-        "stay_length_days_state": "stay_length_state",
-        "icu_days_month_total_state": "icu_days_month_state",
-        "icu_days_hospitalization_total_state": "icu_days_hospitalization_state",
-    })
+    (A previously-wired vectorized re-implementation regressed correctness: it
+    inferred age from ``IDADE`` alone, ignoring ``COD_IDADE`` — a §2.4.0.1
+    violation — and emitted empty ``secondary_icd_*`` / ``cost_*`` JSON, dropping
+    secondary diagnoses and cost provenance. It has been removed.)
+    """
+    rows = [
+        normalize_sih_rd_record(row, source_manifest_hash=source_manifest_hash)
+        for row in _read_table(input_path).to_dicts()
+    ]
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out.write_parquet(out_path)
+    frame = pl.DataFrame(rows, infer_schema_length=None)
+    frame.write_parquet(out_path)
     return {
-        "row_count": out.height,
+        "input_path": str(input_path),
         "output_path": str(out_path),
-        "column_count": len(out.columns),
-        "columns": out.columns,
-        "deaths": int(out.get_column("death_flag").cast(pl.Int64, strict=False).fill_null(0).sum()) if out.height else 0,
+        "row_count": len(rows),
+        "column_count": len(frame.columns),
+        "columns": frame.columns,
+        "valid_rows": sum(1 for r in rows if r["record_state"] == "valid"),
+        "deaths": sum(1 for r in rows if r["death_flag"] is True),
         "cost_components": list(COST_COMPONENTS),
     }

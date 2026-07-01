@@ -8,9 +8,7 @@ parsers by name, and records excluded columns explicitly.
 
 from __future__ import annotations
 
-import importlib
 import re
-from functools import lru_cache
 from typing import Any, Callable
 
 from pegasus.she.source_registry import resolve_raw_source_fields
@@ -28,34 +26,16 @@ def _normalize_decoder_name(name: Any) -> str | None:
     return re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_")
 
 
-@lru_cache(maxsize=256)
 def _resolve_decoder_callable(name: str | None) -> Decoder | None:
-    if not name:
-        return None
+    """Resolve a decoder/parser name through the single registry authority.
 
-    candidates = [
-        name,
-        name.lower(),
-        name.upper(),
-        f"decode_{name}",
-        f"decode_{name.lower()}",
-    ]
+    Delegates to ``pegasus.registries.callables.resolve_callable`` (MSD-II §II.1
+    / MII-REG-07) so there is exactly one name→callable resolver in the system —
+    the same one the cross-registry validator uses to prove executability.
+    """
+    from pegasus.registries.callables import resolve_callable
 
-    modules = (
-        "pegasus.datasus.decoders",
-        "pegasus.datasus.icd_parser",
-    )
-
-    for module_name in modules:
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:
-            continue
-        for candidate in candidates:
-            fn = getattr(module, candidate, None)
-            if callable(fn):
-                return fn
-    return None
+    return resolve_callable(name)
 
 
 def _spec_get(spec: Any, *names: str) -> Any:

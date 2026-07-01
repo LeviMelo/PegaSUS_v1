@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from pegasus.registries.callables import resolve_callable
+
 
 REQUIRED_REGISTRY_KEYS = {
     "schema_version",
@@ -83,6 +85,95 @@ def validate_registry_file(path: str | Path) -> list[str]:
     return errors
 
 
+def _iter_source_field_specs(source_fields: dict):
+    """Yield (source_system, canonical_field, spec) over source_fields.yaml."""
+    for source_system, block in (source_fields.get("source_systems") or {}).items():
+        if not isinstance(block, dict):
+            continue
+        for group in ("fields", "field_patterns"):
+            for canonical, spec in (block.get(group) or {}).items():
+                if isinstance(spec, dict):
+                    yield source_system, canonical, spec
+
+
+def validate_registry_authority(root: str | Path = "config/registries") -> list[str]:
+    """Executable-authority cross-registry checks (MSD-II §II.1 / MII-REG-07).
+
+    Beyond the file-presence/shape checks of ``validate_registry_tree``, this
+    proves the registry is *executable*:
+
+    1. every ``decoder``/``parser`` name declared in ``source_fields.yaml``
+       resolves to a real callable through the single ``resolve_callable``
+       resolver (no dangling callable references);
+    2. every ``carrier``/``unit``/``aggregation`` token a source field declares
+       exists in the respective vocabulary registry (no drift);
+    3. round-trip routing: a field routed ``Decode``/``Parse`` must name the
+       callable that produces it (no unroutable admissible field).
+    """
+    root = Path(root)
+    errors: list[str] = []
+
+    def _load(name: str) -> dict:
+        path = root / name
+        if not path.exists():
+            return {}
+        with path.open("r", encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+
+    source_fields = _load("source_fields.yaml")
+    if not source_fields:
+        return [f"source_fields.yaml missing or empty under {root}"]
+
+    carriers = set((_load("carrier.yaml").get("carriers") or {}))
+    units = set((_load("unit.yaml").get("units") or {}))
+    aggregations = set((_load("aggregation.yaml").get("aggregations") or {}))
+
+    for source_system, canonical, spec in _iter_source_field_specs(source_fields):
+        where = f"source_fields.yaml[{source_system}.{canonical}]"
+
+        for key in ("decoder", "parser", "composite_decoder", "transform"):
+            name = spec.get(key)
+            if name and resolve_callable(str(name)) is None:
+                errors.append(f"{where}: {key} '{name}' does not resolve to a callable")
+
+        # Vocabulary consistency (only when the registry declares that vocabulary).
+        carrier = spec.get("carrier")
+        if carrier and carriers and str(carrier) not in carriers:
+            errors.append(f"{where}: carrier '{carrier}' not in carrier.yaml")
+        unit = spec.get("unit")
+        if unit and units and str(unit) not in units:
+            errors.append(f"{where}: unit '{unit}' not in unit.yaml")
+        aggregation = spec.get("aggregation")
+        if aggregation and aggregations and str(aggregation) not in aggregations:
+            errors.append(f"{where}: aggregation '{aggregation}' not in aggregation.yaml")
+
+        # Round-trip routing: a Decode/Parse route must name its callable.
+        route = str(spec.get("route") or "").lower()
+        if route == "decode" and not (spec.get("decoder") or spec.get("composite_decoder") or spec.get("transform")):
+            errors.append(f"{where}: route=Decode but no decoder is declared")
+        if route == "parse" and not (spec.get("parser") or spec.get("transform")):
+            errors.append(f"{where}: route=Parse but no parser is declared")
+
+    # SpatialWeightGraph registry (MSD-II §II.4): every declared graph must carry
+    # legality_class + provenance and point at an existing artifact.
+    spatial = _load("spatial_graphs.yaml")
+    for graph_id, spec in (spatial.get("graphs") or {}).items():
+        if not isinstance(spec, dict):
+            errors.append(f"spatial_graphs.yaml[{graph_id}]: graph spec is not a mapping")
+            continue
+        if spec.get("legality_class") not in {"structural", "context_derived"}:
+            errors.append(f"spatial_graphs.yaml[{graph_id}]: legality_class must be structural|context_derived")
+        if not spec.get("provenance"):
+            errors.append(f"spatial_graphs.yaml[{graph_id}]: missing provenance")
+        artifact = spec.get("artifact")
+        if not artifact:
+            errors.append(f"spatial_graphs.yaml[{graph_id}]: missing artifact")
+        elif not (root / str(artifact)).exists():
+            errors.append(f"spatial_graphs.yaml[{graph_id}]: artifact '{artifact}' does not exist")
+
+    return errors
+
+
 def validate_registry_tree(root: str | Path = "config/registries") -> list[str]:
     root = Path(root)
     errors: list[str] = []
@@ -125,4 +216,9 @@ def validate_registry_tree(root: str | Path = "config/registries") -> list[str]:
             errors.append(f"missing registry: {name}")
         else:
             errors.extend(validate_registry_file(path))
+    # Executable-authority cross-registry checks (MSD-II §II.1 / MII-REG-07):
+    # file presence + shape is necessary but not sufficient; the registry must
+    # also be executable (every declared callable resolves, vocabularies agree,
+    # routes name their callable).
+    errors.extend(validate_registry_authority(root))
     return errors

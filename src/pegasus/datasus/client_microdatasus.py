@@ -91,17 +91,28 @@ class MicrodatasusClient:
         slow SIH month no longer blocks SIM/SINASC/CNES — the dominant wall-clock
         win for an all-source multi-year run.
         """
-        all_requests: list[DATASUSRequestManifest] = []
-        spans: dict[str, tuple[int, int]] = {}
+        per_system: dict[str, list[DATASUSRequestManifest]] = {}
         for system in systems:
-            reqs = list(build_datasus_manifests(
+            per_system[system] = list(build_datasus_manifests(
                 system=system, uf=uf, years=years,
                 config={"rscript_path": self.config.rscript_path}, data_root=self.data_root,
             ))
-            spans[system] = (len(all_requests), len(all_requests) + len(reqs))
-            all_requests.extend(reqs)
-        batch = self._run_requests(all_requests)
-        out: dict[str, MicrodatasusBatchResult] = {}
-        for system, (lo, hi) in spans.items():
-            out[system] = MicrodatasusBatchResult(batch.requests[lo:hi], batch.manifest_paths[lo:hi])
-        return out
+        # Round-robin interleave so a system with many requests (e.g. CNES/SIH
+        # monthly) does not starve the others in the FIFO worker queue — every
+        # system makes progress concurrently.
+        ordered: list[tuple[str, DATASUSRequestManifest]] = []
+        for tier in range(max((len(v) for v in per_system.values()), default=0)):
+            for system in systems:
+                reqs = per_system[system]
+                if tier < len(reqs):
+                    ordered.append((system, reqs[tier]))
+        batch = self._run_requests([req for _, req in ordered])
+        out_lists: dict[str, list] = {system: [] for system in systems}
+        out_paths: dict[str, list] = {system: [] for system in systems}
+        for (system, _), result, path in zip(ordered, batch.requests, batch.manifest_paths):
+            out_lists[system].append(result)
+            out_paths[system].append(path)
+        return {
+            system: MicrodatasusBatchResult(tuple(out_lists[system]), tuple(out_paths[system]))
+            for system in systems
+        }

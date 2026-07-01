@@ -17,6 +17,10 @@ class PopulationObjectiveWeights:
     birth: float = 1.0
     death: float = 0.0
     migration: float = 0.1
+    # Soft anchor tying each locality-year's total net migration flow to an
+    # observed residual (MSD §2.8.7 "open national residual" case); distinct from
+    # ``migration`` above, which is only the second-difference smoothness prior.
+    migration_total: float = 0.0
     race: float = 0.0
     age_smooth: float = 0.05
 
@@ -35,6 +39,9 @@ class PopulationTensorProblem:
     race_composition_prior: tuple[float | None, ...] | None = None
     closure_totals: tuple[float | None, ...] | None = None
     migration_totals: tuple[float | None, ...] | None = None
+    # Observed net-migration total per (locality, time), shape (S, T). ``None`` in a
+    # cell = no residual observation for that locality-year (left to smoothness).
+    migration_locality_totals: tuple[float | None, ...] | None = None
     migration_bounds: tuple[float, ...] | None = None
     initial_population: tuple[float, ...] | None = None
     initial_migration: tuple[float, ...] | None = None

@@ -34,6 +34,15 @@ from pegasus.sidra.population_cube.anchor import load_combined_population_totals
 AXES = ("age_group", "sex", "race")
 AXIS_CLASSIFICATIONS = {"sex": "2", "race": "86", "age_group": "287"}
 
+# SIDRA civil-registry vital-statistics tables (IBGE Registro Civil), the
+# internally-consistent source for the net-migration residual (MSD §2.8.7):
+# NetMig(s,t) = E(s,t) - E(s,t-1) - Births(s,t) + Deaths(s,t). Same IBGE universe
+# as the 6579 population estimates, unlike DATASUS SIM/SINASC (used as fallback).
+SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE = "2609"
+SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE = "217"
+SIDRA_CIVIL_REGISTRY_DEATHS_TABLE = "2683"
+SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE = "343"
+
 # MSD §2.8.5/§2.8.6: administrative race/color (SIM race_color_admin, SINASC
 # newborn_race_admin) is declaration-process incompatible with this tensor's
 # self-declared IBGE race axis (§3.7.4) -- it may only enter a race-stratified
@@ -193,6 +202,50 @@ def _stratify_age_column(frame: pl.DataFrame, *, age_column: str, age_index: dic
     return frame.with_columns(pl.lit(TOTAL).alias("__age_group__"))
 
 
+def _coalesce_race_columns(
+    frame: pl.DataFrame,
+    *,
+    primary_code: str,
+    primary_state: str,
+    fallback_code: str,
+    fallback_state: str,
+    out_code: str = "__race_code__",
+    out_state: str = "__race_state__",
+) -> pl.DataFrame:
+    """Prefer the primary administrative race, fall back to a secondary one.
+
+    MSD §2.8.5 orders newborn-race imputation ``P(r_n | r_m, s) -> ...`` when
+    newborn race is unavailable. SINASC carries BOTH ``newborn_race_admin`` and
+    ``maternal_race_admin``; when the newborn's own race is missing/invalid we take
+    the mother's declared race as a first-order stand-in for that conditional
+    (``r_n := r_m``), which is the leading term of the §2.8.5 cascade — the full
+    P(r_n|r_m,s) allocation table is not yet estimated. Both are administrative
+    codes and both go through Bridge_R downstream; this only decides which raw code
+    feeds it per birth. Rows valid on neither race are left for the missing/local-pi
+    reallocation inside Bridge_R.
+    """
+    has_primary = primary_code in frame.columns
+    has_fallback = fallback_code in frame.columns
+    if not has_primary and not has_fallback:
+        return frame.with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias(out_code),
+            pl.lit(None, dtype=pl.Utf8).alias(out_state),
+        )
+    primary_valid = (
+        (pl.col(primary_state) == "valid_admin_race") if (has_primary and primary_state in frame.columns)
+        else pl.col(primary_code).is_not_null() if has_primary
+        else pl.lit(False)
+    )
+    primary_code_expr = pl.col(primary_code) if has_primary else pl.lit(None, dtype=pl.Utf8)
+    primary_state_expr = pl.col(primary_state) if (has_primary and primary_state in frame.columns) else pl.lit(None, dtype=pl.Utf8)
+    fallback_code_expr = pl.col(fallback_code) if has_fallback else pl.lit(None, dtype=pl.Utf8)
+    fallback_state_expr = pl.col(fallback_state) if (has_fallback and fallback_state in frame.columns) else pl.lit(None, dtype=pl.Utf8)
+    return frame.with_columns(
+        pl.when(primary_valid).then(primary_code_expr).otherwise(fallback_code_expr).alias(out_code),
+        pl.when(primary_valid).then(primary_state_expr).otherwise(fallback_state_expr).alias(out_state),
+    )
+
+
 def _bridge_race_stratified_counts(
     frame: pl.DataFrame,
     *,
@@ -335,10 +388,19 @@ def _sinasc_birth_priors(
     if frame is None:
         return None, []
     frame = _stratify_sex_column(frame, source_system="SINASC", sex_column="newborn_sex", sex_index=sex_index)
+    # SINASC exposes BOTH newborn and maternal administrative race; prefer the
+    # newborn's own declaration, fall back to the mother's (MSD §2.8.5 r_n|r_m).
+    frame = _coalesce_race_columns(
+        frame,
+        primary_code="newborn_race_admin",
+        primary_state="newborn_race_state",
+        fallback_code="maternal_race_admin",
+        fallback_state="maternal_race_state",
+    )
     grouped, warning = _bridge_race_stratified_counts(
         frame,
-        race_column="newborn_race_admin",
-        race_state_column="newborn_race_state",
+        race_column="__race_code__",
+        race_state_column="__race_state__",
         group_keys=["municipality_cod6", "year", "__sex__"],
         race_bridge_prior=race_bridge_prior,
         race_index=race_index,
@@ -460,6 +522,99 @@ def _census_race_composition_prior(
     return tuple(values)
 
 
+def _sidra_vital_totals(path: str | Path | None, *, table_id: str, variable_id: str) -> dict[tuple[str, str], float] | None:
+    """Per-(municipality_cod6, year) total from a SIDRA civil-registry facts file.
+
+    The request that produced ``path`` is total-only (every classification pinned
+    to its Total category), so each locality-year is one numeric row; summed for
+    safety. Returns ``None`` when the file is absent so the caller can fall back to
+    a DATASUS event source.
+    """
+    if path is None:
+        return None
+    p = Path(path)
+    if not p.exists():
+        return None
+    frame = pl.read_parquet(p)
+    required = {"table_id", "variable_id", "period", "locality_id", "value_numeric", "value_status"}
+    if required - set(frame.columns):
+        return None
+    frame = frame.filter(
+        (pl.col("table_id").cast(pl.Utf8) == table_id)
+        & (pl.col("variable_id").cast(pl.Utf8) == variable_id)
+        & (pl.col("value_status").cast(pl.Utf8) == "numeric")
+        & pl.col("value_numeric").is_not_null()
+    )
+    out: dict[tuple[str, str], float] = {}
+    for row in frame.group_by([pl.col("locality_id").cast(pl.Utf8).str.slice(0, 6), pl.col("period").cast(pl.Utf8).str.slice(0, 4)]).agg(
+        pl.col("value_numeric").sum().alias("total")
+    ).iter_rows(named=True):
+        out[(str(row["locality_id"]), str(row["period"]))] = float(row["total"])
+    return out
+
+
+def _datasus_event_totals(
+    path: str | Path | None, *, geo_candidates: tuple[str, ...], year_candidates: tuple[str, ...]
+) -> dict[tuple[str, str], float] | None:
+    """Per-(municipality_cod6, year) event COUNT from a DATASUS event file (fallback
+    vital source for the migration residual when no civil-registry facts exist)."""
+    if path is None:
+        return None
+    p = Path(path)
+    if not p.exists():
+        return None
+    frame = _resolve_geo_year_columns(pl.read_parquet(p), geo_candidates=geo_candidates, year_candidates=year_candidates)
+    if frame is None:
+        return None
+    out: dict[tuple[str, str], float] = {}
+    for row in frame.group_by(["municipality_cod6", "year"]).agg(pl.len().cast(pl.Float64).alias("total")).iter_rows(named=True):
+        if row["municipality_cod6"] is None or row["year"] is None:
+            continue
+        out[(str(row["municipality_cod6"]), str(int(row["year"])))] = float(row["total"])
+    return out
+
+
+def _migration_residual_totals(
+    *,
+    closure: list[float | None],
+    births_by_st: dict[tuple[str, str], float] | None,
+    deaths_by_st: dict[tuple[str, str], float] | None,
+    localities: tuple[str, ...],
+    periods: tuple[str, ...],
+    shape: tuple[int, int, int, int, int],
+) -> tuple[tuple[float | None, ...] | None, list[str]]:
+    """Net-migration residual per (locality, year), MSD §2.8.7 "open national residual".
+
+    ``NetMig(s,t) = E(s,t) - E(s,t-1) - Births(s,t) + Deaths(s,t)`` — the demographic
+    balancing equation solved for the unobserved term. Computed only for CONSECUTIVE
+    calendar years (both closure totals present); over a multi-year gap the residual
+    would be a cumulative, not annual, flow and is left unobserved. Absent birth/death
+    keys are read as zero registered events (the total-only SIDRA cell semantics),
+    which is why civil-registry facts — where every requested locality-year returns a
+    row — are the preferred source over sparser DATASUS counts.
+    """
+    if births_by_st is None and deaths_by_st is None:
+        return None, []
+    births_by_st = births_by_st or {}
+    deaths_by_st = deaths_by_st or {}
+    s_count, t_count = shape[0], shape[1]
+    values: list[float | None] = [None] * (s_count * t_count)
+    for s, locality in enumerate(localities):
+        for t in range(1, t_count):
+            if int(periods[t]) - int(periods[t - 1]) != 1:
+                continue
+            e_now = closure[s * t_count + t]
+            e_prev = closure[s * t_count + (t - 1)]
+            if e_now is None or e_prev is None:
+                continue
+            births = births_by_st.get((locality, periods[t]), 0.0)
+            deaths = deaths_by_st.get((locality, periods[t]), 0.0)
+            values[s * t_count + t] = float(e_now) - float(e_prev) - births + deaths
+    if not any(value is not None for value in values):
+        return None, []
+    return tuple(values), []
+
+
 def solve_population_tensor_from_sidra_strata(
     *,
     population_strata_path: str | Path,
@@ -468,6 +623,8 @@ def solve_population_tensor_from_sidra_strata(
     mode: str = "independent_denominator",
     sim_events_path: str | Path | None = None,
     sinasc_events_path: str | Path | None = None,
+    civil_registry_births_path: str | Path | None = None,
+    civil_registry_deaths_path: str | Path | None = None,
     race_bridge_prior_path: str | Path | None = None,
     solver_id: str | None = None,
     max_iterations: int = 2_000,
@@ -585,8 +742,46 @@ def solve_population_tensor_from_sidra_strata(
         race_index=race_index,
         shape=shape,
     )
+    # Net-migration residual (MSD §2.8.7): SIDRA civil-registry vital totals preferred
+    # (IBGE-universe-consistent with the population estimates), DATASUS SIM/SINASC
+    # counts as fallback when no civil-registry facts were acquired.
+    births_by_st = _sidra_vital_totals(
+        civil_registry_births_path, table_id=SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE, variable_id=SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE
+    )
+    if births_by_st is None:
+        births_by_st = _datasus_event_totals(
+            sinasc_events_path, geo_candidates=("mun_residence_cod6", "CODMUNRES", "MUNIC_RES"), year_candidates=("birth_year", "event_year")
+        )
+    deaths_by_st = _sidra_vital_totals(
+        civil_registry_deaths_path, table_id=SIDRA_CIVIL_REGISTRY_DEATHS_TABLE, variable_id=SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE
+    )
+    if deaths_by_st is None:
+        deaths_by_st = _datasus_event_totals(
+            sim_events_path, geo_candidates=("mun_residence_cod6", "mun_occurrence_cod6", "CODMUNRES", "MUNIC_RES"), year_candidates=("death_year", "event_year")
+        )
+    migration_locality_totals, migration_warnings = _migration_residual_totals(
+        closure=closure,
+        births_by_st=births_by_st,
+        deaths_by_st=deaths_by_st,
+        localities=localities,
+        periods=periods,
+        shape=shape,
+    )
+    # Per-cell migration bound. MSD §2.8.1 bounds eta by the closure total E_{s,t},
+    # which exists for EVERY year (census + intercensal); the per-cell strata anchor
+    # does not (only census years), so basing the bound on it starves intercensal
+    # years of migration headroom -- exactly where the residual is most needed.
+    strata_per_st = shape[2] * shape[3] * shape[4]
+    migration_bounds: list[float] = []
+    for idx in range(n_cells):
+        closure_total = closure[idx // strata_per_st]
+        if closure_total is not None and closure_total > 0:
+            migration_bounds.append(max(0.25 * float(closure_total) / strata_per_st, 1.0))
+        else:
+            migration_bounds.append(max((anchors[idx] or 0.0) * 0.25, 1.0))
+
     death_rates: tuple[float | None, ...] | None = None
-    warnings: list[str] = [*death_warnings, *birth_warnings]
+    warnings: list[str] = [*death_warnings, *birth_warnings, *migration_warnings]
     feedback_warning = False
     reconstruction_uncertainty = 0.02
     if mode == "sim_informed_denominator":
@@ -614,7 +809,8 @@ def solve_population_tensor_from_sidra_strata(
         sim_deaths=sim_deaths,
         race_composition_prior=race_composition_prior,
         closure_totals=tuple(closure),
-        migration_bounds=tuple(max((value or 0.0) * 0.25, 1.0) for value in anchors),
+        migration_locality_totals=migration_locality_totals,
+        migration_bounds=tuple(migration_bounds),
         initial_population=tuple(float(value or 0.0) for value in anchors),
         weights=PopulationObjectiveWeights(
             anchor=10.0,
@@ -622,6 +818,7 @@ def solve_population_tensor_from_sidra_strata(
             birth=1.0 if births is not None and shape[1] > 1 else 0.0,
             death=1.0 if mode == "sim_informed_denominator" and sim_deaths is not None else 0.0,
             migration=0.1 if shape[1] >= 3 else 0.0,
+            migration_total=0.5 if migration_locality_totals is not None else 0.0,
             race=0.1 if race_composition_prior is not None else 0.0,
             age_smooth=0.05 if shape[2] >= 3 else 0.0,
         ),
@@ -700,6 +897,8 @@ def solve_population_tensor_from_sidra_strata(
         "total_anchor_hash": sha256_file(totals_path),
         "sim_events_hash": sha256_file(Path(sim_events_path)) if sim_events_path else None,
         "sinasc_events_hash": sha256_file(Path(sinasc_events_path)) if sinasc_events_path else None,
+        "civil_registry_births_hash": sha256_file(Path(civil_registry_births_path)) if civil_registry_births_path else None,
+        "civil_registry_deaths_hash": sha256_file(Path(civil_registry_deaths_path)) if civil_registry_deaths_path else None,
         "race_bridge_prior_hash": race_bridge_prior.prior_hash if race_bridge_prior is not None else None,
         "telemetry": optimized.telemetry.as_manifest(),
     }

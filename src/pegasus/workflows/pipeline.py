@@ -71,6 +71,18 @@ SIDRA_POPULATION_TOTAL_CLASSIFICATIONS: dict[str, list[str]] = {
 SIDRA_INTERCENSAL_POPULATION_TABLE = "6579"
 SIDRA_INTERCENSAL_POPULATION_VARIABLE = "9324"
 
+# SIDRA civil-registry (Registro Civil) vital-statistics tables, total-only, annual,
+# 5570 municipalities, 2003-2024. Feed the net-migration residual (MSD §2.8.7):
+# NetMig = dPopulation - Births + Deaths. Same IBGE universe as the population
+# estimates, so the residual isolates migration rather than cross-system coverage
+# gaps (the reason these are preferred over DATASUS SIM/SINASC as the vital source).
+# Pre-2003 windows would instead use tables 197/2609-predecessor and 367/368 (not
+# wired -- modern runs are covered by 2609/2683).
+SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE = "2609"
+SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE = "217"
+SIDRA_CIVIL_REGISTRY_DEATHS_TABLE = "2683"
+SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE = "343"
+
 
 def _population_tensor_requested(intent: UserIntent) -> bool:
     return intent.population_mode in {"independent_population_tensor", "sim_informed_population_tensor"}
@@ -482,6 +494,59 @@ def _acquire_sidra_population(
     )
 
 
+def _civil_registry_total_classifications(metadata, table_id: str) -> dict[str, list[str]]:
+    """Pin every classification of a civil-registry table to its Total category so
+    the request returns one number per municipality-year. SIDRA's Registro Civil
+    tables use category id ``0`` for Total across all classifications (compendium-
+    verified); ``plan_sidra_chunks`` validates against live metadata and fails loud
+    if that ever diverges, so this can't silently produce wrong strata."""
+    table = metadata.tables[table_id]
+    return {str(clsf_id): ["0"] for clsf_id in table.classifications}
+
+
+def _acquire_sidra_civil_registry_vital(
+    *,
+    intent: UserIntent,
+    uf: str,
+    data_root: Path,
+    metadata_dir: Path,
+    client: SidraClient | None,
+) -> dict[str, dict[str, Any] | None]:
+    """Acquire SIDRA civil-registry births (2609) and deaths (2683), total-only per
+    municipality-year, for the net-migration residual (MSD §2.8.7). Gated on the
+    population tensor being requested. Each table is independent: a table absent for
+    the window yields ``None`` (the residual falls back to DATASUS SIM/SINASC)."""
+    if not _population_tensor_requested(intent):
+        return {"births": None, "deaths": None}
+    metadata = _ensure_sidra_metadata_tables(
+        table_ids=[SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE, SIDRA_CIVIL_REGISTRY_DEATHS_TABLE],
+        metadata_dir=metadata_dir, data_root=data_root, client=client,
+    )
+    out: dict[str, dict[str, Any] | None] = {}
+    for key, table_id, variable_id, role in (
+        ("births", SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE, SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE, "civil_registry_births"),
+        ("deaths", SIDRA_CIVIL_REGISTRY_DEATHS_TABLE, SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE, "civil_registry_deaths"),
+    ):
+        if table_id not in metadata.tables:
+            out[key] = None
+            continue
+        periods = _select_table_periods_in_window(metadata, table_id, intent)
+        path = _acquire_sidra_population_table(
+            table_id=table_id, variable_id=variable_id,
+            classifications=_civil_registry_total_classifications(metadata, table_id),
+            periods=periods, metadata=metadata, uf=uf, data_root=data_root, client=client,
+            work_dir_label="civil_registry",
+        )
+        out[key] = None if path is None else inspect_source_artifact(
+            path=path,
+            source_system="SIDRA",
+            artifact_role=role,
+            provenance_mode="materialized_external",
+            source_manifest_hash=content_hash(metadata.tables[table_id].model_dump(mode="json")),
+        )
+    return out
+
+
 def _acquire_sidra_population_strata(
     *,
     intent: UserIntent,
@@ -785,6 +850,15 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
                 "sex, SIDRA self-declared race, and non-overlapping single-year age are registry-projected"
             ) if _population_tensor_requested(intent) else "not requested by population_mode",
         },
+        "sidra_civil_registry_migration": {
+            "requested": _population_tensor_requested(intent),
+            "births_table_id": SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE if _population_tensor_requested(intent) else None,
+            "deaths_table_id": SIDRA_CIVIL_REGISTRY_DEATHS_TABLE if _population_tensor_requested(intent) else None,
+            "method": (
+                "net-migration residual (MSD §2.8.7): NetMig = dPopulation - Births + Deaths; "
+                "SIDRA civil-registry (IBGE-universe-consistent) preferred, DATASUS SIM/SINASC fallback"
+            ) if _population_tensor_requested(intent) else "not requested by population_mode",
+        },
         "sidra_compendium": sidra_compendium_plan,
         "sidra_projection": {
             "boundary": "SHE context_facts admission",
@@ -862,6 +936,10 @@ def run_live_pipeline(
         intent=intent, uf=uf, data_root=data_root,
         metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
     )
+    civil_registry = _acquire_sidra_civil_registry_vital(
+        intent=intent, uf=uf, data_root=data_root,
+        metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
+    )
     context_artifacts, sidra_compendium = _acquire_sidra_compendium_context(
         intent=intent, uf=uf, data_root=data_root,
         metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
@@ -870,6 +948,8 @@ def run_live_pipeline(
     sidra_artifacts = [
         sidra_artifact,
         *([sidra_strata_artifact] if sidra_strata_artifact is not None else []),
+        *([civil_registry["births"]] if civil_registry["births"] is not None else []),
+        *([civil_registry["deaths"]] if civil_registry["deaths"] is not None else []),
         *context_artifacts,
     ]
 

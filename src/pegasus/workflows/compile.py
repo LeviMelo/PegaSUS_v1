@@ -273,6 +273,14 @@ def _build_population_tensor_artifact(
         (artifact for artifact in artifacts if artifact.source_system == "SINASC" and artifact.artifact_role == "processed_events"),
         None,
     )
+    civil_births = next(
+        (artifact for artifact in artifacts if artifact.source_system == "SIDRA" and artifact.artifact_role == "civil_registry_births"),
+        None,
+    )
+    civil_deaths = next(
+        (artifact for artifact in artifacts if artifact.source_system == "SIDRA" and artifact.artifact_role == "civil_registry_deaths"),
+        None,
+    )
     # Only the "embedded_*" race_tensor_mode feeds the Bridge_R prior into the
     # population tensor's own birth/death race stratification (MSD §2.8.5/§2.8.6);
     # "downstream_bridge" attaches a separate standalone EFG field instead (see
@@ -288,6 +296,8 @@ def _build_population_tensor_artifact(
         output_path=output_path,
         sim_events_path=None if sim_events is None else sim_events.path,
         sinasc_events_path=None if sinasc_events is None else sinasc_events.path,
+        civil_registry_births_path=None if civil_births is None else civil_births.path,
+        civil_registry_deaths_path=None if civil_deaths is None else civil_deaths.path,
         race_bridge_prior_path=race_bridge_prior_path,
         mode=solver_mode,
     ).as_manifest()

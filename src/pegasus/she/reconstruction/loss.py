@@ -5,7 +5,8 @@ Typed formula contract
 Inputs are flat float64 vectors for population ``P`` and migration ``eta`` on
 shape ``(S, T, A, X, R)``. Optional observations use ``None`` for missingness.
 The objective implements anchor fit, cohort aging, newborn entry, SIM death
-prior, migration second differences, ILR race composition, and age second differences. Independent
+prior, migration second differences, per-locality net-migration total residual,
+ILR race composition, and age second differences. Independent
 mode requires a zero death weight. Outputs are a scalar loss, named component
 losses, and analytic gradients with the same flat support. Nonnegativity,
 closure totals, hard anchors, and migration bounds are enforced by projection
@@ -55,6 +56,8 @@ def validate_population_problem(problem: PopulationTensorProblem) -> None:
         raise ValueError("births must have shape (locality, time, sex, race).")
     if problem.closure_totals is not None and len(problem.closure_totals) != s_count * t_count:
         raise ValueError("closure_totals must have shape (locality, time).")
+    if problem.migration_locality_totals is not None and len(problem.migration_locality_totals) != s_count * t_count:
+        raise ValueError("migration_locality_totals must have shape (locality, time).")
     if problem.migration_totals is not None and len(problem.migration_totals) != t_count * problem.shape[2] * x_count * r_count:
         raise ValueError("migration_totals must have shape (time, age, sex, race).")
     weights = problem.weights
@@ -103,7 +106,7 @@ def evaluate_population_loss(
 
     gp = np.zeros(n, dtype=np.float64)
     gm = np.zeros(n, dtype=np.float64)
-    terms = {name: 0.0 for name in ("anchor", "aging", "birth", "death", "migration", "race", "age_smooth")}
+    terms = {name: 0.0 for name in ("anchor", "aging", "birth", "death", "migration", "migration_total", "race", "age_smooth")}
     w = problem.weights
     shape = problem.shape
     s_count, t_count, a_count, x_count, r_count = shape
@@ -212,6 +215,22 @@ def evaluate_population_loss(
         gm_tens[:, 2:, :, :, :] += grad_res
         gm_tens[:, 1:-1, :, :, :] -= 2.0 * grad_res
         gm_tens[:, :-2, :, :, :] += grad_res
+
+    # 6b. Migration total (per locality-year net-flow residual anchor, MSD §2.8.7)
+    if w.migration_total > 0 and problem.migration_locality_totals is not None:
+        mig_obs = np.array(
+            [m if m is not None else np.nan for m in problem.migration_locality_totals],
+            dtype=np.float64,
+        ).reshape((s_count, t_count))
+        mask_st = ~np.isnan(mig_obs)
+        if mask_st.any():
+            # Observed net migration for (s,t) is the sum of eta over (a,x,r).
+            flow = M_tens.sum(axis=(2, 3, 4))
+            residual_st = np.where(mask_st, flow - mig_obs, 0.0)
+            terms["migration_total"] = float(w.migration_total * np.sum(residual_st**2))
+            grad_st = 2.0 * w.migration_total * residual_st
+            # d(flow_st)/d(eta_{s,t,a,x,r}) = 1 for every cell in the slab.
+            gm_tens += grad_st[:, :, None, None, None]
 
     # 7. Age Smooth
     if w.age_smooth > 0 and a_count >= 3:

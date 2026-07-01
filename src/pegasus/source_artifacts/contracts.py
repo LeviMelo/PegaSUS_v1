@@ -32,6 +32,9 @@ ALLOWED_ARTIFACT_ROLES = {
     "context_facts",
     "population_strata",
     "population_tensor",
+    # SIDRA civil-registry vital totals feeding the net-migration residual (MSD §2.8.7).
+    "civil_registry_births",
+    "civil_registry_deaths",
     "emission_prior",
     "request_manifest",
     "metadata_table",

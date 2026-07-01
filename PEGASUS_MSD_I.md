@@ -2113,11 +2113,18 @@ bridged through `pegasus.efg.race_bridge` to $\mathcal{R}$ before landing in a
 race-stratified cell. Without a configured Bridge_R prior (`race_tensor_mode=decoupled`
 or `downstream_bridge`), births cannot be honestly placed on a real (non-degenerate)
 race axis and are left out of $\mathcal{L}_{birth}$ entirely rather than collapsed onto
-an unmodeled total — $\lambda_B=0$ for that run. The $n<30$ conditional-allocation
-race fallback cascade above is not yet implemented as a distinct estimator; Bridge_R's
-own posterior (local-$\pi$ crosswalk with bootstrap uncertainty, MSD-II's Bridge_R spec)
+an unmodeled total — $\lambda_B=0$ for that run.
+
+The $P(r_n\mid r_m,s)$ head of the race fallback cascade **is** used: SINASC exposes
+both the newborn's own administrative race (`newborn_race_admin`) and the mother's
+(`maternal_race_admin`), and when the newborn's is missing/invalid the mother's declared
+race stands in as a first-order estimate of $r_n$ (i.e. $r_n:=r_m$, the leading term of
+the cascade), both routed through the same Bridge_R. The deeper $UF\to Region\to Brazil$
+conditional-allocation tail (triggered at $n<30$) is not yet a distinct estimator;
+Bridge_R's own local-$\pi$ posterior (with bootstrap uncertainty, MSD-II's Bridge_R spec)
 is used uniformly regardless of local support size. Implementation:
-`pegasus.sidra.population_cube.build._sinasc_birth_priors`.
+`pegasus.sidra.population_cube.build._sinasc_birth_priors` (`_coalesce_race_columns` for
+the newborn→maternal fallback).
 
 ### 2.8.6 Death Prior Loss
 
@@ -2184,17 +2191,40 @@ M^{national}_{t,a,x,r}
 \end{cases}
 $$
 
-**Implementation.** No annual, (age,sex,race)-stratified internal-migration flow
-source has been identified in the curated SIDRA compendium or DATASUS (SIDRA's
-migration tables are census-decennial origin-destination counts, not an annual flow
-series compatible with this tensor's per-year reconstruction) — $\Psi^{prior}$ (the
-external migration prior case) is therefore not wired and has no ingestion target
-today. The implemented behavior is the *closed national residual* case: $\eta$ is a
-free variable bounded only by `migration_bounds` (a fraction of the anchor) and
-regularized by $\mathcal{L}_{migration}$'s second-difference smoothness — migration is
-inferred implicitly as whatever residual the aging/birth/death/closure constraints
-require, not observed. This is a real data gap, not an oversight: it is left honestly
-unfilled rather than backed by a fabricated or over-general proxy.
+**Implementation — net-migration residual (the "open national residual" case
+$\Delta^{residual}$).** No annual, *(age,sex,race)-stratified* internal-migration flow
+source exists (SIDRA's migration tables are census-decennial origin-destination
+counts). But the aggregate net migration into a municipality-year is recoverable *by
+exclusion* from the demographic balancing equation, which is exactly the residual case
+above. From $P_{s,t}=P_{s,t-1}+B_{s,t}-D_{s,t}+\text{NetMig}_{s,t}$:
+
+$$
+\widehat{\text{NetMig}}_{s,t}
+=
+E_{s,t}-E_{s,t-1}-B_{s,t}+D_{s,t}
+$$
+
+where $E$ is the §2.8.10 closure total and $B,D$ are annual municipal births/deaths.
+This enters the objective as a soft per-locality-year anchor on the total migration
+flow, $\lambda_{M_{tot}}\sum_{s,t}\big(\sum_{a,x,r}\eta_{s,t,a,x,r}-\widehat{\text{NetMig}}_{s,t}\big)^2$
+(a new term alongside $\mathcal{L}_{migration}$'s smoothness; the two coexist as
+§2.8.7 already anticipates). It constrains only the *total* flow — the demographic
+composition of migration remains reconstructed, since no source stratifies it.
+
+Vital totals $B,D$ come from the **SIDRA civil-registry** tables (2609 births / 2683
+deaths) by preference: they share IBGE's statistical universe with the population
+estimates $E$, so the residual isolates migration rather than cross-system coverage
+divergence. DATASUS SIM/SINASC counts are the fallback when civil-registry facts were
+not acquired. The residual is formed only for **consecutive** calendar years with both
+$E_{s,t}$ and $E_{s,t-1}$ present (over a multi-year gap it would be a cumulative, not
+annual, flow, and is left unobserved). $\eta$'s box bound is taken from the closure
+total $E_{s,t}$ (present every year), not the per-cell census anchor (present only at
+census years), so intercensal years — where the residual matters most — are not
+starved of migration headroom. Implementation:
+`pegasus.sidra.population_cube.build._migration_residual_totals` +
+`she.reconstruction.loss` (`migration_total` term). The stratified external prior
+$\Psi^{prior}$ remains unwired (no stratified source); the closed-national case
+$M^{national}=0$ is still available when no residual is observed.
 
 ### 2.8.8 Race/Color Composition Loss
 

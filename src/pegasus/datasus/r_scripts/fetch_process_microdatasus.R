@@ -78,6 +78,29 @@ sanitize_utf8_scalar <- function(x) {
   z
 }
 
+# Vectorized column-wise UTF-8 sanitizer. iconv/gsub operate on whole character
+# vectors, so this replaces the per-cell vapply (which made a monthly file's
+# ~13k rows x ~dozens of string columns = hundreds of thousands of scalar iconv
+# calls — the dominant cost of the "writing canonical raw-coded Parquet" phase,
+# especially under many concurrent R processes). Semantics preserved: strip NUL
+# bytes, mark encoding unknown, iconv to UTF-8 with byte substitution, latin1
+# fallback, empty string for the irrecoverable, and NA preserved where NA.
+sanitize_utf8_column <- function(col) {
+  before <- as.character(col)
+  na_mask <- is.na(before)
+  v <- gsub("\\x00", "", before, perl = TRUE, useBytes = TRUE)
+  Encoding(v) <- "unknown"
+  z <- iconv(v, from = "", to = "UTF-8", sub = "byte")
+  bad <- is.na(z)
+  if (any(bad)) {
+    z2 <- iconv(v[bad], from = "latin1", to = "UTF-8", sub = "byte")
+    z[bad] <- z2
+  }
+  z[is.na(z)] <- ""
+  z[na_mask] <- NA_character_
+  z
+}
+
 sanitize_utf8_dataframe <- function(df) {
   if (is.null(df) || !is.data.frame(df)) return(df)
   out <- df
@@ -85,10 +108,7 @@ sanitize_utf8_dataframe <- function(df) {
   for (name in names(out)) {
     col <- out[[name]]
     if (is.character(col) || is.factor(col) || is.object(col)) {
-      before <- as.character(col)
-      after <- vapply(before, sanitize_utf8_scalar, character(1), USE.NAMES = FALSE)
-      after[is.na(before)] <- NA_character_
-      out[[name]] <- after
+      out[[name]] <- sanitize_utf8_column(col)
       sanitized_columns <- c(sanitized_columns, name)
     }
   }

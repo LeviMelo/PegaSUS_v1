@@ -208,6 +208,20 @@ class Cols:
         )
         return value, state
 
+    # -- categorical codebook translation ---------------------------------
+    def categorical(self, concept: str, *names: str, registry_root: str = "config/registries") -> tuple[pl.Expr, pl.Expr]:
+        """Translate a coded categorical column via the in-house DATASUS codebook
+        (``normalize.codebook``): returns ``(canonical_value, state)`` with state ∈
+        {missing, valid, unknown, invalid}. The concept dictionary is shared across
+        systems, so SEXO/RACACOR/the Sim-Não flags/etc. are defined once."""
+        from pegasus.datasus.normalize.codebook import categorical_exprs
+
+        return categorical_exprs(concept, self.clean(*names), registry_root=registry_root)
+
+    def categorical_value(self, concept: str, *names: str, registry_root: str = "config/registries") -> pl.Expr:
+        """The canonical value from :meth:`categorical` (drops the state)."""
+        return self.categorical(concept, *names, registry_root=registry_root)[0]
+
     # -- numbers ----------------------------------------------------------
     def nonneg_int(self, *names: str) -> tuple[pl.Expr, pl.Expr]:
         """Sign-preserving non-negative integer (matches ``_int_nonnegative``): a

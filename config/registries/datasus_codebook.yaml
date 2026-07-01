@@ -1,0 +1,165 @@
+# DATASUS categorical codebook — in-house code→canonical translation registry.
+#
+# This is the single, deduplicated source of truth for translating DATASUS coded
+# categorical variables (the "de-para" dictionaries) into PegaSUS canonical values.
+# It replaces reliance on microdatasus's `process_*()` translation and is the
+# foundation for retiring microdatasus in favour of a direct in-house FTP processor.
+#
+# Design:
+#  * `concepts` are reusable across schemas — a variable's meaning is defined once
+#    (SEXO, RACACOR, the Sim/Não flags, etc. recur across SIM/SINASC/SIH/CNES). No
+#    per-schema duplication.
+#  * `bindings` map a system's raw column name to a concept.
+#  * Values are PegaSUS canonical (English, structured), and every concept declares
+#    which codes are the explicit "unknown/ignored" sentinel — so we preserve the
+#    MSD §2.3 missing/unknown/invalid distinction instead of microdatasus's silent
+#    collapse of 0/9 → NA. A code not listed as a value and not in `unknown` is
+#    `invalid`; a blank/absent raw value is `missing`.
+#
+# Code→meaning is extracted verbatim from microdatasus process_sim/process_sinasc/
+# process_sih/process_cnes (the authority); only the surface label is canonicalised.
+#
+# Coverage note: this first cut carries the concepts PegaSUS currently emits (the SIM
+# categorical fields previously passed through as raw codes) plus the shared
+# demographic concepts. SIH (38) and CNES (136) field dictionaries are added the same
+# way — pure data under `concepts`/`bindings`, no new code.
+
+version: 1
+
+concepts:
+  sex:
+    dtype: string
+    values: {"1": male, "2": female, "M": male, "F": female}
+    unknown: ["9", "I", "0"]
+
+  race_color:
+    dtype: string
+    values: {"1": white, "2": black, "3": asian, "4": mixed, "5": indigenous}
+    unknown: ["0", "6", "7", "8", "9"]
+
+  marital_status:                      # ESTCIV / ESTCIVMAE
+    dtype: string
+    values: {"1": single, "2": married, "3": widowed, "4": separated, "5": consensual_union}
+    unknown: ["0", "6", "7", "8", "9"]
+
+  education_years_sim:                 # ESC / ESCMAE (SIM coding, includes 8)
+    dtype: string
+    values: {"1": none, "2": "1_3_years", "3": "4_7_years", "4": "8_11_years",
+             "5": "12_plus_years", "8": "9_11_years"}
+    unknown: ["0", "6", "7", "9", "A"]
+
+  education_years_sinasc:              # ESCMAE (SINASC coding, no 8)
+    dtype: string
+    values: {"1": none, "2": "1_3_years", "3": "4_7_years", "4": "8_11_years", "5": "12_plus_years"}
+    unknown: ["0", "6", "7", "8", "9"]
+
+  pregnancy_type:                      # GRAVIDEZ
+    dtype: string
+    values: {"1": single, "2": twin, "3": triplet_plus}
+    unknown: ["0", "4", "5", "6", "7", "8", "9"]
+
+  gestation_group_sim:                 # GESTACAO (SIM coding, letter A + 1..8)
+    dtype: string
+    values: {"A": "21_27_weeks", "1": under_22_weeks, "2": "22_27_weeks", "3": "28_31_weeks",
+             "4": "32_36_weeks", "5": "37_41_weeks", "6": "42_plus_weeks",
+             "7": "28_plus_weeks", "8": "28_36_weeks"}
+    unknown: ["0", "9"]
+
+  gestation_group_sinasc:              # GESTACAO (SINASC coding, 1..6)
+    dtype: string
+    values: {"1": under_22_weeks, "2": "22_27_weeks", "3": "28_31_weeks",
+             "4": "32_36_weeks", "5": "37_41_weeks", "6": "42_plus_weeks"}
+    unknown: ["0", "7", "8", "9"]
+
+  delivery_type:                       # PARTO
+    dtype: string
+    values: {"1": vaginal, "2": cesarean}
+    unknown: ["0", "3", "4", "5", "6", "7", "8", "9"]
+
+  local_of_death:                      # LOCOCOR (SIM)
+    dtype: string
+    values: {"1": hospital, "2": other_health_facility, "3": household, "4": public_road, "5": other}
+    unknown: ["6", "7", "8", "9"]
+
+  local_of_birth:                      # LOCNASC (SINASC)
+    dtype: string
+    values: {"1": hospital, "2": other_health_facility, "3": household, "4": other}
+    unknown: ["0", "5", "6", "7", "8", "9"]
+
+  prenatal_consultation_group:         # CONSULTAS (SINASC)
+    dtype: string
+    values: {"1": none, "2": "1_3_visits", "3": "4_6_visits", "4": "7_plus_visits"}
+    unknown: ["0", "5", "6", "7", "8", "9"]
+
+  yes_no:                              # ASSISTMED/EXAME/CIRURGIA/NECROPSIA/OBITOGRAV/ACIDTRAB/IDANOMAL
+    dtype: bool
+    values: {"1": true, "2": false}
+    unknown: ["3", "4", "5", "6", "7", "8", "9"]
+
+  death_type:                          # TIPOBITO
+    dtype: string
+    values: {"1": fetal, "2": nonfetal}
+    unknown: ["0", "9"]
+
+  death_timing_delivery:               # OBITOPARTO
+    dtype: string
+    values: {"1": before, "2": during, "3": after}
+    unknown: ["0", "4", "5", "6", "7", "8", "9"]
+
+  puerperium_window:                   # OBITOPUERP
+    dtype: string
+    values: {"1": within_42_days, "2": "43_days_to_1_year", "3": not_in_puerperium}
+    unknown: ["4", "5", "6", "7", "8", "9"]
+
+  death_circumstance:                  # CIRCOBITO
+    dtype: string
+    values: {"1": accident, "2": suicide, "3": homicide, "4": other}
+    unknown: ["0", "5", "6", "7", "8", "9"]
+
+  investigation_status:                # TPPOS
+    dtype: string
+    values: {"S": investigated, "N": not_investigated}
+    unknown: []
+
+# Per-system raw column → concept bindings. Only the wired SIM-DO categorical fields
+# are consumed by the current normalizer; the SINASC/SIH entries document the shared
+# mappings for the in-house processor and are activated as those fields are wired.
+bindings:
+  SIM-DO:
+    SEXO: sex
+    RACACOR: race_color
+    ESTCIV: marital_status
+    ESCMAE: education_years_sim
+    LOCOCOR: local_of_death
+    TIPOBITO: death_type
+    GRAVIDEZ: pregnancy_type
+    GESTACAO: gestation_group_sim
+    PARTO: delivery_type
+    OBITOPARTO: death_timing_delivery
+    OBITOGRAV: yes_no
+    OBITOPUERP: puerperium_window
+    ASSISTMED: yes_no
+    EXAME: yes_no
+    CIRURGIA: yes_no
+    NECROPSIA: yes_no
+    CIRCOBITO: death_circumstance
+    TPPOS: investigation_status
+
+  SINASC:
+    SEXO: sex
+    RACACOR: race_color
+    RACACORMAE: race_color
+    ESTCIVMAE: marital_status
+    ESCMAE: education_years_sinasc
+    LOCNASC: local_of_birth
+    GRAVIDEZ: pregnancy_type
+    GESTACAO: gestation_group_sinasc
+    PARTO: delivery_type
+    CONSULTAS: prenatal_consultation_group
+    IDANOMAL: yes_no
+
+  SIH-RD:
+    SEXO: sex
+    RACA_COR: race_color
+
+  CNES-ST: {}

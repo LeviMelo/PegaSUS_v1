@@ -371,7 +371,36 @@ def _assemble_sim_do_record(
     bw = out.get("birth_weight_death_context_grams")
     out["birth_weight_death_context_grams"] = int(bw) if bw is not None else None
 
+    # 8. Categorical codebook translation (in-house replacement for microdatasus
+    #    process_sim label decoding). Keyed off the raw column so the record oracle
+    #    stays byte-aligned with the vectorized frame, which uses the same concepts.
+    from pegasus.datasus.normalize.codebook import translate as _translate
+
+    for field, (raw_col, concept) in _SIM_CATEGORICAL.items():
+        out[field], _ = _translate(concept, raw_row.get(raw_col))
+
     return out
+
+
+# output field → (raw column, codebook concept). Shared contract between the
+# vectorized frame and the record oracle so both translate identically.
+_SIM_CATEGORICAL: dict[str, tuple[str, str]] = {
+    "place_of_death": ("LOCOCOR", "local_of_death"),
+    "death_type": ("TIPOBITO", "death_type"),
+    "fetal_or_liveborn_status_source": ("TIPOBITO", "death_type"),
+    "maternal_education_legacy": ("ESCMAE", "education_years_sim"),
+    "pregnancy_type": ("GRAVIDEZ", "pregnancy_type"),
+    "gestational_age_group_death": ("GESTACAO", "gestation_group_sim"),
+    "delivery_type_death_context": ("PARTO", "delivery_type"),
+    "death_timing_relative_to_delivery": ("OBITOPARTO", "death_timing_delivery"),
+    "death_during_pregnancy": ("OBITOGRAV", "yes_no"),
+    "death_during_puerperium": ("OBITOPUERP", "puerperium_window"),
+    "medical_assistance": ("ASSISTMED", "yes_no"),
+    "exam_performed": ("EXAME", "yes_no"),
+    "surgery_performed": ("CIRURGIA", "yes_no"),
+    "autopsy_performed": ("NECROPSIA", "yes_no"),
+    "investigation_status": ("TPPOS", "investigation_status"),
+}
 
 
 
@@ -406,6 +435,11 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
 
     def preserve(col: str) -> pl.Expr:
         return cx.clean(col)
+
+    def cat(concept: str, col: str) -> pl.Expr:
+        # Translate a coded categorical field via the in-house codebook registry
+        # (single shared authority; replaces microdatasus process_* translation).
+        return cx.categorical_value(concept, col)
 
     # -- dates & hour -----------------------------------------------------
     death_dt = cx.date("DTOBITO")
@@ -516,35 +550,35 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
         race_s.alias("race_missingness_state"),
         res_cod6.alias("mun_residence_cod6"), res_cod7.alias("mun_residence_cod7"),
         occ_cod6.alias("mun_occurrence_cod6"), occ_cod7.alias("mun_occurrence_cod7"),
-        preserve("LOCOCOR").alias("place_of_death"),
+        cat("local_of_death", "LOCOCOR").alias("place_of_death"),
         facility.alias("facility_code"), facility_state.alias("facility_code_state"),
         underlying_raw.alias("underlying_icd_raw"), underlying_norm.alias("underlying_icd_norm"), underlying_state.alias("underlying_icd_parse_state"),
         cause_chain_raw.alias("cause_chain_raw"), cause_chain_norm.alias("cause_chain_norm"), cause_chain_states.alias("cause_chain_parse_states"),
         assoc_raw.alias("associated_conditions_raw"), assoc_norm.alias("associated_conditions_norm"), assoc_state.alias("associated_conditions_parse_states"),
-        preserve("TIPOBITO").alias("death_type"),
-        preserve("TIPOBITO").alias("fetal_or_liveborn_status_source"),
+        cat("death_type", "TIPOBITO").alias("death_type"),
+        cat("death_type", "TIPOBITO").alias("fetal_or_liveborn_status_source"),
         _integer("IDADEMAE").alias("maternal_age_years"),
-        preserve("ESCMAE").alias("maternal_education_legacy"),
+        cat("education_years_sim", "ESCMAE").alias("maternal_education_legacy"),
         preserve("ESCMAE2010").alias("maternal_education_2010"),
         preserve("OCUPMAE").alias("maternal_occupation_cbo"),
         _count2("QTDFILVIVO").alias("maternal_living_children_count"),
         _count2("QTDFILMORT").alias("maternal_deceased_children_count"),
-        preserve("GRAVIDEZ").alias("pregnancy_type"),
+        cat("pregnancy_type", "GRAVIDEZ").alias("pregnancy_type"),
         _integer("SEMAGESTAC").alias("gestational_weeks_death"),
-        preserve("GESTACAO").alias("gestational_age_group_death"),
-        preserve("PARTO").alias("delivery_type_death_context"),
-        preserve("OBITOPARTO").alias("death_timing_relative_to_delivery"),
+        cat("gestation_group_sim", "GESTACAO").alias("gestational_age_group_death"),
+        cat("delivery_type", "PARTO").alias("delivery_type_death_context"),
+        cat("death_timing_delivery", "OBITOPARTO").alias("death_timing_relative_to_delivery"),
         birth_weight.alias("birth_weight_death_context_grams"),
-        preserve("OBITOGRAV").alias("death_during_pregnancy"),
-        preserve("OBITOPUERP").alias("death_during_puerperium"),
-        preserve("ASSISTMED").alias("medical_assistance"),
-        preserve("EXAME").alias("exam_performed"),
-        preserve("CIRURGIA").alias("surgery_performed"),
-        preserve("NECROPSIA").alias("autopsy_performed"),
+        cat("yes_no", "OBITOGRAV").alias("death_during_pregnancy"),
+        cat("puerperium_window", "OBITOPUERP").alias("death_during_puerperium"),
+        cat("yes_no", "ASSISTMED").alias("medical_assistance"),
+        cat("yes_no", "EXAME").alias("exam_performed"),
+        cat("yes_no", "CIRURGIA").alias("surgery_performed"),
+        cat("yes_no", "NECROPSIA").alias("autopsy_performed"),
         preserve("COMUNSVOIM").alias("svo_iml_municipality"),
         cert_dt.cast(pl.Utf8).alias("certificate_date"),
         reporting_delay.alias("reporting_delay"),
-        preserve("TPPOS").alias("investigation_status"),
+        cat("investigation_status", "TPPOS").alias("investigation_status"),
         invest_dt.cast(pl.Utf8).alias("investigation_date"),
         preserve("CAUSABAS_O").alias("cause_altered"),
         content.alias("raw_record_hash"),

@@ -14,6 +14,7 @@ This ``__init__`` is the public surface — import the batch entry points from
 from __future__ import annotations
 
 from pegasus.datasus.normalize.cnes import normalize_cnes_st_events, normalize_cnes_st_record
+from pegasus.datasus.normalize.codebook import concept_for, load_codebook, translate
 from pegasus.datasus.normalize.completeness import check_raw_completeness, missing_required_columns
 from pegasus.datasus.normalize.primitives import Cols, read_raw_table, row_hash, struct_json
 from pegasus.datasus.normalize.records import normalize_record
@@ -37,6 +38,9 @@ __all__ = [
     "struct_json",
     "check_raw_completeness",
     "missing_required_columns",
+    "load_codebook",
+    "translate",
+    "concept_for",
     "normalize_record",
     "normalize_sim_do_events",
     "normalize_sim_do_record",

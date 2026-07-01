@@ -7,6 +7,13 @@ from pegasus.pirs.ldo.lowrank import SparseLowRankFit, fit_sparse_plus_lowrank
 from pegasus.pirs.ldo.lags import LaggedFit, LaggedLink, fit_lagged_links
 from pegasus.pirs.ldo.edges import stability_select, to_link_records
 from pegasus.pirs.ldo.residual_scan import joint_model_residuals, scan_residual_nonlinear_edges
+from pegasus.pirs.ldo.certify import (
+    LDOCertificationError,
+    LDOCertificationPolicy,
+    assert_ldo_edge_promotion_allowed,
+    certify_links,
+)
+from pegasus.pirs.ldo.orchestrator import LDORun, run_ldo
 from pegasus.pirs.ldo.records import LINK_RECORD_COLUMNS, EdgeType, LinkRecord
 
 __all__ = [
@@ -27,6 +34,12 @@ __all__ = [
     "to_link_records",
     "joint_model_residuals",
     "scan_residual_nonlinear_edges",
+    "certify_links",
+    "assert_ldo_edge_promotion_allowed",
+    "LDOCertificationPolicy",
+    "LDOCertificationError",
+    "run_ldo",
+    "LDORun",
     "LinkRecord",
     "EdgeType",
     "LINK_RECORD_COLUMNS",

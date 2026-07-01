@@ -4,7 +4,7 @@ Backs the EFG spatial-aggregation level (MSD §3.7 geography). Aggregating event
 a coarser IBGE region (microregion / immediate region / mesoregion / intermediate
 region) raises per-cell counts, which is the legitimate lever for analysing outcomes
 that are too sparse at the municipality level. The crosswalk is authoritative IBGE
-data (``config/registries/geography_region_crosswalk.yaml``), never derived from code
+data (``config/registries/spatial/geography_region_crosswalk.yaml``), never derived from code
 positions or fabricated.
 """
 
@@ -25,7 +25,7 @@ _LEVEL_KEY = {
     "intermediate_region": "intermediate_region_id",
 }
 
-REGISTRY_FILE = "geography_region_crosswalk.yaml"
+REGISTRY_FILE = "spatial/geography_region_crosswalk.yaml"
 
 
 class RegionCrosswalkError(ValueError):

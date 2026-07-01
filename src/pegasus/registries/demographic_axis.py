@@ -16,7 +16,7 @@ from typing import Any
 from pegasus.core.config import load_yaml
 
 
-REGISTRY_FILE = "demographic_axis_maps.yaml"
+REGISTRY_FILE = "demographic/demographic_axis_maps.yaml"
 
 TOTAL = "__total__"
 UNKNOWN = "__unknown__"
@@ -117,7 +117,7 @@ def age_group_for_years(age_years: Any) -> str:
     integer field (SIM/SINASC/SIH already carry ``age_years``), not a source
     category-code crosswalk, so it needs no registry lookup -- the canonical
     labels themselves (``age_0``..``age_99``, ``age_100_plus``) are the SIDRA
-    9606 single-year basis declared in ``demographic_axis_maps.yaml``.
+    9606 single-year basis declared in ``demographic/demographic_axis_maps.yaml``.
     """
     if age_years is None:
         return TOTAL

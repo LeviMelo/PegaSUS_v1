@@ -6,7 +6,7 @@ autonomous EFG produces content-addressed (hashed) field ids, so the names never
 and ``mandatory_fields`` could not be enforced — the "hollow success" the audit flagged.
 
 This module resolves the gap *without* renaming content-addressed fields: a declarative
-match predicate (``config/registries/core_seed_registry.yaml``) binds each canonical
+match predicate (``config/registries/fields/core_seed_registry.yaml``) binds each canonical
 seed id/name/alias to the produced field that realizes it. ``mandatory_fields`` are then
 enforced against real output. Registry-driven: adding a seed is a registry edit.
 """
@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from pegasus.registries.generic import load_entries
 
 
-REGISTRY_FILE = "core_seed_registry.yaml"
+REGISTRY_FILE = "fields/core_seed_registry.yaml"
 
 
 class MandatoryFieldContractError(ValueError):

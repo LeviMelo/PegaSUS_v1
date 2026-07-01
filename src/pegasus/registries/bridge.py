@@ -6,7 +6,7 @@ from typing import Any
 from pegasus.registries.semantic import active_entries
 
 
-REGISTRY_FILE = "bridge_grammars.yaml"
+REGISTRY_FILE = "fields/bridge_grammars.yaml"
 
 
 def bridge_grammar_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:

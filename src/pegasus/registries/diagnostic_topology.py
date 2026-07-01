@@ -6,7 +6,7 @@ from typing import Any
 from pegasus.registries.semantic import active_entries, match_entry
 
 
-REGISTRY_FILE = "diagnostic_topology.yaml"
+REGISTRY_FILE = "health/diagnostic_topology.yaml"
 
 
 def diagnostic_topology_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:

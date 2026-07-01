@@ -1,6 +1,6 @@
 """Statistical-functional field registry (MSD §3.10.4–§3.10.6 Ψ operators).
 
-Read boundary for ``functional_fields.yaml`` — the single source of truth for which
+Read boundary for ``fields/functional_fields.yaml`` — the single source of truth for which
 per-record marks (length of stay, costs, reporting delay) are summarized by a mean/median
 functional over a support cell. The EFG builds these from the registry; no per-source code.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 from pegasus.registries.generic import active_entries
 
 
-REGISTRY_FILE = "functional_fields.yaml"
+REGISTRY_FILE = "fields/functional_fields.yaml"
 ALLOWED_FUNCTIONALS = frozenset({"mean", "median"})
 
 

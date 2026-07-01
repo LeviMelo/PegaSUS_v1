@@ -33,7 +33,7 @@ class CarrierSpec:
 
 
 def load_carrier_registry(registry_root: str | Path = "config/registries") -> dict[str, CarrierSpec]:
-    path = Path(registry_root) / "carrier.yaml"
+    path = Path(registry_root) / "ontology/carrier.yaml"
     payload = load_yaml(path)
     raw = payload.get("carriers", {})
     if not isinstance(raw, dict) or not raw:

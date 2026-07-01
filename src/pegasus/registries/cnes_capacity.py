@@ -30,7 +30,7 @@ CAPACITY_COMPONENTS: dict[str, CNESCapacityComponent] = {
 }
 
 
-REGISTRY_FILE = "cnes_capacity_registry.yaml"
+REGISTRY_FILE = "health/cnes_capacity_registry.yaml"
 
 
 def get_capacity_component(raw_field: str) -> CNESCapacityComponent:

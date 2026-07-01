@@ -400,9 +400,9 @@ def main() -> None:
         candidates = [
             Path("config/registries/registry_manifest.yaml"),
             Path("config/registries/sidra_views.yaml"),
-            Path("config/registries/source_fields.yaml"),
-            Path("config/registries/quality_permissions.yaml"),
-            Path("config/registries/race_axis_registry.yaml"),
+            Path("config/registries/datasus/source_fields.yaml"),
+            Path("config/registries/ontology/quality_permissions.yaml"),
+            Path("config/registries/demographic/race_axis_registry.yaml"),
         ]
         return {str(path): sha256_file(path) for path in candidates if path.exists()}
 

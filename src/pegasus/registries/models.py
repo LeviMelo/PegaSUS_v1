@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pegasus.registries.generic import RegistryEntry, active_entries, get_entry, load_entries, registry_manifest
 
-REGISTRY_FILES = ('model_registry.yaml', 'models.yaml')
+REGISTRY_FILES = ('inference/model_registry.yaml', 'models.yaml')
 
 
 def load_model_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:

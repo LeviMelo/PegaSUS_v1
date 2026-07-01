@@ -24,7 +24,7 @@ class ProvenanceSpec:
 
 
 def load_provenance_registry(registry_root: str | Path = "config/registries") -> dict[str, ProvenanceSpec]:
-    path = Path(registry_root) / "provenance.yaml"
+    path = Path(registry_root) / "ontology/provenance.yaml"
     payload = load_yaml(path)
     raw = payload.get("provenance_tags", {})
     if not isinstance(raw, dict) or not raw:

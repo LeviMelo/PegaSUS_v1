@@ -335,7 +335,7 @@ def efg_plan_race_bridge(
     sim_events: Path = typer.Option(..., "--sim-events"),
     bridge_prior: Path | None = typer.Option(None, "--bridge-prior"),
     intent: Path | None = typer.Option(None, "--intent"),
-    registry: Path = typer.Option(Path("config/registries/race_bridge_priors.yaml"), "--registry"),
+    registry: Path = typer.Option(Path("config/registries/demographic/race_bridge_priors.yaml"), "--registry"),
     municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
 ) -> None:
     from pegasus.workflows.race_bridge import run_plan_race_bridge

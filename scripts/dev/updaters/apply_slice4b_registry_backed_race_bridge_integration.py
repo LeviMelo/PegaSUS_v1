@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path.cwd()
 
 CREATE_OR_REPLACE = [
-    "config/registries/race_bridge_priors.yaml",
+    "config/registries/demographic/race_bridge_priors.yaml",
     "config/intents/alagoas_smoke_race_bridge.json",
     "src/pegasus/registries/race_bridge.py",
     "src/pegasus/workflows/race_bridge.py",
@@ -49,7 +49,7 @@ def preflight() -> None:
         "pyproject.toml",
         "config/intents/alagoas_smoke.json",
         "config/registries/registry_manifest.yaml",
-        "config/registries/race_bridge_priors.yaml",
+        "config/registries/demographic/race_bridge_priors.yaml",
         "src/pegasus/core/schemas.py",
         "src/pegasus/cli.py",
         "src/pegasus/workflows/compile.py",
@@ -290,7 +290,7 @@ def write_race_bridge_registry() -> None:
 
 
     def load_race_bridge_registry(
-        registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+        registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
         *,
         repo_root: str | Path = ".",
     ) -> list[RaceBridgeRegistryEntry]:
@@ -316,7 +316,7 @@ def write_race_bridge_registry() -> None:
         source_system: str = "SIM-DO",
         source_axis: str = "SIM_ADMIN_RACACOR",
         target_axis: str = "IBGE_SELF_DECLARED_RACE",
-        registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+        registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
         repo_root: str | Path = ".",
     ) -> RaceBridgeRegistryEntry:
         entries = load_race_bridge_registry(registry_path, repo_root=repo_root)
@@ -349,7 +349,7 @@ def write_race_bridge_registry() -> None:
         *,
         intent: UserIntent,
         municipality_cod6: str,
-        registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+        registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
         repo_root: str | Path = ".",
     ) -> RaceBridgePlan:
         mode = str(intent.race_tensor_mode)
@@ -443,7 +443,7 @@ def write_race_bridge_workflow() -> None:
         sim_events_path: str | Path,
         bridge_prior_path: str | Path | None = None,
         intent_path: str | Path | None = None,
-        registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+        registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
         municipality_cod6: str | None = None,
         year: int | None = None,
     ) -> dict[str, Any]:
@@ -1329,10 +1329,10 @@ def patch_compile() -> None:
         candidates = [
             Path("config/registries/registry_manifest.yaml"),
             Path("config/registries/sidra_views.yaml"),
-            Path("config/registries/source_fields.yaml"),
-            Path("config/registries/quality_permissions.yaml"),
-            Path("config/registries/race_axis_registry.yaml"),
-            Path("config/registries/race_bridge_priors.yaml"),
+            Path("config/registries/datasus/source_fields.yaml"),
+            Path("config/registries/ontology/quality_permissions.yaml"),
+            Path("config/registries/demographic/race_axis_registry.yaml"),
+            Path("config/registries/demographic/race_bridge_priors.yaml"),
         ]
         return {str(path): sha256_file(path) for path in candidates if path.exists()}
 
@@ -1644,7 +1644,7 @@ def efg_plan_race_bridge(
     sim_events: Path = typer.Option(..., "--sim-events"),
     bridge_prior: Path | None = typer.Option(None, "--bridge-prior"),
     intent: Path | None = typer.Option(None, "--intent"),
-    registry: Path = typer.Option(Path("config/registries/race_bridge_priors.yaml"), "--registry"),
+    registry: Path = typer.Option(Path("config/registries/demographic/race_bridge_priors.yaml"), "--registry"),
     municipality_cod6: str | None = typer.Option(None, "--municipality-cod6"),
 ) -> None:
     from pegasus.workflows.race_bridge import run_plan_race_bridge
@@ -1663,7 +1663,7 @@ def efg_plan_race_bridge(
 
 
 def write_registry_and_intent() -> None:
-    write("config/registries/race_bridge_priors.yaml", r'''
+    write("config/registries/demographic/race_bridge_priors.yaml", r'''
     schema_version: "1.0"
     registry_version: "race_bridge_priors.v1.slice4b"
     created_at: "2026-06-10"
@@ -1728,7 +1728,7 @@ def write_tests_and_audit() -> None:
 
 
     def test_race_bridge_registry_loads_and_validates_smoke_prior():
-        entries = load_race_bridge_registry("config/registries/race_bridge_priors.yaml")
+        entries = load_race_bridge_registry("config/registries/demographic/race_bridge_priors.yaml")
         assert len(entries) == 1
         entry = entries[0]
         assert entry.id == "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"
@@ -1865,7 +1865,7 @@ def write_tests_and_audit() -> None:
         plan = run_plan_race_bridge(
             sim_events_path=sim_events,
             intent_path="config/intents/alagoas_smoke_race_bridge.json",
-            registry_path="config/registries/race_bridge_priors.yaml",
+            registry_path="config/registries/demographic/race_bridge_priors.yaml",
             municipality_cod6="270430",
         )
         assert plan["summary"]["bridge_id"] == "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"

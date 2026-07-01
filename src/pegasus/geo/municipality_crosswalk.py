@@ -22,7 +22,7 @@ class MunicipalityCode:
     method: str
 
 
-DEFAULT_CROSSWALK_REGISTRY = Path("config/registries/municipality_crosswalk_codes.yaml")
+DEFAULT_CROSSWALK_REGISTRY = Path("config/registries/spatial/municipality_crosswalk_codes.yaml")
 
 
 @lru_cache(maxsize=8)

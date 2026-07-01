@@ -143,7 +143,7 @@ def _assemble_sim_do_record(
     """Project registry-routed canonical fields into the SIM-DO output schema and
     compute the genuinely-derived fields that are not single-column decodes.
 
-    The Source Field Registry (config/registries/source_fields.yaml) is the sole
+    The Source Field Registry (config/registries/datasus/source_fields.yaml) is the sole
     authority for raw→canonical routing and decoding (SHE-NORM-01 Path A): this
     assembler copies the registry's decode result and only adds identifiers,
     year, the age-provenance preference, the cod7 crosswalk, reporting delay, and

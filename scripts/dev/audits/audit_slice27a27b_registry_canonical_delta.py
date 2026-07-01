@@ -16,18 +16,18 @@ from pegasus.registries.sih_cost import cost_evidence
 
 
 CRITICAL = [
-    "diagnostic_topology.yaml",
-    "cnes_capacity_registry.yaml",
-    "sih_cost_registry.yaml",
-    "clinical_event_definitions.yaml",
-    "bridge_grammars.yaml",
-    "race_axis_registry.yaml",
-    "icd_catalog.yaml",
-    "icd_quality_groups.yaml",
-    "join_affordances.yaml",
-    "municipality_crosswalk_sources.yaml",
-    "model_registry.yaml",
-    "residual_registry.yaml",
+    "health/diagnostic_topology.yaml",
+    "health/cnes_capacity_registry.yaml",
+    "health/sih_cost_registry.yaml",
+    "health/clinical_event_definitions.yaml",
+    "fields/bridge_grammars.yaml",
+    "demographic/race_axis_registry.yaml",
+    "health/icd_catalog.yaml",
+    "health/icd_quality_groups.yaml",
+    "fields/join_affordances.yaml",
+    "spatial/municipality_crosswalk_sources.yaml",
+    "inference/model_registry.yaml",
+    "inference/residual_registry.yaml",
 ]
 
 

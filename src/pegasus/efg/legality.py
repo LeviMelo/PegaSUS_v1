@@ -37,7 +37,7 @@ def _known_unit(unit: str, registry_root: Path) -> bool:
 
 def _known_carrier(carrier: str, registry_root: Path) -> bool:
     # Carrier knowledge is fully registry-driven: all event/derived carriers are
-    # declared in carrier.yaml (see clinical_event_definitions.yaml for the
+    # declared in ontology/carrier.yaml (see health/clinical_event_definitions.yaml for the
     # restricted ones). No hardcoded carrier set in the engine.
     return carrier in load_carrier_registry(registry_root)
 

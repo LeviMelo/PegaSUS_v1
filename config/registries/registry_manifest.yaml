@@ -8,72 +8,72 @@ registry_set:
   dirty_allowed: false
 registries:
   aggregation:
-    path: aggregation.yaml
+    path: ontology/aggregation.yaml
     schema_version: '1.0'
     registry_version: aggregation_registry_v1
     sha256: 147c2b6343ea1925dc93adcd57a598e9e51f396e9757e3336966b17b677861d7
   bridge_grammars:
-    path: bridge_grammars.yaml
+    path: fields/bridge_grammars.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 2da772416cd32a21aa4f0ce8b97caccaa45a816f65a179ad6c7c8401a0c143d9
   carrier:
-    path: carrier.yaml
+    path: ontology/carrier.yaml
     schema_version: '1.0'
     registry_version: carrier_registry_v1
     sha256: 559608330f4ae7efbcc33acce4278fc559f14ef89bef89f67183f0c4d95e0da3
   clinical_event_definitions:
-    path: clinical_event_definitions.yaml
+    path: health/clinical_event_definitions.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 047bf8ac6005ae31341c46fce82269e2832cfd978e690c37aea5b4c51a62ff8f
   cnes_capacity_registry:
-    path: cnes_capacity_registry.yaml
+    path: health/cnes_capacity_registry.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: bd5eba0d8d66c63d7b48ff4a12f0a7892ef6d8b4990fa19e26ed8b6e1ace2300
   composite_decoders:
-    path: composite_decoders.yaml
+    path: datasus/composite_decoders.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 71b7c051494be239cd2b83383657477f11464d2daf8757b59b95dd48a2a44f4a
   diagnostic_topology:
-    path: diagnostic_topology.yaml
+    path: health/diagnostic_topology.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: e321d20530d23781e495ab501b93da289b2d30dd612c893c1f0e74422c8ada95
   hsic_registry:
-    path: hsic_registry.yaml
+    path: inference/hsic_registry.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: db2f25c07521240180538a731fc1f9cd15783430166230aafde8136016c26d73
   icd_catalog:
-    path: icd_catalog.yaml
+    path: health/icd_catalog.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 0a86155f69f6e4d732debca81c3ec3c928a7b8ae36b66550932dd8011fb5cd17
   icd_quality_groups:
-    path: icd_quality_groups.yaml
+    path: health/icd_quality_groups.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 15bd8a493d9cd0557137f5f8e95b5e6dca163e9191070e17f3a3fd4c061fe64b
   join_affordances:
-    path: join_affordances.yaml
+    path: fields/join_affordances.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 7761e3f53121a8b218f6d4eddcc5d7451b515618ff06ac11c7b3184b521a8ac8
   model_registry:
-    path: model_registry.yaml
+    path: inference/model_registry.yaml
     schema_version: '1.0'
     registry_version: v3.0
     sha256: 0a20670e74ffa04979eaca5e658f2f70f35d2ed0287853fa278393329465d0a6
   municipality_crosswalk_sources:
-    path: municipality_crosswalk_sources.yaml
+    path: spatial/municipality_crosswalk_sources.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: b8fb1fb7f21ada71c7eb7be487b2e0524c3480d61ff7ae7ce07360e30fda9e41
   null_registry:
-    path: null_registry.yaml
+    path: ontology/null_registry.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: ce161830ab79c0e9a320875d8c682148cba8b44a978b877a0a9709f103c168af
@@ -83,37 +83,37 @@ registries:
     registry_version: v2.0
     sha256: 9f9488aa4a9999b6f5f4d061a612e1fbaf2cc9127b6f8767878df744373db34f
   population_solver_registry:
-    path: population_solver_registry.yaml
+    path: demographic/population_solver_registry.yaml
     schema_version: '1.0'
     registry_version: v3.0
     sha256: 72fc495e55dc12acd2d183fc6396624710d5109dc2342d9db83c41595e04a38b
   provenance:
-    path: provenance.yaml
+    path: ontology/provenance.yaml
     schema_version: '1.0'
     registry_version: provenance_registry_v1
     sha256: 281965b510b360749cd7fd7feb2f27277d599a277dee48c267a4ccb2c5194774
   quality:
-    path: quality.yaml
+    path: ontology/quality.yaml
     schema_version: '1.0'
     registry_version: quality_registry_v1
     sha256: c475e548ad497add61aa18092e7d3cf1c7c710e73367712b455fdc471ad35608
   quality_permissions:
-    path: quality_permissions.yaml
+    path: ontology/quality_permissions.yaml
     schema_version: '1.0'
     registry_version: v1.0
     sha256: b7ad09ed865f11114c1b3b759f318e16a47d6d034c6532e9d4abcce162101320
   race_axis_registry:
-    path: race_axis_registry.yaml
+    path: demographic/race_axis_registry.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: c44ca83b783de8c71d19be4780d06f8d24eeded09f91d95da9a1354b0a160d07
   race_bridge_priors:
-    path: race_bridge_priors.yaml
+    path: demographic/race_bridge_priors.yaml
     schema_version: '1.0'
     registry_version: race_bridge_priors.v1.slice4b
     sha256: a7742568cf1f3c7c0299af521e7d9c941d8e11e3580ce3146d4948abe39b346a
   residual_registry:
-    path: residual_registry.yaml
+    path: inference/residual_registry.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 9526de4a88cada914ff1899eddf3c95fc1be6746bf2a5b6c0d127d3094e9d49a
@@ -138,22 +138,22 @@ registries:
     registry_version: v1.0
     sha256: 233b820e6d041fb1c23473bc6395c75cffef46ac71ad62a7880b82303704c5ba
   sih_cost_registry:
-    path: sih_cost_registry.yaml
+    path: health/sih_cost_registry.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 9124a93a326a161efa7e71316f2091e4db5f42ef59725787f0ccef0de3eb3292
   source_fields:
-    path: source_fields.yaml
+    path: datasus/source_fields.yaml
     schema_version: '1.0'
     registry_version: '1.0'
     sha256: e9854c85861e56a6a15d9eaacb9413eeca722caf4c46dd9970d6ae1186baf92a
   stdfm_registry:
-    path: stdfm_registry.yaml
+    path: inference/stdfm_registry.yaml
     schema_version: '1.0'
     registry_version: v2.0
     sha256: 99aa9df09ae2f8a1f4c105eb75aee875332f49e9489f0d07d840ebc17eed82cb
   unit:
-    path: unit.yaml
+    path: ontology/unit.yaml
     schema_version: '1.0'
     registry_version: unit_registry_v1
     sha256: 0b5a368bc3f789d8baa802c8e3431b43cad431f54a8b4fb5054d49c243b80d36

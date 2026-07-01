@@ -31,7 +31,7 @@ class AggregationSpec:
 
 
 def load_aggregation_registry(registry_root: str | Path = "config/registries") -> dict[str, AggregationSpec]:
-    path = Path(registry_root) / "aggregation.yaml"
+    path = Path(registry_root) / "ontology/aggregation.yaml"
     payload = load_yaml(path)
     raw = payload.get("aggregations", {})
     if not isinstance(raw, dict) or not raw:

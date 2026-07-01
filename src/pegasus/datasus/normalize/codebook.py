@@ -1,6 +1,6 @@
 """In-house DATASUS categorical codebook — the single translation authority.
 
-Loads ``config/registries/datasus_codebook.yaml`` and resolves a coded DATASUS
+Loads ``config/registries/datasus/datasus_codebook.yaml`` and resolves a coded DATASUS
 value to its PegaSUS canonical value plus an MSD §2.3 state. This is the in-house
 replacement for microdatasus's ``process_*()`` categorical translation: the code→
 meaning dictionaries live here, deduplicated by *concept* and shared across schemas,
@@ -36,7 +36,7 @@ _BLANK = {"", "NA", "NAN", "NULL", "NONE"}
 def load_codebook(registry_root: str = "config/registries") -> dict[str, Any]:
     """Load and cache the codebook YAML (concepts + per-system bindings + reference-
     table lookups)."""
-    data = load_yaml(Path(registry_root) / "datasus_codebook.yaml")
+    data = load_yaml(Path(registry_root) / "datasus/datasus_codebook.yaml")
     concepts = data.get("concepts", {})
     bindings = data.get("bindings", {})
     lookups = data.get("lookups", {})
@@ -49,7 +49,7 @@ def load_reference_table(table: str, registry_root: str = "config/registries") -
     tabOcupacao, mirrored 1:1 from microdatasus's shipped data) as a ``{code: name}``
     dict. These are joins (occupation/country/municipality NAME lookups), distinct
     from the small closed `concepts` categorical dictionaries above."""
-    path = Path(registry_root) / "datasus_reference" / f"{table}.parquet"
+    path = Path(registry_root) / "datasus" / "reference" / f"{table}.parquet"
     df = pl.read_parquet(path)
     return dict(zip(df["code"].to_list(), df["name"].to_list()))
 

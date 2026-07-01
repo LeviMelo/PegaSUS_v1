@@ -63,7 +63,7 @@ def preflight() -> None:
         "src/pegasus/workflows/race_bridge.py",
         "src/pegasus/registries/race_bridge.py",
         "config/intents/alagoas_smoke_race_bridge.json",
-        "config/registries/race_bridge_priors.yaml",
+        "config/registries/demographic/race_bridge_priors.yaml",
     ]
     missing = [p for p in required if not rel(p).exists()]
     if missing:

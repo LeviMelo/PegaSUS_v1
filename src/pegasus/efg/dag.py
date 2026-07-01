@@ -166,9 +166,9 @@ def _edge(
 def _registry_hashes(substrate: SubstrateBundle, root: Path) -> dict[str, str]:
     hashes = dict(substrate.registry_hashes)
     for name in (
-        "source_fields.yaml", "carrier.yaml", "unit.yaml", "aggregation.yaml",
-        "provenance.yaml", "quality.yaml", "quality_permissions.yaml",
-        "cnes_capacity_registry.yaml", "sih_cost_registry.yaml", "diagnostic_topology.yaml",
+        "datasus/source_fields.yaml", "ontology/carrier.yaml", "ontology/unit.yaml", "ontology/aggregation.yaml",
+        "ontology/provenance.yaml", "ontology/quality.yaml", "ontology/quality_permissions.yaml",
+        "health/cnes_capacity_registry.yaml", "health/sih_cost_registry.yaml", "health/diagnostic_topology.yaml",
     ):
         path = root / name
         if path.exists():
@@ -686,7 +686,7 @@ def _build_efg_base(
 
     # σ-restricted clinical events (MSD §2.6/§3.10.4): infant/neonatal/postneonatal
     # death, inpatient death, low birth weight, prematurity, congenital anomaly. Each is
-    # a declarative predicate (from clinical_event_definitions.yaml) applied to the
+    # a declarative predicate (from health/clinical_event_definitions.yaml) applied to the
     # primary carrier's source records — fully registry-driven, no source-specific code.
     from pegasus.registries.events import clinical_ratio_specs, restricted_event_specs
 
@@ -714,7 +714,7 @@ def _build_efg_base(
             count_nodes.append(restrict_child)
 
     # Statistical-functional fields (MSD §3.10.4-6 Ψ_mean/Ψ_median): mean length of stay,
-    # mean cost components, median reporting delay. Registry-driven (functional_fields.yaml);
+    # mean cost components, median reporting delay. Registry-driven (fields/functional_fields.yaml);
     # these are intensive marked_functional covariates, not counts (not RN-divided).
     from pegasus.registries.functional import functional_field_specs
 
@@ -778,7 +778,7 @@ def _build_efg_base(
     # Cross-source divergence bridges (§2.11 / relationship surface): registry-declared
     # carrier pairs (e.g. SIH admissions vs SIM deaths) formed into a log-ratio divergence
     # on shared support, at every shared stratifier signature (all-cause and cause-specific).
-    # The engine holds no hardcoded divergence pairs — they come from bridge_grammars.yaml.
+    # The engine holds no hardcoded divergence pairs — they come from fields/bridge_grammars.yaml.
     if operator_mode != "raw_only":
         from pegasus.registries.bridge import bridge_grammar_entries
 

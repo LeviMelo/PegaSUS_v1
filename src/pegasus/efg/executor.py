@@ -363,7 +363,7 @@ _FALSY = ("false", "0", "f", "no", "n", "nao", "não")
 def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.DataFrame:
     """Apply a declarative AND-list predicate (MSD §2.6/§3.10.4 σ restriction).
 
-    Conditions come from clinical_event_definitions.yaml; this interpreter is the only
+    Conditions come from health/clinical_event_definitions.yaml; this interpreter is the only
     place the predicate is realized, and it is fully general (no per-event/source code).
     A referenced column that is absent means the predicate cannot be satisfied → empty.
     """

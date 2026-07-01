@@ -3,7 +3,7 @@
 This module turns real disaggregated SIDRA 9606 facts into a
 ``PopulationTensorProblem`` over ``(municipality, year, age_group, sex, race)`` and
 runs the existing analytic solver. It is intentionally projection-aware: only source
-categories that can be mapped through ``demographic_axis_maps.yaml`` become strata.
+categories that can be mapped through ``demographic/demographic_axis_maps.yaml`` become strata.
 Unmapped or unknown categories are excluded rather than silently relabelled.
 """
 

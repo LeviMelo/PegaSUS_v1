@@ -175,7 +175,7 @@ def _entry_from_payload(raw: dict[str, Any], *, registry_path: Path, repo_root: 
 
 
 def load_race_bridge_registry(
-    registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+    registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
     *,
     repo_root: str | Path = ".",
 ) -> list[RaceBridgeRegistryEntry]:
@@ -201,7 +201,7 @@ def select_compile_race_bridge_prior(
     source_system: str = "SIM-DO",
     source_axis: str = "SIM_ADMIN_RACACOR",
     target_axis: str = "IBGE_SELF_DECLARED_RACE",
-    registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+    registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
     repo_root: str | Path = ".",
 ) -> RaceBridgeRegistryEntry:
     entries = load_race_bridge_registry(registry_path, repo_root=repo_root)
@@ -234,7 +234,7 @@ def resolve_race_bridge_plan(
     *,
     intent: UserIntent,
     municipality_cod6: str,
-    registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+    registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
     repo_root: str | Path = ".",
 ) -> RaceBridgePlan:
     mode = str(intent.race_tensor_mode)

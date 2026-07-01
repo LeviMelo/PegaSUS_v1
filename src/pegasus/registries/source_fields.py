@@ -201,14 +201,14 @@ def load_source_field_registry(registry_root: str | Path = "config/registries") 
     # Cache the fully-built registry object keyed by (root, mtime). Previously this
     # re-parsed and rebuilt the entire registry on every resolve_source_field call
     # — i.e. once per column per record — making SHE normalization unusably slow.
-    path = Path(registry_root) / "source_fields.yaml"
+    path = Path(registry_root) / "datasus/source_fields.yaml"
     mtime = path.stat().st_mtime if path.exists() else 0.0
     return _load_source_field_registry_cached(str(Path(registry_root)), mtime)
 
 
 @lru_cache(maxsize=16)
 def _load_source_field_registry_cached(registry_root: str, mtime: float) -> SourceFieldRegistry:
-    path = Path(registry_root) / "source_fields.yaml"
+    path = Path(registry_root) / "datasus/source_fields.yaml"
     payload = load_yaml(path)
     registry_hash = content_hash(payload)
     source_systems = payload.get("source_systems", {})

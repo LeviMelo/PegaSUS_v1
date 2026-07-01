@@ -19,7 +19,7 @@ import polars as pl
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCALITIES = ROOT / "data" / "metadata" / "sidra" / "normalized" / "sidra_localities.parquet"
-OUTPUT = ROOT / "config" / "registries" / "municipality_crosswalk_codes.yaml"
+OUTPUT = ROOT / "config" / "registries" / "spatial/municipality_crosswalk_codes.yaml"
 
 
 def build() -> tuple[int, list[tuple[str, str]]]:

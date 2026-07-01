@@ -50,7 +50,7 @@ def sha256_file(path: Path) -> str:
 
 
 REGISTRY_CONTENT: dict[str, str] = {
-    "diagnostic_topology.yaml": r'''
+    "health/diagnostic_topology.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -123,7 +123,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           forbidden_operators: [numeric_sum, generic_rate_numerator_without_birth_denominator]
           warnings: [congenital_anomaly_requires_birth_denominator]
     ''',
-    "cnes_capacity_registry.yaml": r'''
+    "health/cnes_capacity_registry.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -185,7 +185,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           protected_non_equivalence: [sus_binding]
           warnings: [facility_attribute_not_capacity_measure]
     ''',
-    "sih_cost_registry.yaml": r'''
+    "health/sih_cost_registry.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -241,7 +241,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           protected_non_equivalence: [VAL_TOT, VAL_SH, VAL_SP]
           warnings: [sih_cost_component_identity_protected]
     ''',
-    "clinical_event_definitions.yaml": r'''
+    "health/clinical_event_definitions.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -285,7 +285,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           allowed_rates: [facility_density, bed_density]
           warnings: [capacity_snapshot_period_semantics]
     ''',
-    "bridge_grammars.yaml": r'''
+    "fields/bridge_grammars.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -325,11 +325,11 @@ REGISTRY_CONTENT: dict[str, str] = {
         registry_version: v2.0
         created_at: '2026-06-06'
         updated_at: '2026-06-13'
-        provenance: Macro-Slice 27A compatibility alias. Canonical carrier semantics live in carrier.yaml; this file remains required by registry validators.
+        provenance: Macro-Slice 27A compatibility alias. Canonical carrier semantics live in ontology/carrier.yaml; this file remains required by registry validators.
         entries:
         - id: carrier_registry_alias
           status: active_alias
-          canonical_registry: carrier.yaml
+          canonical_registry: ontology/carrier.yaml
           description: Compatibility manifest for the canonical carrier registry.
           warnings: [canonical_registry_is_carrier_yaml]
     ''',
@@ -338,11 +338,11 @@ REGISTRY_CONTENT: dict[str, str] = {
         registry_version: v2.0
         created_at: '2026-06-06'
         updated_at: '2026-06-13'
-        provenance: Macro-Slice 27A compatibility alias. Canonical unit semantics live in unit.yaml; this file remains required by registry validators.
+        provenance: Macro-Slice 27A compatibility alias. Canonical unit semantics live in ontology/unit.yaml; this file remains required by registry validators.
         entries:
         - id: unit_registry_alias
           status: active_alias
-          canonical_registry: unit.yaml
+          canonical_registry: ontology/unit.yaml
           description: Compatibility manifest for the canonical unit registry.
           warnings: [canonical_registry_is_unit_yaml]
     ''',
@@ -351,11 +351,11 @@ REGISTRY_CONTENT: dict[str, str] = {
         registry_version: v2.0
         created_at: '2026-06-06'
         updated_at: '2026-06-13'
-        provenance: Macro-Slice 27A compatibility alias. Canonical aggregation semantics live in aggregation.yaml; this file remains required by registry validators.
+        provenance: Macro-Slice 27A compatibility alias. Canonical aggregation semantics live in ontology/aggregation.yaml; this file remains required by registry validators.
         entries:
         - id: aggregation_registry_alias
           status: active_alias
-          canonical_registry: aggregation.yaml
+          canonical_registry: ontology/aggregation.yaml
           description: Compatibility manifest for the canonical aggregation registry.
           warnings: [canonical_registry_is_aggregation_yaml]
     ''',
@@ -364,15 +364,15 @@ REGISTRY_CONTENT: dict[str, str] = {
         registry_version: v2.0
         created_at: '2026-06-06'
         updated_at: '2026-06-13'
-        provenance: Macro-Slice 27A compatibility alias. Canonical provenance semantics live in provenance.yaml; this file remains required by registry validators.
+        provenance: Macro-Slice 27A compatibility alias. Canonical provenance semantics live in ontology/provenance.yaml; this file remains required by registry validators.
         entries:
         - id: provenance_registry_alias
           status: active_alias
-          canonical_registry: provenance.yaml
+          canonical_registry: ontology/provenance.yaml
           description: Compatibility manifest for the canonical provenance registry.
           warnings: [canonical_registry_is_provenance_yaml]
     ''',
-    "race_axis_registry.yaml": r'''
+    "demographic/race_axis_registry.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -401,7 +401,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           bridge_required_to: []
           warnings: [missingness_not_population_race_axis]
     ''',
-    "icd_catalog.yaml": r'''
+    "health/icd_catalog.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -444,7 +444,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           label: External causes of morbidity and mortality
           warnings: []
     ''',
-    "icd_quality_groups.yaml": r'''
+    "health/icd_quality_groups.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -468,7 +468,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           predicate: V01_Y98
           warnings: [external_cause_topology]
     ''',
-    "join_affordances.yaml": r'''
+    "fields/join_affordances.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -504,7 +504,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           allowed_operators: [admission_per_bed_ratio, facility_capacity_context]
           warnings: [capacity_context_not_case_denominator]
     ''',
-    "municipality_crosswalk_sources.yaml": r'''
+    "spatial/municipality_crosswalk_sources.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -521,7 +521,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           forbidden_operators: [direct_rate_allocation]
           warnings: [external_crosswalk_artifact_required]
     ''',
-    "model_registry.yaml": r'''
+    "inference/model_registry.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -541,7 +541,7 @@ REGISTRY_CONTENT: dict[str, str] = {
           outputs: [coefficients, fitted_values, residual_values]
           warnings: [requires_offset_contract]
     ''',
-    "residual_registry.yaml": r'''
+    "inference/residual_registry.yaml": r'''
         schema_version: '1.0'
         registry_version: v2.0
         created_at: '2026-06-06'
@@ -646,7 +646,7 @@ REGISTRY_MODULES: dict[str, str] = {
         from pegasus.registries.semantic import active_entries, match_entry
 
 
-        REGISTRY_FILE = "diagnostic_topology.yaml"
+        REGISTRY_FILE = "health/diagnostic_topology.yaml"
 
 
         def diagnostic_topology_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
@@ -683,7 +683,7 @@ REGISTRY_MODULES: dict[str, str] = {
         from pegasus.registries.semantic import active_entries, match_entry
 
 
-        REGISTRY_FILE = "cnes_capacity_registry.yaml"
+        REGISTRY_FILE = "health/cnes_capacity_registry.yaml"
 
 
         def capacity_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
@@ -715,7 +715,7 @@ REGISTRY_MODULES: dict[str, str] = {
         from pegasus.registries.semantic import active_entries, match_entry
 
 
-        REGISTRY_FILE = "sih_cost_registry.yaml"
+        REGISTRY_FILE = "health/sih_cost_registry.yaml"
 
 
         def cost_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
@@ -746,7 +746,7 @@ REGISTRY_MODULES: dict[str, str] = {
         from pegasus.registries.semantic import active_entries
 
 
-        REGISTRY_FILE = "bridge_grammars.yaml"
+        REGISTRY_FILE = "fields/bridge_grammars.yaml"
 
 
         def bridge_grammar_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
@@ -775,7 +775,7 @@ REGISTRY_MODULES: dict[str, str] = {
         from pegasus.registries.semantic import active_entries
 
 
-        REGISTRY_FILE = "icd_catalog.yaml"
+        REGISTRY_FILE = "health/icd_catalog.yaml"
 
 
         def icd_catalog_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
@@ -814,18 +814,18 @@ TEST_UNIT = r'''
 
 
     CRITICAL_REGISTRIES = (
-        "diagnostic_topology.yaml",
-        "cnes_capacity_registry.yaml",
-        "sih_cost_registry.yaml",
-        "clinical_event_definitions.yaml",
-        "bridge_grammars.yaml",
-        "race_axis_registry.yaml",
-        "icd_catalog.yaml",
-        "icd_quality_groups.yaml",
-        "join_affordances.yaml",
-        "municipality_crosswalk_sources.yaml",
-        "model_registry.yaml",
-        "residual_registry.yaml",
+        "health/diagnostic_topology.yaml",
+        "health/cnes_capacity_registry.yaml",
+        "health/sih_cost_registry.yaml",
+        "health/clinical_event_definitions.yaml",
+        "fields/bridge_grammars.yaml",
+        "demographic/race_axis_registry.yaml",
+        "health/icd_catalog.yaml",
+        "health/icd_quality_groups.yaml",
+        "fields/join_affordances.yaml",
+        "spatial/municipality_crosswalk_sources.yaml",
+        "inference/model_registry.yaml",
+        "inference/residual_registry.yaml",
     )
 
 
@@ -934,18 +934,18 @@ AUDIT = r'''
 
 
     CRITICAL = [
-        "diagnostic_topology.yaml",
-        "cnes_capacity_registry.yaml",
-        "sih_cost_registry.yaml",
-        "clinical_event_definitions.yaml",
-        "bridge_grammars.yaml",
-        "race_axis_registry.yaml",
-        "icd_catalog.yaml",
-        "icd_quality_groups.yaml",
-        "join_affordances.yaml",
-        "municipality_crosswalk_sources.yaml",
-        "model_registry.yaml",
-        "residual_registry.yaml",
+        "health/diagnostic_topology.yaml",
+        "health/cnes_capacity_registry.yaml",
+        "health/sih_cost_registry.yaml",
+        "health/clinical_event_definitions.yaml",
+        "fields/bridge_grammars.yaml",
+        "demographic/race_axis_registry.yaml",
+        "health/icd_catalog.yaml",
+        "health/icd_quality_groups.yaml",
+        "fields/join_affordances.yaml",
+        "spatial/municipality_crosswalk_sources.yaml",
+        "inference/model_registry.yaml",
+        "inference/residual_registry.yaml",
     ]
 
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pegasus.registries.generic import RegistryEntry, active_entries, get_entry, load_entries, registry_manifest
 
-REGISTRY_FILES = ('composite_decoder_registry.yaml', 'composite_decoders.yaml')
+REGISTRY_FILES = ('composite_decoder_registry.yaml', 'datasus/composite_decoders.yaml')
 
 
 def load_composite_decoder_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:

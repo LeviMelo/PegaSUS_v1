@@ -178,7 +178,7 @@ def decode_sim_idade(raw: str | int | None) -> DecodedAge:
 
 @lru_cache(maxsize=4)
 def _sih_age_unit_map(registry_root: str = "config/registries") -> dict[str, dict[str, Any]]:
-    path = Path(registry_root) / "composite_decoders.yaml"
+    path = Path(registry_root) / "datasus/composite_decoders.yaml"
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:

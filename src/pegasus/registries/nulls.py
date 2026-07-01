@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pegasus.registries.generic import RegistryEntry, active_entries, get_entry, load_entries, registry_manifest
 
-REGISTRY_FILES = ('null_registry.yaml', 'nulls_registry.yaml', 'nulls.yaml')
+REGISTRY_FILES = ('ontology/null_registry.yaml', 'nulls_registry.yaml', 'nulls.yaml')
 
 
 def load_null_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:

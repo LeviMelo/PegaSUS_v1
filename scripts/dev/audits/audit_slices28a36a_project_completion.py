@@ -42,7 +42,7 @@ def main() -> int:
         except SyntaxError as exc:
             errors.append(f"syntax:{relative}:{exc}")
 
-    registry = yaml.safe_load(_text("config/registries/population_solver_registry.yaml"))
+    registry = yaml.safe_load(_text("config/registries/demographic/population_solver_registry.yaml"))
     entries = {str(item.get("id")): item for item in registry.get("entries", [])}
     for solver_id in ("sparse_block_coordinate_v1", "sparse_block_coordinate_sim_informed_v1"):
         if not str(entries.get(solver_id, {}).get("status", "")).startswith("active"):

@@ -97,7 +97,7 @@ def _curated_groups(registry_root: str) -> tuple[tuple[str, str, tuple[tuple[str
     """Load curated cause groups (MSD §3.11 G_curated) as (id, label, ranges) tuples."""
     import yaml
 
-    path = Path(registry_root) / "icd_curated_groups.yaml"
+    path = Path(registry_root) / "health/icd_curated_groups.yaml"
     if not path.exists():
         return ()
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

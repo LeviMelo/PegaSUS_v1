@@ -10,39 +10,39 @@ ROOT = Path.cwd()
 REG_DIR = ROOT / "config" / "registries"
 
 REGISTRY_FILES = [
-    "source_fields.yaml",
-    "composite_decoders.yaml",
+    "datasus/source_fields.yaml",
+    "datasus/composite_decoders.yaml",
     "carrier_registry.yaml",
     "unit_registry.yaml",
     "aggregation_registry.yaml",
     "provenance_registry.yaml",
-    "quality_permissions.yaml",
-    "race_axis_registry.yaml",
-    "race_bridge_priors.yaml",
-    "icd_catalog.yaml",
-    "icd_quality_groups.yaml",
-    "diagnostic_topology.yaml",
-    "clinical_event_definitions.yaml",
-    "cnes_capacity_registry.yaml",
-    "sih_cost_registry.yaml",
+    "ontology/quality_permissions.yaml",
+    "demographic/race_axis_registry.yaml",
+    "demographic/race_bridge_priors.yaml",
+    "health/icd_catalog.yaml",
+    "health/icd_quality_groups.yaml",
+    "health/diagnostic_topology.yaml",
+    "health/clinical_event_definitions.yaml",
+    "health/cnes_capacity_registry.yaml",
+    "health/sih_cost_registry.yaml",
     "sidra_views.yaml",
     "sidra_category_maps.yaml",
     "sidra_stitching.yaml",
     "sidra_regime_registry.yaml",
-    "municipality_crosswalk_sources.yaml",
-    "join_affordances.yaml",
-    "bridge_grammars.yaml",
-    "stdfm_registry.yaml",
-    "population_solver_registry.yaml",
-    "model_registry.yaml",
-    "residual_registry.yaml",
-    "hsic_registry.yaml",
-    "null_registry.yaml",
+    "spatial/municipality_crosswalk_sources.yaml",
+    "fields/join_affordances.yaml",
+    "fields/bridge_grammars.yaml",
+    "inference/stdfm_registry.yaml",
+    "demographic/population_solver_registry.yaml",
+    "inference/model_registry.yaml",
+    "inference/residual_registry.yaml",
+    "inference/hsic_registry.yaml",
+    "ontology/null_registry.yaml",
     "output_schema.yaml",
 ]
 
 SPECIAL_ENTRIES = {
-    "composite_decoders.yaml": [
+    "datasus/composite_decoders.yaml": [
         {"id": "Decode_SIM_IDADE", "status": "stable", "description": "SIM structural age decoder.", "warnings": []},
         {"id": "Decode_SIH_AGE", "status": "stable", "description": "SIH age decoder using COD_IDADE.", "warnings": []},
         {"id": "Decode_PESO", "status": "stable", "description": "Physical scalar decoder for birth weight.", "warnings": []},
@@ -51,7 +51,7 @@ SPECIAL_ENTRIES = {
         {"id": "Filter_CNPJ", "status": "stable", "description": "CNPJ sanitizer and all-zero nullifier.", "warnings": []},
         {"id": "Decode_cat", "status": "stable", "description": "Categorical socioeconomic decoder.", "warnings": []},
     ],
-    "quality_permissions.yaml": [
+    "ontology/quality_permissions.yaml": [
         {"id": "verified", "status": "stable", "description": "Full analytic permissions.", "warnings": []},
         {"id": "fragile", "status": "stable", "description": "Analytic with warning.", "warnings": []},
         {"id": "forced_fragile", "status": "stable", "description": "Forced unstable field.", "warnings": []},
@@ -59,7 +59,7 @@ SPECIAL_ENTRIES = {
         {"id": "quarantined_nochildren", "status": "stable", "description": "No downstream children.", "warnings": []},
         {"id": "illegal_excluded", "status": "stable", "description": "Excluded from analytic graph.", "warnings": []},
     ],
-    "race_axis_registry.yaml": [
+    "demographic/race_axis_registry.yaml": [
         {"id": "IBGE.self_declared", "status": "stable", "description": "IBGE self-declared race axis.", "warnings": []},
         {"id": "SIM-DO.administrative_death_declaration", "status": "stable", "description": "SIM death declaration race axis.", "warnings": []},
         {"id": "SIH-RD.billing_record", "status": "stable", "description": "SIH billing race axis.", "warnings": []},

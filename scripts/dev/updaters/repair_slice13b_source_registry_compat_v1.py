@@ -401,7 +401,7 @@ def patch_apply_script(path: Path) -> None:
 def main() -> None:
     source_registry = ROOT / "src/pegasus/she/source_registry.py"
     substrate = ROOT / "src/pegasus/she/substrate.py"
-    source_fields = ROOT / "config/registries/source_fields.yaml"
+    source_fields = ROOT / "config/registries/datasus/source_fields.yaml"
     apply_script = ROOT / "scripts/dev/updaters/apply_slice13b_registry_backed_source_semantics.py"
 
     if not source_registry.exists():
@@ -416,7 +416,7 @@ def main() -> None:
     patch_source_fields_yaml(source_fields)
     patch_apply_script(apply_script)
 
-    print("Slice 13B repair v1 applied: restored SHE source-registry compatibility, fixed source_fields.yaml generic registry metadata, and corrected invalid carrier/unit combinations.")
+    print("Slice 13B repair v1 applied: restored SHE source-registry compatibility, fixed datasus/source_fields.yaml generic registry metadata, and corrected invalid carrier/unit combinations.")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ COST_COMPONENTS: dict[str, SIHCostComponent] = {
 }
 
 
-REGISTRY_FILE = "sih_cost_registry.yaml"
+REGISTRY_FILE = "health/sih_cost_registry.yaml"
 
 
 def get_cost_component(raw_field: str) -> SIHCostComponent:

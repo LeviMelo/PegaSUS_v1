@@ -31,7 +31,7 @@ class QualityRoleSpec:
 
 
 def load_quality_registry(registry_root: str | Path = "config/registries") -> dict[str, QualityRoleSpec]:
-    path = Path(registry_root) / "quality.yaml"
+    path = Path(registry_root) / "ontology/quality.yaml"
     payload = load_yaml(path)
     raw = payload.get("quality_roles", {})
     if not isinstance(raw, dict) or not raw:

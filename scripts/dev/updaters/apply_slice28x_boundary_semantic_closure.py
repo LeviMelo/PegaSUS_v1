@@ -942,16 +942,16 @@ def _write_registry(root: Path, name: str) -> None:
 
 
 def test_slice28x_generic_registry_loader_reads_active_entries(tmp_path):
-    _write_registry(tmp_path, "model_registry.yaml")
-    entries = active_entries("model_registry.yaml", root=tmp_path)
+    _write_registry(tmp_path, "inference/model_registry.yaml")
+    entries = active_entries("inference/model_registry.yaml", root=tmp_path)
     assert [entry.id for entry in entries] == ["active_entry"]
-    assert get_entry("model_registry.yaml", "deprecated_entry", root=tmp_path).status == "deprecated"
-    assert registry_manifest("model_registry.yaml", root=tmp_path)["entry_count"] == 2
+    assert get_entry("inference/model_registry.yaml", "deprecated_entry", root=tmp_path).status == "deprecated"
+    assert registry_manifest("inference/model_registry.yaml", root=tmp_path)["entry_count"] == 2
 
 
 def test_slice28x_registry_wrappers_import_and_delegate(tmp_path):
-    _write_registry(tmp_path, "model_registry.yaml")
-    _write_registry(tmp_path, "null_registry.yaml")
+    _write_registry(tmp_path, "inference/model_registry.yaml")
+    _write_registry(tmp_path, "ontology/null_registry.yaml")
     assert [entry.id for entry in active_model_entries(root=tmp_path)] == ["active_entry"]
     assert [entry.id for entry in active_null_entries(root=tmp_path)] == ["active_entry"]
 '''
@@ -1001,14 +1001,14 @@ def main() -> None:
     write("src/pegasus/registries/generic.py", GENERIC_REGISTRY)
 
     wrappers = {
-        "models": ("model", "model", ("model_registry.yaml", "models.yaml")),
-        "residuals": ("residual", "residual", ("residual_registry.yaml", "residuals.yaml")),
-        "hsic": ("hsic", "HSIC", ("hsic_registry.yaml", "hsic.yaml")),
-        "nulls": ("null", "null-regime", ("null_registry.yaml", "nulls_registry.yaml", "nulls.yaml")),
+        "models": ("model", "model", ("inference/model_registry.yaml", "models.yaml")),
+        "residuals": ("residual", "residual", ("inference/residual_registry.yaml", "residuals.yaml")),
+        "hsic": ("hsic", "HSIC", ("inference/hsic_registry.yaml", "hsic.yaml")),
+        "nulls": ("null", "null-regime", ("ontology/null_registry.yaml", "nulls_registry.yaml", "nulls.yaml")),
         "output": ("output", "output", ("output_registry.yaml", "output.yaml")),
-        "events": ("event", "clinical event", ("clinical_event_definitions.yaml", "events_registry.yaml", "events.yaml")),
-        "composite_decoders": ("composite_decoder", "composite decoder", ("composite_decoder_registry.yaml", "composite_decoders.yaml")),
-        "race_axis": ("race_axis", "race axis", ("race_axis_registry.yaml", "race_axis.yaml")),
+        "events": ("event", "clinical event", ("health/clinical_event_definitions.yaml", "events_registry.yaml", "events.yaml")),
+        "composite_decoders": ("composite_decoder", "composite decoder", ("composite_decoder_registry.yaml", "datasus/composite_decoders.yaml")),
+        "race_axis": ("race_axis", "race axis", ("demographic/race_axis_registry.yaml", "race_axis.yaml")),
         "sidra": ("sidra", "SIDRA", ("sidra_registry.yaml", "sidra.yaml", "sidra_tables.yaml")),
     }
     for module, (stem, label, files) in wrappers.items():

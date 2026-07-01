@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pegasus.registries.generic import RegistryEntry, active_entries, get_entry, load_entries, registry_manifest
 
-REGISTRY_FILES = ('race_axis_registry.yaml', 'race_axis.yaml')
+REGISTRY_FILES = ('demographic/race_axis_registry.yaml', 'race_axis.yaml')
 
 
 def load_race_axis_entries(*, root: str | Path = "config/registries", required: bool = False) -> tuple[RegistryEntry, ...]:

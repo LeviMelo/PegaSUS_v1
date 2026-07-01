@@ -1,7 +1,7 @@
 """SpatialWeightGraph — one declared base graph, many views (MSD-II §II.4).
 
 MII-SPG-01/02/03. A single structural spatial graph (municipality queen
-contiguity by default) is declared in ``config/registries/spatial_graphs.yaml``
+contiguity by default) is declared in ``config/registries/spatial/spatial_graphs.yaml``
 and loaded here. Every spatial consumer draws its structure from this one object
 rather than re-deriving ad-hoc adjacency:
 
@@ -126,9 +126,9 @@ class SpatialWeightGraph:
 
 
 def _load_registry(root: str | Path) -> dict:
-    path = Path(root) / "spatial_graphs.yaml"
+    path = Path(root) / "spatial/spatial_graphs.yaml"
     if not path.exists():
-        raise SpatialGraphError(f"spatial_graphs.yaml missing under {root}")
+        raise SpatialGraphError(f"spatial/spatial_graphs.yaml missing under {root}")
     with path.open("r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
 
@@ -139,7 +139,7 @@ def load_spatial_graph(graph_id: str = "contiguity_queen", root: str = "config/r
     registry = _load_registry(root)
     spec = (registry.get("graphs") or {}).get(graph_id)
     if spec is None:
-        raise SpatialGraphError(f"spatial graph '{graph_id}' not declared in spatial_graphs.yaml")
+        raise SpatialGraphError(f"spatial graph '{graph_id}' not declared in spatial/spatial_graphs.yaml")
     artifact = Path(root) / str(spec["artifact"])
     adjacency = load_adjacency(artifact, require_symmetric=not bool(spec.get("directed", False)))
     nodes = set(adjacency)

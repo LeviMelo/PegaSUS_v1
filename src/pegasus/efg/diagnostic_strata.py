@@ -82,7 +82,7 @@ def _field_axes(field: Any) -> dict[str, Any]:
 def is_primary_diagnostic_observer(field: Any) -> bool:
     """Return whether this ICD observer can legally partition the event population.
 
-    The decision is registry-backed: source_fields.yaml marks primary,
+    The decision is registry-backed: datasus/source_fields.yaml marks primary,
     single-valued diagnostic positions with ``role: primary_diagnostic`` and
     ``axes.diagnostic_partition: primary_single_valued``. Multi-valued
     associated/secondary chains remain observers and are not σ_C count

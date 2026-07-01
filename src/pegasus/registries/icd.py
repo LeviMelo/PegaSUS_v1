@@ -6,7 +6,7 @@ from typing import Any
 from pegasus.registries.semantic import active_entries
 
 
-REGISTRY_FILE = "icd_catalog.yaml"
+REGISTRY_FILE = "health/icd_catalog.yaml"
 
 
 def icd_catalog_entries(*, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:

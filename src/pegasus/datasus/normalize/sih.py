@@ -255,7 +255,7 @@ def normalize_sih_rd_record(row: dict[str, Any], *, source_manifest_hash: str) -
 
 
 # SIH COD_IDADE unit → (years_factor, days_factor, years_offset, unit_label),
-# mirroring composite_decoders.yaml Decode_SIH_AGE (kept in sync via the age
+# mirroring datasus/composite_decoders.yaml Decode_SIH_AGE (kept in sync via the age
 # contract test). Vectorized so the whole column decodes in one pass instead of
 # one Python call per row.
 _SIH_AGE_UNITS = {

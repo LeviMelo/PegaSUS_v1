@@ -140,7 +140,7 @@ def ratio_rule(
 ) -> RatioRule | None:
     """Resolve a legal RN ratio from the clinical event registry (MSD §2.6).
 
-    Carrier/role pairings come from ``clinical_event_definitions.yaml``; the engine
+    Carrier/role pairings come from ``health/clinical_event_definitions.yaml``; the engine
     holds no hardcoded ratio table.  Units are validated against the registry-declared
     numerator unit and the general person-time/proportion denominator policy.
     """

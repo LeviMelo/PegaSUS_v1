@@ -1,6 +1,6 @@
 """Thin registry wrapper for clinical event registry entries.
 
-This module is the read boundary for ``clinical_event_definitions.yaml`` — the
+This module is the read boundary for ``health/clinical_event_definitions.yaml`` — the
 SINGLE SOURCE OF TRUTH for clinical event carriers and their legal RN ratios
 (MSD §2.6, §3.10.4).  The EFG engine consults the helpers here instead of
 hardcoding carrier/ratio knowledge, so adding a data source or a derived event
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pegasus.registries.generic import RegistryEntry, active_entries, get_entry, load_entries, registry_manifest
 
-REGISTRY_FILES = ('clinical_event_definitions.yaml', 'events_registry.yaml', 'events.yaml')
+REGISTRY_FILES = ('health/clinical_event_definitions.yaml', 'events_registry.yaml', 'events.yaml')
 
 # Denominator-unit policy by ratio output kind. A person-time denominator yields a
 # rate; an event-count denominator yields a proportion. This is a general

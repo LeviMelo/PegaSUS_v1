@@ -39,7 +39,7 @@ def run_plan_race_bridge(
     sim_events_path: str | Path,
     bridge_prior_path: str | Path | None = None,
     intent_path: str | Path | None = None,
-    registry_path: str | Path = "config/registries/race_bridge_priors.yaml",
+    registry_path: str | Path = "config/registries/demographic/race_bridge_priors.yaml",
     municipality_cod6: str | None = None,
     year: int | None = None,
 ) -> dict[str, Any]:

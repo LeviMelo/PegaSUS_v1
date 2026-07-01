@@ -14,18 +14,18 @@ from pegasus.efg.declaration import OperatorSpec
 
 
 CRITICAL_REGISTRIES = (
-    "diagnostic_topology.yaml",
-    "cnes_capacity_registry.yaml",
-    "sih_cost_registry.yaml",
-    "clinical_event_definitions.yaml",
-    "bridge_grammars.yaml",
-    "race_axis_registry.yaml",
-    "icd_catalog.yaml",
-    "icd_quality_groups.yaml",
-    "join_affordances.yaml",
-    "municipality_crosswalk_sources.yaml",
-    "model_registry.yaml",
-    "residual_registry.yaml",
+    "health/diagnostic_topology.yaml",
+    "health/cnes_capacity_registry.yaml",
+    "health/sih_cost_registry.yaml",
+    "health/clinical_event_definitions.yaml",
+    "fields/bridge_grammars.yaml",
+    "demographic/race_axis_registry.yaml",
+    "health/icd_catalog.yaml",
+    "health/icd_quality_groups.yaml",
+    "fields/join_affordances.yaml",
+    "spatial/municipality_crosswalk_sources.yaml",
+    "inference/model_registry.yaml",
+    "inference/residual_registry.yaml",
 )
 
 
@@ -106,7 +106,7 @@ def test_slice27a_critical_registries_are_not_scaffold_only() -> None:
         path = root / name
         assert path.exists(), name
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        # Past-scaffold version pin. clinical_event_definitions.yaml advanced to v3.0
+        # Past-scaffold version pin. health/clinical_event_definitions.yaml advanced to v3.0
         # when it became the source-agnostic single source of truth for event carriers
         # and RN ratios (MSD §2.6/§3.10.4); other critical registries remain at v2.0.
         assert payload["registry_version"] in {"v2.0", "v3.0"}, name

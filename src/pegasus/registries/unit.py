@@ -31,7 +31,7 @@ class UnitSpec:
 
 
 def load_unit_registry(registry_root: str | Path = "config/registries") -> dict[str, UnitSpec]:
-    path = Path(registry_root) / "unit.yaml"
+    path = Path(registry_root) / "ontology/unit.yaml"
     payload = load_yaml(path)
     raw = payload.get("units", {})
     if not isinstance(raw, dict) or not raw:

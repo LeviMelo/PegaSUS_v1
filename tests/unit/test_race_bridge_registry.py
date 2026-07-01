@@ -8,7 +8,7 @@ from pegasus.registries.race_bridge import RaceBridgeRegistryError, load_race_br
 
 
 def test_race_bridge_registry_loads_and_validates_smoke_prior():
-    entries = load_race_bridge_registry("config/registries/race_bridge_priors.yaml")
+    entries = load_race_bridge_registry("config/registries/demographic/race_bridge_priors.yaml")
     assert len(entries) == 1
     entry = entries[0]
     assert entry.id == "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"

@@ -7,11 +7,52 @@ MSD convergence.
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 import polars as pl
+
+# Allowed cod6 UF prefixes for the current run's geography scope (fix for the
+# support-panel pollution: an AL-scoped run must not accumulate national
+# municipalities from out-of-scope residence/occurrence codes). None = no filter.
+_GEO_SCOPE_PREFIXES: ContextVar["frozenset[str] | None"] = ContextVar("geo_scope_prefixes", default=None)
+
+
+def _scope_prefixes_from_intent(intent: Any) -> "frozenset[str] | None":
+    """Derive the allowed cod6 UF prefixes (2-digit) from a UserIntent or dict."""
+    if intent is None:
+        return None
+    geo = getattr(intent, "geography", None)
+    if geo is None and isinstance(intent, dict):
+        geo = intent.get("geography")
+    if geo is None:
+        return None
+
+    def _get(obj: Any, name: str):
+        value = getattr(obj, name, None)
+        if value is None and isinstance(obj, dict):
+            value = obj.get(name)
+        return value
+
+    prefixes: set[str] = set()
+    for uf in (_get(geo, "uf") or []):
+        text = str(uf).strip()
+        if text.isdigit() and len(text) >= 2:
+            prefixes.add(text[:2])
+            continue
+        try:
+            from pegasus.geo.state_panel import resolve_uf_code
+
+            prefixes.add(str(resolve_uf_code(text).datasus_prefix))
+        except Exception:
+            continue
+    for code in (_get(geo, "codes") or []):
+        digits = "".join(ch for ch in str(code) if ch.isdigit())
+        if len(digits) >= 2:
+            prefixes.add(digits[:2])
+    return frozenset(prefixes) or None
 
 from pegasus.core.enums import MaterializationState
 from pegasus.core.schemas import FieldNode
@@ -186,6 +227,14 @@ def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
     else:
         return df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("municipality_cod6"))
     base = base.filter(~pl.col("municipality_cod6").cast(pl.Utf8).str.contains(r"^\d{2}0000$").fill_null(False))
+    # Geography scope (fix: restrict to the intent's UF prefixes so out-of-scope
+    # residence/occurrence municipalities of an e.g. AL-scoped run do not pollute
+    # the support lattice with national municipalities). No-op when unset.
+    prefixes = _GEO_SCOPE_PREFIXES.get()
+    if prefixes:
+        base = base.filter(
+            pl.col("municipality_cod6").cast(pl.Utf8).str.slice(0, 2).is_in(list(prefixes))
+        )
     # Optional spatial aggregation (MSD §3.7): remap the municipality cell to a coarser
     # IBGE region so events accumulate into denser cells. The geography key column name
     # is preserved so all downstream support/RN/HSIC logic is unchanged — only its
@@ -1015,6 +1064,19 @@ def execute_efg_result(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    scope_token = _GEO_SCOPE_PREFIXES.set(_scope_prefixes_from_intent(intent))
+    try:
+        return _execute_efg_result_impl(efg, out_dir=out_dir, require_materialized=require_materialized)
+    finally:
+        _GEO_SCOPE_PREFIXES.reset(scope_token)
+
+
+def _execute_efg_result_impl(
+    efg: EFGResult,
+    *,
+    out_dir: Path,
+    require_materialized: bool,
+) -> tuple[EFGResult, EFGExecutionReport]:
     fields_by_id: dict[str, FieldNode] = {field.id: field for field in efg.fields}
     executed: list[ExecutedField] = []
 

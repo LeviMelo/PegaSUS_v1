@@ -472,6 +472,26 @@ def run_actual_state_panel(*, intent_name: str | None = None) -> dict[str, Any]:
         artifacts.append(
             inspect_source_artifact(path=sidra_facts, source_system="SIDRA", artifact_role="normalized_facts", provenance_mode="materialized_external", source_manifest_hash=source_hash)
         )
+
+        # SIDRA compendium context (contextual/full): acquire the 94-table
+        # socioeconomic compendium and add each table's context_facts to the
+        # manifest so the EFG materializes context_gradient fields.
+        run_profile = str(intent_doc.get("run_profile") or "core_vital")
+        if run_profile in {"contextual", "full"}:
+            from pegasus.core.schemas import UserIntent as _UserIntent
+            from pegasus.workflows.pipeline import _acquire_sidra_compendium_context as _acq_ctx
+            ctx_intent = _UserIntent(**intent_doc)
+            ctx_artifacts, ctx_summary = _acq_ctx(
+                intent=ctx_intent, uf="AL", data_root=data_root,
+                metadata_dir=data_root / "sidra" / "metadata", client=None,
+            )
+            payload["sidra_compendium"] = {
+                "status": ctx_summary.get("status"),
+                "planned": ctx_summary.get("planned_table_count"),
+                "artifacts": ctx_summary.get("artifact_count"),
+                "blocked": len(ctx_summary.get("blocked", [])),
+            }
+            artifacts.extend(ctx_artifacts)
         manifest = write_source_artifact_manifest(
             artifacts=artifacts,
             output_path=data_root / "source_artifacts.json",

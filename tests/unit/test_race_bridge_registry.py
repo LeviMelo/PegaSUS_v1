@@ -7,16 +7,20 @@ from pegasus.core.schemas import UserIntent
 from pegasus.registries.race_bridge import RaceBridgeRegistryError, load_race_bridge_registry, resolve_race_bridge_plan
 
 
-def test_race_bridge_registry_loads_and_validates_smoke_prior():
+def test_race_bridge_registry_loads_and_validates_priors():
     entries = load_race_bridge_registry("config/registries/demographic/race_bridge_priors.yaml")
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry.id == "fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"
-    assert entry.source_axis == "SIM_ADMIN_RACACOR"
-    assert entry.target_axis == "IBGE_SELF_DECLARED_RACE"
-    assert entry.prior_path.exists()
-    prior = entry.load_prior()
-    assert prior.prior_hash == entry.prior_hash
+    by_id = {entry.id: entry for entry in entries}
+    # The compile-enabled default is the identity baseline (admin taken as self-declared);
+    # the smoke fixture is retained but disabled for compile.
+    identity = by_id["identity_admin_as_selfdeclared_v1"]
+    assert identity.enabled_for_compile is True
+    assert identity.source_axis == "SIM_ADMIN_RACACOR"
+    assert identity.target_axis == "IBGE_SELF_DECLARED_RACE"
+    assert "*" in identity.region_scope
+    assert by_id["fixedC_sim_admin_to_ibge_selfdeclared_smoke_v1"].enabled_for_compile is False
+    for entry in entries:
+        assert entry.prior_path.exists()
+        assert entry.load_prior().prior_hash == entry.prior_hash
 
 
 def test_decoupled_intent_does_not_request_bridge():

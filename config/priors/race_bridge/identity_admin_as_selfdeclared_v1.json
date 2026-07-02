@@ -1,0 +1,22 @@
+{
+    "bridge_id": "identity_admin_as_selfdeclared_v1",
+    "mode": "localPi_posteriorC",
+    "source_axis": "SIM_ADMIN_RACACOR",
+    "target_axis": "IBGE_SELF_DECLARED_RACE",
+    "source_categories": ["1", "2", "3", "4", "5"],
+    "target_categories": ["branca", "preta", "amarela", "parda", "indigena"],
+    "sensitivity_width": 0.1,
+    "metadata": {
+        "calibration_scope": "national_baseline_assumption",
+        "epistemic_status": "baseline_admin_equals_self_declared",
+        "warning": "Baseline reclassification model: administrative race/color (DATASUS SIM/SINASC/SIH, recorded by the notifier over the same 5 IBGE categories) is taken as equal to IBGE self-declared census race. This is the standard baseline used by Brazilian vital-statistics race analyses that lack record linkage. It makes NO reclassification correction; documented admin-vs-self-declared discordance (chiefly the branca/parda/preta boundary) is NOT modeled. Replace with a linkage-calibrated emission matrix (record-linked SIM<->census, or a validation-survey confusion matrix) for reclassification-corrected estimates. Missing/invalid admin race is reallocated to the local self-declared composition (local-pi).",
+        "provenance": "Identity emission matrix P(admin=k | self-declared=k)=1; codes map 1->branca, 2->preta, 3->amarela, 4->parda, 5->indigena (IBGE cor/raca coding)."
+    },
+    "matrix": {
+        "1": {"branca": 1.0, "preta": 0.0, "amarela": 0.0, "parda": 0.0, "indigena": 0.0},
+        "2": {"branca": 0.0, "preta": 1.0, "amarela": 0.0, "parda": 0.0, "indigena": 0.0},
+        "3": {"branca": 0.0, "preta": 0.0, "amarela": 1.0, "parda": 0.0, "indigena": 0.0},
+        "4": {"branca": 0.0, "preta": 0.0, "amarela": 0.0, "parda": 1.0, "indigena": 0.0},
+        "5": {"branca": 0.0, "preta": 0.0, "amarela": 0.0, "parda": 0.0, "indigena": 1.0}
+    }
+}

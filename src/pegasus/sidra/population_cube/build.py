@@ -23,6 +23,7 @@ from pegasus.registries.population import assert_dense_population_tensor_allowed
 from pegasus.she.reconstruction.diagnostics import population_tensor_diagnostics
 from pegasus.she.reconstruction.schema import (
     PopulationObjectiveWeights,
+    PopulationSolverTelemetry,
     PopulationTensorProblem,
     PopulationTensorRequest,
     PopulationTensorResult,
@@ -441,6 +442,84 @@ def _sinasc_birth_priors(
     if not any(value is not None for value in values):
         return None, []
     return tuple(values), []
+
+
+def interpolate_census_composition(
+    *,
+    records: list[dict[str, Any]],
+    closure: list[float | None],
+    locality_index: dict[str, int],
+    period_index: dict[str, int],
+    age_index: dict[str, int],
+    sex_index: dict[str, int],
+    race_index: dict[str, int],
+    shape: tuple[int, int, int, int, int],
+) -> list[float]:
+    """Closed-form prior-mean population tensor (MSD §2.8.10 reconstruction, data-poor limit).
+
+    The intercensal (age,sex,race) breakdown is a *reconstruction*, and in the absence of
+    informative flows it is exactly the classical estimate: hold the census joint composition
+    and scale it to each year's closure total. This is the deterministic, instant, cacheable
+    layer -- ``P^0_{s,t,a,x,r} = E_{s,t} * pi_{s,t,a,x,r}`` where ``pi`` is the locality's
+    census (age,sex,race) share linearly interpolated across census years (share-space,
+    clamped to the nearest census outside the observed bracket -- same policy as the §2.8.8
+    race prior, generalized to the full joint). Census years reproduce their observed strata
+    exactly (the shares come from them). Cells with no closure / no census composition fall
+    back to 0 (the projection distributes closure over them). This is the solver's warm start
+    and, when no flow term is informative, the reconstruction itself.
+    """
+    s_count, t_count, a_count, x_count, r_count = shape
+    group_size = a_count * x_count * r_count
+    # locality -> census period -> {(age,sex,race): count}
+    by_loc: dict[str, dict[str, dict[tuple[str, str, str], float]]] = {}
+    for record in records:
+        loc = record["municipality_cod6"]
+        per = record["period"]
+        cell = (record["age_group"], record["sex"], record["race"])
+        by_loc.setdefault(loc, {}).setdefault(per, {})
+        by_loc[loc][per][cell] = by_loc[loc][per].get(cell, 0.0) + float(record["value"])
+
+    values = [0.0] * (s_count * t_count * group_size)
+    for loc, by_year in by_loc.items():
+        if loc not in locality_index:
+            continue
+        shares: dict[str, dict[tuple[str, str, str], float]] = {}
+        for year, counts in by_year.items():
+            total = sum(counts.values())
+            if total > 0:
+                shares[year] = {cell: count / total for cell, count in counts.items()}
+        census_years = sorted(shares)
+        if not census_years:
+            continue
+        anchors_int = [int(y) for y in census_years]
+        for period in period_index:
+            closure_total = closure[locality_index[loc] * t_count + period_index[period]]
+            if closure_total is None or closure_total <= 0:
+                continue
+            year_int = int(period)
+            if year_int <= anchors_int[0]:
+                lo = hi = census_years[0]
+                weight = 0.0
+            elif year_int >= anchors_int[-1]:
+                lo = hi = census_years[-1]
+                weight = 0.0
+            else:
+                lo = census_years[max(i for i, y in enumerate(anchors_int) if y <= year_int)]
+                hi = census_years[min(i for i, y in enumerate(anchors_int) if y >= year_int)]
+                weight = 0.0 if lo == hi else (year_int - int(lo)) / (int(hi) - int(lo))
+            lo_share, hi_share = shares[lo], shares[hi]
+            for cell in set(lo_share) | set(hi_share):
+                age_group, sex, race = cell
+                if age_group not in age_index or sex not in sex_index or race not in race_index:
+                    continue
+                share = (1.0 - weight) * lo_share.get(cell, 0.0) + weight * hi_share.get(cell, 0.0)
+                idx = _cell_index(
+                    locality=loc, period=period, age_group=age_group, sex=sex, race=race,
+                    locality_index=locality_index, period_index=period_index,
+                    age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
+                )
+                values[idx] = closure_total * share
+    return values
 
 
 def _census_race_composition_prior(
@@ -905,6 +984,25 @@ def solve_population_tensor_from_sidra_strata(
                 rates.append(float(deaths) / float(anchor))
         death_rates = tuple(rates)
 
+    # Layer 1 (MSD §2.8.10): closed-form prior-mean tensor -- census composition interpolated
+    # across years, scaled to each closure total. This is the reconstruction in the data-poor
+    # limit and the solver's warm start otherwise.
+    prior_mean = interpolate_census_composition(
+        records=records, closure=closure, locality_index=locality_index, period_index=period_index,
+        age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
+    )
+    census_year_count = len({record["period"] for record in records})
+
+    weights = PopulationObjectiveWeights(
+        anchor=10.0,
+        aging=1.0 if shape[1] > 1 and shape[2] > 1 else 0.0,
+        birth=1.0 if births is not None and shape[1] > 1 else 0.0,
+        death=1.0 if mode == "sim_informed_denominator" and sim_deaths is not None else 0.0,
+        migration=0.1 if shape[1] >= 3 else 0.0,
+        migration_total=0.5 if migration_locality_totals is not None else 0.0,
+        race=0.1 if race_composition_prior is not None else 0.0,
+        age_smooth=0.05 if shape[2] >= 3 else 0.0,
+    )
     problem = PopulationTensorProblem(
         shape=shape,
         anchors=tuple(anchors),
@@ -917,30 +1015,44 @@ def solve_population_tensor_from_sidra_strata(
         closure_totals=tuple(closure),
         migration_locality_totals=migration_locality_totals,
         migration_bounds=tuple(migration_bounds),
-        # No explicit warm start: the solver seeds intercensal (a,x,r) cells from each
-        # locality's census proportions (projected_gradient._initial_population), the
-        # demographically-correct reconstruction for a closure-only year (MSD §2.8.10).
-        weights=PopulationObjectiveWeights(
-            anchor=10.0,
-            aging=1.0 if shape[1] > 1 and shape[2] > 1 else 0.0,
-            birth=1.0 if births is not None and shape[1] > 1 else 0.0,
-            death=1.0 if mode == "sim_informed_denominator" and sim_deaths is not None else 0.0,
-            migration=0.1 if shape[1] >= 3 else 0.0,
-            migration_total=0.5 if migration_locality_totals is not None else 0.0,
-            race=0.1 if race_composition_prior is not None else 0.0,
-            age_smooth=0.05 if shape[2] >= 3 else 0.0,
-        ),
+        initial_population=tuple(prior_mean),
+        weights=weights,
     )
     solver = select_population_solver(mode=mode, solver_id=solver_id, n_cells=problem.n_cells)
-    optimized = solve_population_tensor_problem(
-        problem,
-        solver_id=solver.solver_id,
-        max_iterations=max_iterations,
-        tolerance=tolerance,
+    # Layer 2: refine the prior mean ONLY when a flow term carries data (multiple censuses to
+    # cohort-age between, a SIM death prior, births, or an observed net-migration residual).
+    # Absent all of them the (a,x,r) structure is underdetermined and its optimum IS the prior
+    # mean -- so skip the (flat, slow) optimization and return the closed-form layer directly.
+    informative = (
+        census_year_count >= 2
+        or weights.death > 0.0
+        or weights.birth > 0.0
+        or weights.migration_total > 0.0
     )
-    if not optimized.telemetry.converged:
-        warnings.append("population_tensor_solver_nonconvergence")
-        reconstruction_uncertainty = max(reconstruction_uncertainty, 0.1)
+    if informative:
+        optimized = solve_population_tensor_problem(
+            problem, solver_id=solver.solver_id, max_iterations=max_iterations, tolerance=tolerance,
+        )
+        if not optimized.telemetry.converged:
+            warnings.append("population_tensor_solver_nonconvergence")
+            reconstruction_uncertainty = max(reconstruction_uncertainty, 0.1)
+    else:
+        from pegasus.she.reconstruction.projected_gradient import (
+            PopulationOptimizationResult,
+            _project_population,
+        )
+        projected = _project_population(problem, list(prior_mean))
+        optimized = PopulationOptimizationResult(
+            population=tuple(projected),
+            migration=(0.0,) * n_cells,
+            telemetry=PopulationSolverTelemetry(
+                converged=True, iterations=0,
+                initial_objective=0.0, final_objective=0.0,
+                projected_gradient_norm=0.0, relative_objective_change=0.0, step_size=0.0,
+                objective_terms={},
+            ),
+        )
+        warnings.append("population_reconstruction_closed_form_no_informative_flows")
 
     rows: list[dict[str, Any]] = []
     for locality in localities:

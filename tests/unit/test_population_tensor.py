@@ -180,3 +180,38 @@ def test_sparse_population_memory_preflight_aborts():
     )
     with pytest.raises(MemoryPreflightError):
         plan_sparse_population_solver(problem, available_bytes=64)
+
+
+def test_interpolate_census_composition_reproduces_and_interpolates():
+    """The closed-form prior mean (MSD §2.8.10) reproduces census strata exactly and
+    linearly interpolates the joint composition, scaled to each year's closure total."""
+    from pegasus.sidra.population_cube.build import interpolate_census_composition
+
+    # 1 locality, 3 years (2010 census, 2015 intercensal, 2020 census), 1 age, 1 sex, 2 races.
+    shape = (1, 3, 1, 1, 2)
+    locality_index = {"270010": 0}
+    period_index = {"2010": 0, "2015": 1, "2020": 2}
+    age_index = {"__total__": 0}
+    sex_index = {"__total__": 0}
+    race_index = {"branca": 0, "parda": 1}
+    # 2010: 80/20 branca/parda; 2020: 40/60. 2015 should interpolate to 60/40.
+    records = [
+        {"municipality_cod6": "270010", "period": "2010", "age_group": "__total__", "sex": "__total__", "race": "branca", "value": 800.0},
+        {"municipality_cod6": "270010", "period": "2010", "age_group": "__total__", "sex": "__total__", "race": "parda", "value": 200.0},
+        {"municipality_cod6": "270010", "period": "2020", "age_group": "__total__", "sex": "__total__", "race": "branca", "value": 400.0},
+        {"municipality_cod6": "270010", "period": "2020", "age_group": "__total__", "sex": "__total__", "race": "parda", "value": 600.0},
+    ]
+    closure = [1000.0, 2000.0, 1000.0]  # (locality,year) totals
+    values = interpolate_census_composition(
+        records=records, closure=closure, locality_index=locality_index, period_index=period_index,
+        age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
+    )
+    # 2010 census reproduced (branca 800, parda 200):
+    assert values[0] == pytest.approx(800.0)
+    assert values[1] == pytest.approx(200.0)
+    # 2015 interpolated shares (0.6/0.4) x closure 2000:
+    assert values[2] == pytest.approx(1200.0)
+    assert values[3] == pytest.approx(800.0)
+    # 2020 census reproduced (branca 400, parda 600):
+    assert values[4] == pytest.approx(400.0)
+    assert values[5] == pytest.approx(600.0)

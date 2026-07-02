@@ -20,6 +20,12 @@ ADMIN_RACE_LABELS = {
 }
 
 DEFAULT_TARGET_CATEGORIES = ["branca", "preta", "amarela", "parda", "indigena"]
+# A DATASUS race code counts as a valid administrative observation for the bridge when its
+# normalizer state marks it valid. The normalizers (datasus/normalize/primitives.py) emit the
+# generic marker "valid" for an in-range 1-5 race code; earlier bridge code checked only for
+# "valid_admin_race", so EVERY real record was silently treated as missing and reallocated
+# uniformly via local-pi (the "uniform race" bug). Accept both markers.
+VALID_ADMIN_RACE_STATES: frozenset[str] = frozenset({"valid_admin_race", "valid"})
 RACE_BRIDGE_BOOTSTRAP_REPLICATES = 200
 RACE_BRIDGE_MATRIX_CONCENTRATION = 250.0
 RACE_BRIDGE_PI_CONCENTRATION = 250.0
@@ -204,7 +210,7 @@ def summarize_sim_admin_race_counts(
     states = df["race_missingness_state"].to_list() if "race_missingness_state" in df.columns else [None] * df.height
     for code_value, state in zip(df["race_color_admin"].to_list(), states, strict=False):
         code = _canonical_code(code_value)
-        if code in raw_counts and state == "valid_admin_race":
+        if code in raw_counts and (state is None or state in VALID_ADMIN_RACE_STATES):
             raw_counts[code] += 1
         else:
             missing += 1
@@ -233,7 +239,7 @@ def bridge_admin_race_group_counts(
     states = race_states if race_states is not None else [None] * len(race_codes)
     for code_value, state in zip(race_codes, states, strict=False):
         code = _canonical_code(code_value)
-        if code in raw_counts and state in (None, "valid_admin_race"):
+        if code in raw_counts and (state is None or state in VALID_ADMIN_RACE_STATES):
             raw_counts[code] += 1
         else:
             missing += 1

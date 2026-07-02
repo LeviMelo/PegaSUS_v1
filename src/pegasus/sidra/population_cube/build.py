@@ -238,7 +238,7 @@ def _coalesce_race_columns(
             pl.lit(None, dtype=pl.Utf8).alias(out_state),
         )
     primary_valid = (
-        (pl.col(primary_state) == "valid_admin_race") if (has_primary and primary_state in frame.columns)
+        (pl.col(primary_state).is_in(["valid_admin_race", "valid"])) if (has_primary and primary_state in frame.columns)
         else pl.col(primary_code).is_not_null() if has_primary
         else pl.lit(False)
     )

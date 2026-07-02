@@ -116,22 +116,51 @@ def _project_migration(problem: PopulationTensorProblem, values: list[float], bo
 
 
 def _initial_population(problem: PopulationTensorProblem) -> list[float]:
+    """Warm-start each (locality, year) group.
+
+    Anchored (census) years start at their observed strata. Intercensal years (closure
+    total only, MSD §2.8.10) are the RECONSTRUCTION target: seed them with the locality's
+    census (age,sex,race) shares scaled to that year's closure total, so the aging/race/
+    smoothness losses (§2.8.4/§2.8.8/§2.8.9) refine a demographically-plausible structure
+    rather than a flat 1/n split. A uniform seed is a local trap here -- age-smoothness has
+    zero gradient on a flat distribution, so nothing drives the solver off it; the census
+    shares are the demographically correct starting point for a single-census window.
+    """
+    def _finish(vals: np.ndarray) -> list[float]:
+        if _fast_projection_supported(problem):
+            return [float(v) for v in _np_project_population(problem, vals)]
+        return _project_population(problem, [float(v) for v in vals])
+
+    # An explicitly supplied warm start wins (callers that already know a good iterate,
+    # e.g. CTR sub-solves and unit tests). The census-proportion seed below is only for the
+    # SIDRA-strata reconstruction, which supplies no initial_population.
     if problem.initial_population is not None:
-        return _project_population(problem, list(problem.initial_population))
-    values = [anchor if anchor is not None else 0.0 for anchor in problem.anchors]
-    if problem.closure_totals is not None:
-        s_count, t_count, a_count, x_count, r_count = problem.shape
-        group_size = a_count * x_count * r_count
-        for s in range(s_count):
-            for t in range(t_count):
-                total = problem.closure_totals[s * t_count + t]
-                if total is None:
-                    continue
-                start = (s * t_count + t) * group_size
-                if not any(problem.anchors[i] is not None for i in range(start, start + group_size)):
-                    for i in range(start, start + group_size):
-                        values[i] = total / group_size
-    return _project_population(problem, values)
+        return _finish(np.array(problem.initial_population, dtype=np.float64))
+
+    anchors = np.array([a if a is not None else np.nan for a in problem.anchors], dtype=np.float64)
+    if problem.closure_totals is None:
+        return _finish(np.nan_to_num(anchors, nan=0.0))
+
+    s_count, t_count, a_count, x_count, r_count = problem.shape
+    group_size = a_count * x_count * r_count
+    anch_st = anchors.reshape(s_count, t_count, group_size)
+    mass = np.nansum(anch_st, axis=2)                          # (s,t) observed mass per group
+    has_anchor = np.any(~np.isnan(anch_st), axis=2)            # (s,t)
+    closure = np.array(
+        [c if c is not None else np.nan for c in problem.closure_totals], dtype=np.float64
+    ).reshape(s_count, t_count)
+    values = np.nan_to_num(anch_st, nan=0.0).copy()            # census years keep observed strata
+    for s in range(s_count):
+        best_t = int(np.argmax(mass[s]))
+        if mass[s, best_t] <= 0:
+            continue
+        # Locality census (age,sex,race) shares from its richest anchored year.
+        shares = np.nan_to_num(anch_st[s, best_t], nan=0.0) / mass[s, best_t]
+        for t in range(t_count):
+            if has_anchor[s, t] or np.isnan(closure[s, t]):
+                continue
+            values[s, t] = closure[s, t] * shares                # seed: census shape x year total
+    return _finish(values.reshape(-1))
 
 
 def _fast_projection_supported(problem: PopulationTensorProblem) -> bool:

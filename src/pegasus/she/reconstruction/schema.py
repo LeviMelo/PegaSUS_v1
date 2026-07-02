@@ -23,10 +23,6 @@ class PopulationObjectiveWeights:
     migration_total: float = 0.0
     race: float = 0.0
     age_smooth: float = 0.05
-    # Soft anchor pulling each cell toward its census-composition-implied value
-    # (closure total * census joint share) so intercensal years inherit the census
-    # (age,sex,race) STRUCTURE instead of collapsing to a uniform split (MSD §2.8.10).
-    composition: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -41,10 +37,6 @@ class PopulationTensorProblem:
     death_rates: tuple[float | None, ...] | None = None
     sim_deaths: tuple[float | None, ...] | None = None
     race_composition_prior: tuple[float | None, ...] | None = None
-    # Full-joint (age,sex,race) composition prior: per-cell target population
-    # (closure_total * census joint share), None where no census composition or
-    # closure exists. Drives intercensal demographic structure (MSD §2.8.10).
-    composition_prior: tuple[float | None, ...] | None = None
     closure_totals: tuple[float | None, ...] | None = None
     migration_totals: tuple[float | None, ...] | None = None
     # Observed net-migration total per (locality, time), shape (S, T). ``None`` in a

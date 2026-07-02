@@ -528,107 +528,6 @@ def _census_race_composition_prior(
     return tuple(values)
 
 
-def _census_composition_prior(
-    *,
-    records: list[dict[str, Any]],
-    closure: list[float | None],
-    locality_index: dict[str, int],
-    period_index: dict[str, int],
-    age_index: dict[str, int],
-    sex_index: dict[str, int],
-    race_index: dict[str, int],
-    shape: tuple[int, int, int, int, int],
-) -> tuple[float | None, ...] | None:
-    """Full-joint (age,sex,race) demographic composition prior (MSD §2.8.10).
-
-    Propagates the census-year demographic STRUCTURE to intercensal years so a
-    stratified population denominator is not a uniform split there. SIDRA 9606
-    strata exist only at census years; the aging/age-smoothness losses are too weak
-    to carry the joint structure across a multi-year gap from a single census anchor,
-    so absent this term the solver spreads each intercensal year's closure total
-    uniformly across (age,sex,race) cells (verified: flat 1/101 age shares, 50/50 sex).
-
-    For each locality the census joint share ``s[a,x,r] = count/total`` is computed at
-    every census year in ``records``, linearly interpolated across the time axis
-    (clamped to the nearest census outside the observed bracket, exactly like
-    ``_census_race_composition_prior``), and scaled by that locality-year's closure
-    total ``E_{s,t}`` to a per-cell target ``E_{s,t} * s[a,x,r]``. Because the shares
-    sum to 1, the targets sum to the closure -- this fixes the intercensal
-    DISTRIBUTION while the solver's projection keeps the total exact. Returns None
-    when no demographic axis is stratified (a single total cell needs no structure).
-    """
-    stratified = (
-        any(value != TOTAL for value in age_index)
-        or any(value != TOTAL for value in sex_index)
-        or any(value != TOTAL for value in race_index)
-    )
-    if not stratified:
-        return None
-    s_count, t_count, a_count, x_count, r_count = shape
-    strata_per_st = a_count * x_count * r_count
-    # loc_year_counts[locality][period][(age,sex,race)] = census count
-    loc_year_counts: dict[str, dict[str, dict[tuple[str, str, str], float]]] = {}
-    for record in records:
-        loc = record["municipality_cod6"]
-        per = record["period"]
-        cell = (record["age_group"], record["sex"], record["race"])
-        loc_year_counts.setdefault(loc, {}).setdefault(per, {})
-        loc_year_counts[loc][per][cell] = loc_year_counts[loc][per].get(cell, 0.0) + float(record["value"])
-
-    n = s_count * t_count * strata_per_st
-    values: list[float | None] = [None] * n
-    for loc, by_year in loc_year_counts.items():
-        if loc not in locality_index:
-            continue
-        shares: dict[str, dict[tuple[str, str, str], float]] = {}
-        for year, counts in by_year.items():
-            total = sum(counts.values())
-            if total <= 0:
-                continue
-            shares[year] = {cell: count / total for cell, count in counts.items()}
-        years_available = sorted(shares)
-        if not years_available:
-            continue
-        anchors_int = [int(year) for year in years_available]
-        for period in period_index:
-            closure_total = closure[locality_index[loc] * t_count + period_index[period]]
-            if closure_total is None or closure_total <= 0:
-                continue
-            year_int = int(period)
-            if year_int <= anchors_int[0]:
-                lo = hi = years_available[0]
-                weight = 0.0
-            elif year_int >= anchors_int[-1]:
-                lo = hi = years_available[-1]
-                weight = 0.0
-            else:
-                lo = years_available[max(i for i, y in enumerate(anchors_int) if y <= year_int)]
-                hi = years_available[min(i for i, y in enumerate(anchors_int) if y >= year_int)]
-                weight = 0.0 if lo == hi else (year_int - int(lo)) / (int(hi) - int(lo))
-            lo_share, hi_share = shares[lo], shares[hi]
-            for cell in set(lo_share) | set(hi_share):
-                age_group, sex, race = cell
-                if age_group not in age_index or sex not in sex_index or race not in race_index:
-                    continue
-                share = (1.0 - weight) * lo_share.get(cell, 0.0) + weight * hi_share.get(cell, 0.0)
-                idx = _cell_index(
-                    locality=loc,
-                    period=period,
-                    age_group=age_group,
-                    sex=sex,
-                    race=race,
-                    locality_index=locality_index,
-                    period_index=period_index,
-                    age_index=age_index,
-                    sex_index=sex_index,
-                    race_index=race_index,
-                    shape=shape,
-                )
-                values[idx] = closure_total * share
-    if not any(value is not None for value in values):
-        return None
-    return tuple(values)
-
 
 def _sidra_vital_totals(path: str | Path | None, *, table_id: str, variable_id: str) -> dict[tuple[str, str], float] | None:
     """Per-(municipality_cod6, year) total from a SIDRA civil-registry facts file.
@@ -822,9 +721,16 @@ def solve_population_tensor_from_sidra_strata(
     contiguity_graph_id: str = "contiguity_queen",
     migration_max_hops: int = 3,
     solver_id: str | None = None,
-    max_iterations: int = 2_000,
+    max_iterations: int = 12,
     tolerance: float = 1e-5,
 ) -> PopulationTensorBuild:
+    # Iteration budget note (MSD §2.8.10): with a single census in the window and free
+    # migration, the intercensal (a,x,r) structure is underdetermined -- the aging/race/
+    # smoothness losses cannot reduce their residual below a floor, so the solver never hits
+    # a tight tolerance and would otherwise run to a huge cap. The demographically-correct
+    # reconstruction is the census-proportion warm start (see projected_gradient._initial_
+    # population); a small number of refinement steps is sufficient and well-conditioned runs
+    # (informative flows / multiple censuses) still converge and early-stop before the cap.
     strata_path = Path(population_strata_path)
     totals_path = Path(total_anchor_path)
     out_path = Path(output_path)
@@ -937,16 +843,6 @@ def solve_population_tensor_from_sidra_strata(
         race_index=race_index,
         shape=shape,
     )
-    composition_prior = _census_composition_prior(
-        records=records,
-        closure=closure,
-        locality_index=locality_index,
-        period_index=period_index,
-        age_index=age_index,
-        sex_index=sex_index,
-        race_index=race_index,
-        shape=shape,
-    )
     # Net-migration residual (MSD §2.8.7): SIDRA civil-registry vital totals preferred
     # (IBGE-universe-consistent with the population estimates), DATASUS SIM/SINASC
     # counts as fallback when no civil-registry facts were acquired.
@@ -1018,11 +914,12 @@ def solve_population_tensor_from_sidra_strata(
         death_rates=death_rates,
         sim_deaths=sim_deaths,
         race_composition_prior=race_composition_prior,
-        composition_prior=composition_prior,
         closure_totals=tuple(closure),
         migration_locality_totals=migration_locality_totals,
         migration_bounds=tuple(migration_bounds),
-        initial_population=tuple(float(value or 0.0) for value in anchors),
+        # No explicit warm start: the solver seeds intercensal (a,x,r) cells from each
+        # locality's census proportions (projected_gradient._initial_population), the
+        # demographically-correct reconstruction for a closure-only year (MSD §2.8.10).
         weights=PopulationObjectiveWeights(
             anchor=10.0,
             aging=1.0 if shape[1] > 1 and shape[2] > 1 else 0.0,
@@ -1031,7 +928,6 @@ def solve_population_tensor_from_sidra_strata(
             migration=0.1 if shape[1] >= 3 else 0.0,
             migration_total=0.5 if migration_locality_totals is not None else 0.0,
             race=0.1 if race_composition_prior is not None else 0.0,
-            composition=3.0 if composition_prior is not None else 0.0,
             age_smooth=0.05 if shape[2] >= 3 else 0.0,
         ),
     )

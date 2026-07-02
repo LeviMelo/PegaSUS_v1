@@ -1,0 +1,41 @@
+schema_version: "1.0"
+registry_version: "disease_concepts.v1"
+created_at: "2026-07-02"
+provenance: >-
+  Disease Concept Registry manifest (MSD-II §II.13.1). Multi-label, provenance/projection
+  typed. Structural WHO concepts (chapter/block) and multi-label groupers (AHRQ CCSR/CCIR,
+  pediatric CCC) are imported at query time via pegasus.disease.concept_registry wrapping
+  icd-mappings@0.6.2 (ICD-10-CM/ICD-10 groupers => projection_status=approximate on CID-10).
+  The custom_concepts below are Brazilian lists defined directly on CID-10 (projection exact).
+
+# icd-mappings groupers enabled for import (documented; the importer wraps these).
+groupers:
+  - {id: ccsr, family: clinical_category, code_system: ICD-10-CM, multi_label: true,  projection: approximate}
+  - {id: ccir, family: clinical_category, code_system: ICD-10-CM, multi_label: false, projection: approximate}
+  - {id: ccc_category, family: pediatric_ccc, code_system: ICD-10, multi_label: false, projection: approximate}
+
+# Brazilian custom concepts (defined on CID-10, projection_status=exact). Multi-label: a code
+# may belong to several. Ranges are 3-char CID-10 category intervals (inclusive).
+#
+# ICSAP -- Internações por Condições Sensíveis à Atenção Primária (avoidable hospitalizations,
+# Portaria SAS/MS nº 221/2008). A primary-care-quality signal, heavily used in Brazilian
+# health-services epidemiology. Major groups (representative subset of the 19):
+custom_concepts:
+  - {concept_id: brazilian_icsap_gastroenterite,       concept_family: avoidable, chronic: acute,   ranges: ["A00-A09", "E86-E86"]}
+  - {concept_id: brazilian_icsap_anemia,               concept_family: avoidable, chronic: mixed,   ranges: ["D50-D50"]}
+  - {concept_id: brazilian_icsap_def_nutricional,      concept_family: avoidable, chronic: mixed,   ranges: ["E40-E46", "E50-E64"]}
+  - {concept_id: brazilian_icsap_inf_ouvido_garganta,  concept_family: avoidable, chronic: acute,   ranges: ["H66-H66", "J00-J03", "J06-J06", "J31-J31"]}
+  - {concept_id: brazilian_icsap_pneumonia_bacteriana, concept_family: avoidable, chronic: acute,   ranges: ["J13-J15", "J18-J18"]}
+  - {concept_id: brazilian_icsap_asma,                 concept_family: avoidable, chronic: chronic, ranges: ["J45-J46"]}
+  - {concept_id: brazilian_icsap_dpoc,                 concept_family: avoidable, chronic: chronic, ranges: ["J20-J21", "J40-J44", "J47-J47"]}
+  - {concept_id: brazilian_icsap_hipertensao,          concept_family: avoidable, chronic: chronic, ranges: ["I10-I11"]}
+  - {concept_id: brazilian_icsap_angina,               concept_family: avoidable, chronic: chronic, ranges: ["I20-I20"]}
+  - {concept_id: brazilian_icsap_insuf_cardiaca,       concept_family: avoidable, chronic: chronic, ranges: ["I50-I50", "J81-J81"]}
+  - {concept_id: brazilian_icsap_cerebrovascular,      concept_family: avoidable, chronic: chronic, ranges: ["G45-G46", "I63-I67", "I69-I69"]}
+  - {concept_id: brazilian_icsap_diabetes,             concept_family: avoidable, chronic: chronic, ranges: ["E10-E14"]}
+  - {concept_id: brazilian_icsap_epilepsia,            concept_family: avoidable, chronic: chronic, ranges: ["G40-G41"]}
+  - {concept_id: brazilian_icsap_inf_urinaria,         concept_family: avoidable, chronic: acute,   ranges: ["N10-N12", "N30-N30", "N34-N34"]}
+  - {concept_id: brazilian_icsap_inf_pele,             concept_family: avoidable, chronic: acute,   ranges: ["A46-A46", "L01-L04", "L08-L08"]}
+  - {concept_id: brazilian_icsap_dip,                  concept_family: avoidable, chronic: acute,   ranges: ["N70-N73", "N75-N76"]}
+  - {concept_id: brazilian_icsap_ulcera_gi,            concept_family: avoidable, chronic: chronic, ranges: ["K25-K28"]}
+  - {concept_id: brazilian_icsap_prenatal_parto,       concept_family: avoidable, chronic: acute,   ranges: ["A50-A50", "O23-O23", "P35-P35"]}

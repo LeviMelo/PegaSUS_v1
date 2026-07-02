@@ -21,6 +21,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10"]
 gpu = ["torch>=2.4"]
+# Disease Semantic Axis (MSD-II §II.13): deterministic ICD/CID hierarchy + multi-label
+# groupers. Embedding build (Qwen3, §II.13.4) is a separate, offline, optional step.
+disease = ["simple-icd-10>=2.1", "icd-mappings>=0.6", "scipy>=1.11"]
 
 [project.scripts]
 pegasus = "pegasus.cli:app"

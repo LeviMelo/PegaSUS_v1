@@ -50,11 +50,14 @@ def _to_gaussian_field(
     *,
     seed: int,
     keep_variables: set[str] | frozenset[str] | None = None,
+    exposure=None,
 ) -> GaussianField:
     if isinstance(source, CommonPanel):
-        return gaussianize_field(assemble_ldo_tensor(source, keep_variables=keep_variables), seed=seed)
+        return gaussianize_field(
+            assemble_ldo_tensor(source, keep_variables=keep_variables), seed=seed, exposure=exposure
+        )
     if isinstance(source, LDOField):
-        return gaussianize_field(source, seed=seed)
+        return gaussianize_field(source, seed=seed, exposure=exposure)
     if isinstance(source, GaussianField):
         return source
     raise TypeError(f"run_ldo cannot consume {type(source).__name__}")
@@ -98,6 +101,7 @@ def run_ldo(
     adaptive_k: bool = True,
     disease_graph=None,
     variable_meta: dict[str, dict] | None = None,
+    exposure=None,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass.
 
@@ -105,7 +109,7 @@ def run_ldo(
     prior: related disease-concept variables get a lower ℓ1 penalty so their sparse
     links survive. Absent it, the estimator is the plain scalar-penalty LVGLASSO.
     """
-    gf = _to_gaussian_field(source, seed=seed, keep_variables=keep_variables)
+    gf = _to_gaussian_field(source, seed=seed, keep_variables=keep_variables, exposure=exposure)
     p, S, T = gf.shape
 
     requested_K = K

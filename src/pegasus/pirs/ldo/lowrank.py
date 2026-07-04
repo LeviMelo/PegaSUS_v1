@@ -66,10 +66,24 @@ def fit_sparse_plus_lowrank(
     tol: float = 1e-5,
     edge_threshold: float = 0.05,
     loading_threshold: float = 0.3,
+    penalty_matrix: np.ndarray | None = None,
 ) -> SparseLowRankFit:
-    """LVGLASSO ADMM: ``Ω = S - L`` from an empirical covariance."""
+    """LVGLASSO ADMM: ``Ω = S - L`` from an empirical covariance.
+
+    ``penalty_matrix`` (p×p, symmetric ≥0) overrides the scalar ``lambda1`` with a
+    per-pair ℓ1 penalty — the disease-structure prior (§II.6/§5.2): structurally
+    related disease-concept variables get a *lower* penalty so their (sparse) edges
+    survive, i.e. dependency profiles vary smoothly across the disease hierarchy.
+    Absent it, the estimator is the plain scalar-penalty LVGLASSO (a no-op prior).
+    """
     p = emp_cov.shape[0]
     C = 0.5 * (emp_cov + emp_cov.T) + 1e-4 * np.eye(p)
+    if penalty_matrix is not None:
+        penalty_matrix = np.asarray(penalty_matrix, dtype=np.float64)
+        if penalty_matrix.shape != (p, p):
+            raise ValueError(f"penalty_matrix must be {(p, p)}, got {penalty_matrix.shape}")
+        penalty_matrix = np.clip(0.5 * (penalty_matrix + penalty_matrix.T), 0.0, None)
+    tau1 = (penalty_matrix if penalty_matrix is not None else lambda1) / rho
     S = np.eye(p)
     L = np.zeros((p, p))
     U = np.zeros((p, p))
@@ -79,8 +93,8 @@ def fit_sparse_plus_lowrank(
     for it in range(1, max_iter + 1):
         # R-step: prox of -logdet + linear term.
         R = _prox_neg_logdet(S - L - U - C / rho, rho)
-        # S-step: soft-threshold off-diagonal.
-        S = _soft_threshold_offdiag(R + L + U, lambda1 / rho)
+        # S-step: soft-threshold off-diagonal (scalar or disease-informed per-pair penalty).
+        S = _soft_threshold_offdiag(R + L + U, tau1)
         # L-step: PSD projection with trace shrink.
         L = _psd_project_shifted(S - R - U, lambda2 / rho)
         # Dual update.

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from pegasus.pirs.ldo.covariance import pairwise_correlation
+from pegasus.pirs.ldo.disease_prior import tile_penalty_across_lags
 from pegasus.pirs.ldo.margins import GaussianField
 from pegasus.pirs.ldo.lowrank import SparseLowRankFit, fit_sparse_plus_lowrank
 
@@ -65,19 +66,31 @@ def fit_lagged_links(
     edge_threshold: float = 0.05,
     min_coverage: int = 30,
     min_overlap: int = 20,
+    disease_penalty: np.ndarray | None = None,
 ) -> LaggedFit:
     """Fit the time-extended precision (missing-aware) and read off directed lagged links.
 
     The lag-extended features (variable × lag) are correlated pairwise-complete —
     each entry from the cells where both lagged features are observed — so links
     survive the sparsity of real panels instead of collapsing under impute-0.
+
+    ``disease_penalty`` (``p×p``, over the base variables) supplies the disease-axis
+    prior (§II.6/§5.2): it is tiled across the lag blocks and subset to the kept
+    features so related-disease links (at any lag) get a lower ℓ1 penalty.
     """
     p = len(field.variables)
     feat = _build_lagged_feature_matrix(field.Z, K)  # (p*(K+1), n)
     pw = pairwise_correlation(feat, min_coverage=min_coverage, min_overlap=min_overlap)
     kept = pw.kept
     pos = {f: a for a, f in enumerate(kept)}  # feature index → matrix position
-    fit = fit_sparse_plus_lowrank(pw.correlation, lambda1=lambda1, lambda2=lambda2, edge_threshold=edge_threshold)
+    penalty_matrix = None
+    if disease_penalty is not None:
+        big = tile_penalty_across_lags(disease_penalty, K, lambda1)
+        penalty_matrix = big[np.ix_(kept, kept)]
+    fit = fit_sparse_plus_lowrank(
+        pw.correlation, lambda1=lambda1, lambda2=lambda2,
+        edge_threshold=edge_threshold, penalty_matrix=penalty_matrix,
+    )
 
     S = fit.S
     d = np.sqrt(np.clip(np.diag(S), 1e-12, None))

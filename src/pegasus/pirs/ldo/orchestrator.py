@@ -91,8 +91,14 @@ def run_ldo(
     keep_variables: set[str] | frozenset[str] | None = None,
     max_workers: int | None = None,
     adaptive_k: bool = True,
+    disease_graph=None,
 ) -> LDORun:
-    """Fit the LDO and read off certified LinkRecords in one pass."""
+    """Fit the LDO and read off certified LinkRecords in one pass.
+
+    ``disease_graph`` (a structural ``DiseaseGraph``, §II.6) supplies the disease-axis
+    prior: related disease-concept variables get a lower ℓ1 penalty so their sparse
+    links survive. Absent it, the estimator is the plain scalar-penalty LVGLASSO.
+    """
     gf = _to_gaussian_field(source, seed=seed, keep_variables=keep_variables)
     p, S, T = gf.shape
 
@@ -104,7 +110,15 @@ def run_ldo(
     # than silently subsampling; the caller should tile/multi-resolve (§II.7).
     envelope_bytes = assert_within_envelope(p=p, S=S, T=T, K=K) if enforce_envelope else None
 
-    fit_kwargs = dict(kappa=kappa, lambda1=lambda1, lambda2=lambda2, edge_threshold=edge_threshold)
+    disease_penalty = None
+    if disease_graph is not None:
+        from pegasus.pirs.ldo.disease_prior import disease_penalty_matrix
+        disease_penalty = disease_penalty_matrix(gf.variables, disease_graph, lambda1=lambda1)
+
+    fit_kwargs = dict(
+        kappa=kappa, lambda1=lambda1, lambda2=lambda2,
+        edge_threshold=edge_threshold, disease_penalty=disease_penalty,
+    )
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
 
     stability = stability_select(

@@ -699,10 +699,21 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
     # carries the true event/denominator counts for this ratio rather than 0/None.
     num_total = float(n.select(pl.col("value_numerator").sum()).item() or 0.0)
     den_total = float(d.select(pl.col("value_denominator").sum()).item() or 0.0)
+    # EFG-OUT-01 (MSD-III §II.3): emit the count+exposure MeasuredQuantity as a sidecar
+    # (the rate parquet above is the *derived* view). Preserves count-variance and the
+    # log(exposure) offset so the LDO models count directly rather than reversing a rate.
+    from pegasus.efg.measured_quantity import measured_quantity_from_rn_join, write_measured_quantity
+    mq = measured_quantity_from_rn_join(
+        joined, keys=keys, strata=numerator_strata, field_id=field.id,
+        provenance=field.provenance, denom_fragility=combined_fragility, axes=dict(field.axes or {}),
+    )
+    mq_path = write_measured_quantity(mq, output_dir / f"{field.id}.measured_quantity.parquet")
     return path, rows, {
         "denom_fragility": combined_fragility,
         "n_events": num_total,
         "n_denom": den_total if den_total > 0 else None,
+        "offset_semantics": "log_exposure",
+        "measured_quantity_ref": str(mq_path),
     }
 
 

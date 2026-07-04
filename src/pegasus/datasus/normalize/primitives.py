@@ -199,7 +199,10 @@ class Cols:
         Returns ``(code_value, state)`` where state ∈ {missing, valid, unknown,
         invalid}. Callers may relabel to their schema vocabulary."""
         d = self.digits(*names)
-        value = pl.when(d.is_in(["1", "2", "3", "4", "5"])).then(d).when(d.is_in(["9", "99"])).then(d).otherwise(None)
+        # Preserve the raw code as a provenance mark for every non-blank input —
+        # valid (1-5), unknown (9/99), AND invalid outliers — matching the scalar
+        # ``decode_race_admin`` oracle; only blank/no-digit input yields a null value.
+        value = pl.when(d.is_null()).then(None).otherwise(d)
         state = (
             pl.when(d.is_null()).then(pl.lit("missing"))
             .when(d.is_in(["1", "2", "3", "4", "5"])).then(pl.lit("valid"))

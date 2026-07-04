@@ -139,12 +139,36 @@ def _moran_contiguity(values: list[float]) -> float | None:
     return float((n / weight_total) * (cross / denom))
 
 
-def _moran_corrected_n_eff(n_events: float | None, moran_i: float | None) -> float | None:
-    if n_events is None:
+def _kish_effective_n(weights: list[float]) -> float | None:
+    """Kish effective sample size ``(Σw)² / Σw²`` (MSD-I §3.12.3).
+
+    Down-weights the raw cell count when the per-cell weights are concentrated
+    in a few cells. Under equal weights it equals the cell count. ``w`` is the
+    numerator count for count variables and the denominator for rate/proportion
+    variables (§3.12.3). Returns ``None`` when no positive weight exists.
+    """
+    s1 = 0.0
+    s2 = 0.0
+    for weight in weights:
+        weight = abs(float(weight))
+        s1 += weight
+        s2 += weight * weight
+    if s2 <= 0:
         return None
-    if moran_i is None or moran_i <= 0:
-        return float(n_events)
-    return float(max(1.0, n_events * (1.0 - moran_i) / (1.0 + moran_i)))
+    return (s1 * s1) / s2
+
+
+def _moran_corrected_n_eff(base_n: float | None, moran_i: float | None) -> float | None:
+    """Deflate an effective size by spatial autocorrelation (MSD-I §3.12.3).
+
+    ``n_eff = base_n · 1/(1 + max(0, MoranI))`` — positive autocorrelation reduces
+    the count of *independent* observations; non-positive autocorrelation leaves
+    it unchanged.
+    """
+    if base_n is None:
+        return None
+    deflation = 1.0 / (1.0 + max(0.0, moran_i or 0.0))
+    return float(max(1.0, base_n * deflation))
 
 
 def compute_q_state(
@@ -166,23 +190,28 @@ def compute_q_state(
     denom_fragility = field.support.get("denom_fragility", 1.0 if n_denom is None else 0.0)
     zero_inflation = field.support.get("zero_inflation", 0.0)
     values = _numeric_values(tensor)
+    denom_values = _numeric_values(denominator)
     cv = field.support.get("cv")
     moran_i = field.support.get("moran_i")
     temporal_roughness = field.support.get("temporal_roughness")
     spatial_entropy = field.support.get("spatial_entropy")
     q_warnings = list(field.warnings or [])
-    if values:
-        cv = cv if cv is not None else _cv(values)
-        temporal_roughness = temporal_roughness if temporal_roughness is not None else _temporal_roughness(values)
-        spatial_entropy = spatial_entropy if spatial_entropy is not None else _spatial_entropy(values)
-        if moran_i is None:
-            moran_i = _moran_contiguity(values)
-            if moran_i is not None:
-                # Honest provenance: this Moran's I is an ordering-contiguity proxy,
-                # not a geography-aware statistic (no adjacency matrix supplied).
-                q_warnings.append("moran_i_ordering_contiguity_proxy")
-        # n_eff reflects the spatial-autocorrelation correction (MSD §3.12).
-        n_eff = _moran_corrected_n_eff(float(len(values)), moran_i)
+    if values or denom_values:
+        if values:
+            cv = cv if cv is not None else _cv(values)
+            temporal_roughness = temporal_roughness if temporal_roughness is not None else _temporal_roughness(values)
+            spatial_entropy = spatial_entropy if spatial_entropy is not None else _spatial_entropy(values)
+            if moran_i is None:
+                moran_i = _moran_contiguity(values)
+                if moran_i is not None:
+                    # Honest provenance: this Moran's I is an ordering-contiguity proxy,
+                    # not a geography-aware statistic (no adjacency matrix supplied).
+                    q_warnings.append("moran_i_ordering_contiguity_proxy")
+        # n_eff is the MSD-I §3.12.3 effective sample size: Kish (Σw)²/Σw² over the
+        # per-cell weights (denominator for rates/proportions, else numerator counts),
+        # deflated by 1/(1+max(0,MoranI)).
+        weights = denom_values if denom_values else values
+        n_eff = _moran_corrected_n_eff(_kish_effective_n(weights), moran_i)
     elif n_eff is not None:
         n_eff = _moran_corrected_n_eff(float(n_eff), moran_i)
 

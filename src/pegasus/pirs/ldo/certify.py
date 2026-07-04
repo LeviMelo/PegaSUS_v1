@@ -35,6 +35,10 @@ def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = 
     if "low_n_eff_descriptive_only" in record.warnings:
         return replace(record, certification_status="descriptive")
 
+    if record.edge_type == "mechanical_overlap":
+        # Shared-code correlation is known structure, never an epidemiological discovery (§5.3).
+        return replace(record, certification_status="descriptive")
+
     if record.edge_type == "latent_shared":
         # Shared-driver flags are structural, not promoted causal edges.
         return replace(record, certification_status=record.certification_status or "descriptive")

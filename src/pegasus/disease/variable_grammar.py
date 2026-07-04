@@ -187,4 +187,24 @@ def assemble_disease_field(
     return LDOField(variables=variables, space_ids=space_ids, time_ids=time_ids, X=X, W=W, resolution=resolution_label)
 
 
-__all__ = ["DiseaseVariable", "DiseaseStratification", "stratify_events", "assemble_disease_field"]
+def variable_meta(variables) -> dict[str, dict]:
+    """Build the ``run_ldo(variable_meta=...)`` map from generated variables.
+
+    ``variable_id -> {code_set, code_system, topology_role, projection_status}`` — feeds
+    the LDO's disease-provenance annotation and the shared-code overlap guard (§5.3).
+    """
+    return {
+        v.variable_id: {
+            "code_set": frozenset(v.member_codes),
+            "code_system": v.code_system,
+            "topology_role": v.topology_role,
+            "projection_status": v.projection_status,
+        }
+        for v in variables
+    }
+
+
+__all__ = [
+    "DiseaseVariable", "DiseaseStratification", "stratify_events",
+    "assemble_disease_field", "variable_meta",
+]

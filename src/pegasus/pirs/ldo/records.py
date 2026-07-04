@@ -11,7 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-EdgeType = Literal["contemporaneous", "lagged_directed", "latent_shared", "nonlinear_residual"]
+EdgeType = Literal[
+    "contemporaneous", "lagged_directed", "latent_shared", "nonlinear_residual",
+    "mechanical_overlap",   # concept-variables sharing codes → mechanically correlated, never a discovery (§5.3)
+]
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,13 @@ class LinkRecord:
     confounding_factor_refs: tuple[str, ...] = ()
     null_strategy: str | None = None
     fdr_method: str | None = None
+    # Disease-axis provenance (§II.8 / §III.7): the code system the variables live in,
+    # the SIM topology role (underlying_cause vs mention), the projection status of the
+    # disease concepts, and the Jaccard overlap of the two variables' code sets.
+    code_system: str | None = None
+    topology_role: str | None = None
+    projection_status: str | None = None
+    overlap_jaccard: float | None = None
     certification_status: str | None = None
     warnings: tuple[str, ...] = ()
 
@@ -48,6 +58,10 @@ class LinkRecord:
             "confounding_factor_refs": list(self.confounding_factor_refs),
             "null_strategy": self.null_strategy,
             "fdr_method": self.fdr_method,
+            "code_system": self.code_system,
+            "topology_role": self.topology_role,
+            "projection_status": self.projection_status,
+            "overlap_jaccard": self.overlap_jaccard,
             "certification_status": self.certification_status,
             "warnings": list(self.warnings),
         }
@@ -67,6 +81,10 @@ LINK_RECORD_COLUMNS: tuple[str, ...] = (
     "confounding_factor_refs",
     "null_strategy",
     "fdr_method",
+    "code_system",
+    "topology_role",
+    "projection_status",
+    "overlap_jaccard",
     "certification_status",
     "warnings",
 )

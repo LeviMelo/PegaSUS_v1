@@ -22,7 +22,12 @@ import numpy as np
 from pegasus.pirs.ldo.assemble import LDOField, assemble_ldo_tensor
 from pegasus.pirs.ldo.certify import LDOCertificationPolicy, certify_links
 from pegasus.pirs.ldo.envelope import assert_within_envelope
-from pegasus.pirs.ldo.edges import stability_select, to_link_records
+from pegasus.pirs.ldo.edges import (
+    annotate_disease_provenance,
+    stability_select,
+    to_link_records,
+    type_mechanical_overlap,
+)
 from pegasus.pirs.ldo.lags import fit_lagged_links
 from pegasus.pirs.ldo.margins import GaussianField, gaussianize_field
 from pegasus.pirs.ldo.records import LinkRecord
@@ -92,6 +97,7 @@ def run_ldo(
     max_workers: int | None = None,
     adaptive_k: bool = True,
     disease_graph=None,
+    variable_meta: dict[str, dict] | None = None,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass.
 
@@ -128,6 +134,14 @@ def run_ldo(
     records = to_link_records(
         lagged, field=gf, stability=stability, stability_threshold=stability_threshold,
     )
+
+    # Disease-axis provenance + the mandatory shared-code overlap guard (§5.3): a link
+    # between concept-variables built on overlapping codes is mechanical, not a discovery.
+    if variable_meta:
+        records = annotate_disease_provenance(records, variable_meta)
+        code_sets = {v: frozenset(m["code_set"]) for v, m in variable_meta.items() if m.get("code_set")}
+        if code_sets:
+            records = type_mechanical_overlap(records, code_sets)
 
     if run_residual_scan:
         # Residual scan uses the contemporaneous (lag-0) precision block.

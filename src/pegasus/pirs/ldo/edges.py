@@ -195,4 +195,84 @@ def to_link_records(
     return records
 
 
-__all__ = ["stability_select", "to_link_records"]
+def _jaccard(a, b) -> float:
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return 0.0
+    union = len(sa | sb)
+    return len(sa & sb) / union if union else 0.0
+
+
+def type_mechanical_overlap(
+    records: list[LinkRecord],
+    variable_code_sets: dict[str, frozenset[str]],
+    *,
+    threshold: float = 0.5,
+) -> list[LinkRecord]:
+    """Re-type edges between concept-variables that share underlying codes (§II.6/§5.3).
+
+    Two disease-concept variables built on overlapping code sets are *mechanically*
+    correlated — they count overlapping events — so such an edge is NOT an
+    epidemiological discovery. When the Jaccard overlap of their code sets exceeds
+    ``threshold`` the edge is typed ``mechanical_overlap`` and demoted to descriptive;
+    every edge whose variables both carry code sets is annotated with ``overlap_jaccard``.
+    """
+    # A shared-code artefact can surface as a direct edge OR as a shared latent factor
+    # (the low-rank layer absorbs the shared count); both must be re-typed, never a discovery.
+    _overlappable = {"contemporaneous", "lagged_directed", "latent_shared"}
+    out: list[LinkRecord] = []
+    for r in records:
+        cs_s = variable_code_sets.get(r.source_var)
+        cs_t = variable_code_sets.get(r.target_var)
+        if cs_s is None or cs_t is None or r.edge_type not in _overlappable:
+            out.append(r)
+            continue
+        j = _jaccard(cs_s, cs_t)
+        if j >= threshold:
+            out.append(replace(
+                r, edge_type="mechanical_overlap", overlap_jaccard=j,
+                certification_status="descriptive",
+                warnings=r.warnings + ("mechanical_overlap_shared_codes",),
+            ))
+        else:
+            out.append(replace(r, overlap_jaccard=j))
+    return out
+
+
+_PROJECTION_SEVERITY = {
+    "exact": 0, "source_system_specific": 1, "parent_projection": 2,
+    "approximate": 3, "unmappable": 4,
+}
+
+
+def annotate_disease_provenance(
+    records: list[LinkRecord], variable_meta: dict[str, dict]
+) -> list[LinkRecord]:
+    """Stamp each edge with disease-axis provenance from its variables' metadata (§III.7).
+
+    ``code_system``/``topology_role`` are set when both endpoints agree (else left None,
+    an honest "mixed"); ``projection_status`` is the worst of the two (anti-false-precision:
+    an ``approximate`` CCSR endpoint forces the edge to ``approximate``).
+    """
+    out: list[LinkRecord] = []
+    for r in records:
+        ms = variable_meta.get(r.source_var) or {}
+        mt = variable_meta.get(r.target_var) or {}
+        if not ms and not mt:
+            out.append(r)
+            continue
+
+        def _agree(key: str) -> str | None:
+            a, b = ms.get(key), mt.get(key)
+            return a if a is not None and a == b else (a or b if not (a and b) else None)
+
+        statuses = [s for s in (ms.get("projection_status"), mt.get("projection_status")) if s]
+        projection = max(statuses, key=lambda s: _PROJECTION_SEVERITY.get(s, 0)) if statuses else None
+        out.append(replace(
+            r, code_system=_agree("code_system"), topology_role=_agree("topology_role"),
+            projection_status=projection,
+        ))
+    return out
+
+
+__all__ = ["stability_select", "to_link_records", "type_mechanical_overlap", "annotate_disease_provenance"]

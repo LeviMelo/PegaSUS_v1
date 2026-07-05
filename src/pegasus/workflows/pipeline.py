@@ -309,6 +309,16 @@ def _sidra_population_localities(metadata, uf: str, *, table_id: str = SIDRA_POP
     raise LivePipelineError(f"SIDRA {table_id} metadata has no N6/N3 localities for UF {uf} (cod2={cod2})")
 
 
+def _all_census_periods(metadata, *, table_id: str = SIDRA_POPULATION_TABLE) -> list[str]:
+    """Every census period the census strata table declares — the scope-invariant census anchor set
+    (FAL-POP / MSD-III §II.4 "all three censuses MUST be ingested regardless of a query's time
+    window" / §VI.1 build-once-slice-many). Independent of any intent window by construction."""
+    table = metadata.tables.get(table_id)
+    if table is None:
+        return []
+    return sorted((str(p) for p in table.periods if str(p).isdigit()), key=int)
+
+
 def _select_population_period(metadata, intent: UserIntent) -> str:
     """Census period for the population denominator: the latest census period at
     or before the intent window end, else the earliest available."""
@@ -567,10 +577,12 @@ def _acquire_sidra_population_strata(
     if SIDRA_POPULATION_TABLE not in metadata.tables:
         raise LivePipelineError(f"SIDRA metadata is missing required population table {SIDRA_POPULATION_TABLE}")
     locality_level, localities = _sidra_population_localities(metadata, uf)
-    # Every census year inside the intent window (there can be more than one for a
-    # long window); if none falls exactly inside, fall back to the nearest census
-    # year overall so the tensor still gets a demographic-shape prior.
-    periods = _select_table_periods_in_window(metadata, SIDRA_POPULATION_TABLE, intent) or [_select_population_period(metadata, intent)]
+    # FAL-POP / §II.4 / §VI.1: the population tensor is a scope-invariant foundational asset, so ALL
+    # census demographic strata (every 9606 period — 2010, 2022; +2093 for 2000 once registered) are
+    # ingested regardless of the query's time window. A query SLICES the built tensor; it never
+    # re-scopes which censuses anchored it. (Was: only censuses inside the window, which left a
+    # 2021-22 query anchored to 2022 alone with no cohort structure between censuses.)
+    periods = _all_census_periods(metadata) or [_select_population_period(metadata, intent)]
     classifications = _sidra_population_demographic_strata_classifications(metadata)
     request = SIDRARequest(
         table_id=SIDRA_POPULATION_TABLE,

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import polars as pl
 from pydantic import ValidationError
 
 from pegasus.core.hashing import content_hash, sha256_file
@@ -251,12 +252,29 @@ def _population_tensor_mode_to_solver_mode(population_mode: str) -> str | None:
     return None
 
 
+def _max_period_year(facts_path: str | Path, fallback: int) -> int:
+    """The latest data year present in the totals facts — the asset's data vintage for its version tag."""
+    try:
+        value = (
+            pl.scan_parquet(str(facts_path))
+            .select(pl.col("period").cast(pl.Utf8).str.slice(0, 4).cast(pl.Int64, strict=False).max())
+            .collect()
+            .item()
+        )
+        return int(value) if value is not None else fallback
+    except Exception:
+        return fallback
+
+
 def _build_population_tensor_artifact(
     *,
     artifacts: tuple[SourceArtifactRef, ...],
     run_dir: Path,
     population_mode: str,
     race_bridge_plan: RaceBridgePlan,
+    execution_scale: str = "state",
+    time_window: Any | None = None,
+    asset_store_root: Path | None = None,
 ) -> tuple[SourceArtifactRef | None, dict[str, Any] | None]:
     solver_mode = _population_tensor_mode_to_solver_mode(population_mode)
     if solver_mode is None:
@@ -304,32 +322,85 @@ def _build_population_tensor_artifact(
     # registries.race_bridge.resolve_race_bridge_plan), and "decoupled" runs the
     # tensor with race left unstratified for DATASUS-origin priors.
     race_bridge_prior_path = race_bridge_plan.prior_path if race_bridge_plan.status == "embedded" else None
-    output_path = run_dir / "Intermediate" / "population_tensor" / f"{solver_mode}.parquet"
     from pegasus.sidra.population_cube import solve_population_tensor_from_sidra_strata
+    from pegasus.assets import (
+        NATIONAL_FULL_HISTORY,
+        PersistentAssetStore,
+        population_tensor_input_identity,
+        resolve_or_build_population_tensor,
+    )
 
-    manifest = solve_population_tensor_from_sidra_strata(
-        population_strata_path=strata.path,
-        total_anchor_path=total_anchor.path,
-        output_path=output_path,
-        census_2000_strata_path=census_2000.path if census_2000 is not None else None,
-        sim_events_path=None if sim_events is None else sim_events.path,
-        sinasc_events_path=None if sinasc_events is None else sinasc_events.path,
-        civil_registry_births_path=None if civil_births is None else civil_births.path,
-        civil_registry_deaths_path=None if civil_deaths is None else civil_deaths.path,
-        race_bridge_prior_path=race_bridge_prior_path,
-        # Reconstruct the O->D migration flow field + affinity kernel from the net
-        # residual (MSD §2.8.7 flow layer). Bounded and safe: the pair-count guard
-        # skips gracefully for scopes too large for the dense reconstruction.
-        reconstruct_migration=True,
-        mode=solver_mode,
-    ).as_manifest()
+    # FAL-POP-VER (§VI): the population tensor is a build-once, versioned, scope-invariant foundational
+    # asset. A NATIONAL run builds it once at national+full-history scope, stores it immutably, and
+    # slices to the query window; a later run whose inputs are unchanged REUSES the stored version
+    # rather than rebuilding (the identity below is the build-once key). A reduced-scope (state/dev)
+    # build is not stored as foundational — it builds run-locally and slices — so the §VI.1
+    # scope-invariance guard is never violated by a query-scope artifact.
+    input_hashes = {
+        "strata": sha256_file(strata.path),
+        "total_anchor": sha256_file(total_anchor.path),
+        "census_2000": sha256_file(census_2000.path) if census_2000 is not None else None,
+        "sim_events": sha256_file(sim_events.path) if sim_events is not None else None,
+        "sinasc_events": sha256_file(sinasc_events.path) if sinasc_events is not None else None,
+        "civil_births": sha256_file(civil_births.path) if civil_births is not None else None,
+        "civil_deaths": sha256_file(civil_deaths.path) if civil_deaths is not None else None,
+        "race_bridge_prior": sha256_file(race_bridge_prior_path) if race_bridge_prior_path else None,
+    }
+    identity = population_tensor_input_identity(input_hashes=input_hashes, mode=solver_mode)
+
+    def _build_fn(out_path: Path):
+        return solve_population_tensor_from_sidra_strata(
+            population_strata_path=strata.path,
+            total_anchor_path=total_anchor.path,
+            output_path=out_path,
+            census_2000_strata_path=census_2000.path if census_2000 is not None else None,
+            sim_events_path=None if sim_events is None else sim_events.path,
+            sinasc_events_path=None if sinasc_events is None else sinasc_events.path,
+            civil_registry_births_path=None if civil_births is None else civil_births.path,
+            civil_registry_deaths_path=None if civil_deaths is None else civil_deaths.path,
+            race_bridge_prior_path=race_bridge_prior_path,
+            # Reconstruct the O->D migration flow field + affinity kernel from the net residual
+            # (MSD §2.8.7). Bounded: the pair-count guard skips gracefully for scopes too large.
+            reconstruct_migration=True,
+            mode=solver_mode,
+        )
+
+    build_scope = NATIONAL_FULL_HISTORY if execution_scale == "national" else f"{execution_scale}_full_history"
+    query_window = (
+        (time_window.start_year, time_window.end_year) if time_window is not None else (None, None)
+    )
+    fallback_year = time_window.end_year if time_window is not None else 2022
+    store_root = asset_store_root if asset_store_root is not None else (run_dir.parent.parent / "assets")
+    store = PersistentAssetStore(store_root)
+
+    lifecycle = resolve_or_build_population_tensor(
+        store=store,
+        input_identity=identity,
+        build_scope=build_scope,
+        build_fn=_build_fn,
+        input_manifest={"input_hashes": input_hashes, "mode": solver_mode, "execution_scale": execution_scale},
+        max_year=_max_period_year(total_anchor.path, fallback_year),
+        query_window=query_window,
+        run_dir=run_dir,
+        solver_mode=solver_mode,
+    )
+    sliced_path = lifecycle["sliced_path"]
+    manifest = {
+        **lifecycle["build_manifest"],
+        "asset_name": "population_tensor",
+        "asset_version": lifecycle["version"],
+        "asset_build_scope": lifecycle["build_scope"],
+        "asset_reused": lifecycle["reused"],
+        "asset_full_history_path": lifecycle["payload_path"],
+        "sliced_to_window": list(query_window),
+    }
     artifact = SourceArtifactRef(
-        path=str(output_path),
+        path=str(sliced_path),
         source_system="SIDRA",
         artifact_role="population_tensor",
         provenance_mode="materialized_external",
         source_manifest_hash=strata.source_manifest_hash,
-        artifact_hash=sha256_file(output_path),
+        artifact_hash=sha256_file(sliced_path),
     )
     return artifact, manifest
 
@@ -491,6 +562,8 @@ def _run_compile_impl(
             run_dir=run_dir,
             population_mode=intent.population_mode,
             race_bridge_plan=race_bridge_plan,
+            execution_scale=intent.execution_scale,
+            time_window=intent.time,
         )
         if population_tensor_artifact is None:
             telemetry.set_stage("population_solver", "skipped", 0.0)

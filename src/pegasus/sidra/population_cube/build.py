@@ -175,6 +175,53 @@ def _read_population_strata(path: str | Path) -> pl.DataFrame:
     )
 
 
+def _census_2000_records_from_facts(census_2000_path: str | Path, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse SIDRA 2093 (2000-census) facts into single-year age×sex×race records (FAL-POP #4).
+
+    2093 reports age as clsf-58 *brackets*; each (locality, sex, race) bracket profile is CTR-
+    disaggregated to single year using that cell's 2010 single-year shape drawn from ``records``
+    (the 9606 rows already parsed, which now include 2010 thanks to census-scope invariance).
+    Race/sex map through the shared codebook (clsf 86/2) so the 2000 records land on the same axis
+    labels as 9606. Returns [] on an absent/empty 2093 artifact (the 2000 anchor is optional)."""
+    from pegasus.sidra.population_cube.census_2000 import (
+        CLEAN_AGE_BRACKETS_2093,
+        assemble_2000_single_year_records,
+    )
+
+    frame = pl.read_parquet(census_2000_path)
+    required = {"table_id", "period", "locality_id", "category_tuple", "value_numeric", "value_status"}
+    if required - set(frame.columns):
+        return []
+    frame = frame.filter(
+        (pl.col("table_id").cast(pl.Utf8) == "2093")
+        & (pl.col("value_status").cast(pl.Utf8) == "numeric")
+        & pl.col("value_numeric").is_not_null()
+    )
+    if frame.height == 0:
+        return []
+
+    profiles: dict[tuple[str, str, str], dict[str, float]] = {}
+    for row in frame.iter_rows(named=True):
+        cats = _category_by_classification(row.get("category_tuple"))
+        bracket = cats.get("58")
+        if bracket not in CLEAN_AGE_BRACKETS_2093:  # skip roll-ups / Total (§II.4: never summed)
+            continue
+        sex = map_category("sex", "SIDRA", cats.get("2", ""))
+        race = map_category("race", "SIDRA", cats.get("86", ""))
+        if sex in {TOTAL, UNKNOWN} or race in {TOTAL, UNKNOWN}:
+            continue
+        key = (str(row["locality_id"])[:6], sex, race)
+        cell = profiles.setdefault(key, {})
+        cell[bracket] = cell.get(bracket, 0.0) + float(row["value_numeric"])
+
+    reference_2010: dict[tuple[str, str, str], dict[str, float]] = {}
+    for rec in records:
+        if rec["period"] == "2010":
+            reference_2010.setdefault((rec["municipality_cod6"], rec["sex"], rec["race"]), {})[rec["age_group"]] = rec["value"]
+
+    return assemble_2000_single_year_records(bracket_profiles=profiles, reference_2010=reference_2010)
+
+
 def _resolve_geo_year_columns(frame: pl.DataFrame, *, geo_candidates: tuple[str, ...], year_candidates: tuple[str, ...]) -> pl.DataFrame | None:
     if "municipality_cod6" not in frame.columns:
         geo_column = next((column for column in geo_candidates if column in frame.columns), None)
@@ -791,6 +838,7 @@ def solve_population_tensor_from_sidra_strata(
     population_strata_path: str | Path,
     total_anchor_path: str | Path,
     output_path: str | Path,
+    census_2000_strata_path: str | Path | None = None,
     mode: str = "independent_denominator",
     sim_events_path: str | Path | None = None,
     sinasc_events_path: str | Path | None = None,
@@ -839,6 +887,15 @@ def solve_population_tensor_from_sidra_strata(
             categories_by_axis[axis].add(record[axis])
     if not records:
         raise ValueError("population strata artifact has no registry-projectable demographic cells")
+
+    # FAL-POP #4 (§II.4): fold in the 2000 census (SIDRA 2093) as a third anchor, disaggregated from
+    # its coarse age brackets to single year using the 2010 shape. Appended to the census record set
+    # so the solver cohort-ages across 2000/2010/2022. Absent 2093 → no 2000 anchor (build uses 2010/2022).
+    if census_2000_strata_path is not None:
+        for record in _census_2000_records_from_facts(census_2000_strata_path, records):
+            records.append(record)
+            for axis in AXES:
+                categories_by_axis[axis].add(record[axis])
 
     # `totals` stitches the census-year (9606) and intercensal (6579) population
     # totals into one (municipality, year) closure panel (MSD §2.8.10); its period

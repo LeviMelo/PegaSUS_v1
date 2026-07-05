@@ -358,19 +358,22 @@ def _select_table_periods_in_window(metadata, table_id: str, intent: UserIntent)
 
 
 def _population_period_plan(metadata, intent: UserIntent) -> dict[str, list[str]]:
-    """Census (9606) vs intercensal (6579) periods for the intent's full year
-    window (MSD §2.8.10 closure data source). 9606 takes priority on any year
-    both tables declare (a safety net -- 6579's own live periods already exclude
-    census years)."""
-    census = _select_table_periods_in_window(metadata, SIDRA_POPULATION_TABLE, intent)
+    """Census (9606) vs intercensal (6579) closure-total periods (MSD §2.8.10 closure source).
+
+    FAL-POP (§VI.1/§II.4): the population tensor is a scope-invariant national + full-history
+    foundational asset, so the closure totals span EVERY census (9606: 2010, 2022) and EVERY
+    intercensal year (6579) the tables declare — independent of the query's time window; a query
+    slices the built tensor. 9606 takes priority on any year both declare. (Was window-limited, which
+    truncated the tensor to the query's years — the §VI.1 scope-invariance bug.)"""
+    census = _all_census_periods(metadata, table_id=SIDRA_POPULATION_TABLE)
     intercensal = [
-        p for p in _select_table_periods_in_window(metadata, SIDRA_INTERCENSAL_POPULATION_TABLE, intent)
+        p for p in _all_census_periods(metadata, table_id=SIDRA_INTERCENSAL_POPULATION_TABLE)
         if p not in set(census)
     ]
     if not census and not intercensal:
         raise LivePipelineError(
             f"Neither SIDRA {SIDRA_POPULATION_TABLE} (census) nor {SIDRA_INTERCENSAL_POPULATION_TABLE} "
-            f"(intercensal) declares a period within {intent.time.start_year}-{intent.time.end_year}."
+            f"(intercensal) declares any period."
         )
     return {SIDRA_POPULATION_TABLE: census, SIDRA_INTERCENSAL_POPULATION_TABLE: intercensal}
 

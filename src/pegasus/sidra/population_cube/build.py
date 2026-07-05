@@ -1187,14 +1187,20 @@ def solve_population_tensor_from_sidra_strata(
     # which exists for EVERY year (census + intercensal); the per-cell strata anchor
     # does not (only census years), so basing the bound on it starves intercensal
     # years of migration headroom -- exactly where the residual is most needed.
+    # Vectorized per-cell migration bound (§V.1): closure-based where the year's closure total exists
+    # (every year), else 0.25*anchor -- a floor of 1.0. Was an O(n_cells) Python loop whose
+    # ``anchors[idx] or 0.0`` also silently returned NaN once anchors became a numpy NaN-sentinel array
+    # (NaN is truthy) -> non-finite bounds the solver rejects. numpy handles the NaN correctly.
     strata_per_st = shape[2] * shape[3] * shape[4]
-    migration_bounds: list[float] = []
-    for idx in range(n_cells):
-        closure_total = closure[idx // strata_per_st]
-        if closure_total is not None and closure_total > 0:
-            migration_bounds.append(max(0.25 * float(closure_total) / strata_per_st, 1.0))
-        else:
-            migration_bounds.append(max((anchors[idx] or 0.0) * 0.25, 1.0))
+    closure_np = np.asarray([c if c is not None else np.nan for c in closure], dtype=np.float64)
+    closure_per_cell = np.repeat(closure_np, strata_per_st)
+    use_closure = np.isfinite(closure_per_cell) & (closure_per_cell > 0)
+    migration_bounds = np.where(
+        use_closure,
+        0.25 * closure_per_cell / strata_per_st,
+        np.nan_to_num(anchors, nan=0.0) * 0.25,
+    )
+    np.maximum(migration_bounds, 1.0, out=migration_bounds)
 
     death_rates: tuple[float | None, ...] | None = None
     warnings: list[str] = [*death_warnings, *birth_warnings, *migration_warnings]

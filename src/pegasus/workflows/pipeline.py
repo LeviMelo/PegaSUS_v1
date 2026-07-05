@@ -98,6 +98,10 @@ SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE = "217"
 SIDRA_CIVIL_REGISTRY_DEATHS_TABLE = "2683"
 SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE = "343"
 
+# SIDRA throttles by cells-per-request, not connection count (sidra/acquire.py), so the population
+# denominator chunk fetch runs wide -- was concurrency=_SIDRA_CHUNK_CONCURRENCY, which left the pool idle for small UFs.
+_SIDRA_CHUNK_CONCURRENCY = 12
+
 
 def _population_tensor_requested(intent: UserIntent) -> bool:
     return intent.population_mode in {"independent_population_tensor", "sim_informed_population_tensor"}
@@ -462,7 +466,7 @@ def _acquire_sidra_population_table(
     results = extract_chunk_plan(
         chunks,
         client=client or SidraClient(),
-        concurrency=4,
+        concurrency=_SIDRA_CHUNK_CONCURRENCY,
         raw_dir=work_dir / "raw",
         facts_root=work_dir / "facts",
         metadata_hash=metadata_hash,
@@ -621,7 +625,7 @@ def _acquire_sidra_population_strata(
     results = extract_chunk_plan(
         chunks,
         client=client or SidraClient(),
-        concurrency=4,
+        concurrency=_SIDRA_CHUNK_CONCURRENCY,
         raw_dir=work_dir / "raw",
         facts_root=work_dir / "facts",
         metadata_hash=metadata_hash,
@@ -703,7 +707,7 @@ def _acquire_sidra_census_2000_strata(
     work_dir = data_root / "sidra" / f"census_2000_strata_{uf}"
     work_dir.mkdir(parents=True, exist_ok=True)
     results = extract_chunk_plan(
-        chunks, client=client or SidraClient(), concurrency=4,
+        chunks, client=client or SidraClient(), concurrency=_SIDRA_CHUNK_CONCURRENCY,
         raw_dir=work_dir / "raw", facts_root=work_dir / "facts",
         metadata_hash=metadata_hash, unit_by_variable=table_metadata.units_by_variable,
     )

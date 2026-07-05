@@ -197,6 +197,72 @@ def assemble_2000_single_year_records(
     return records
 
 
+def load_municipality_genealogy(
+    path: str = "config/registries/spatial/municipality_genealogy.yaml",
+) -> list[dict]:
+    """Authoritative post-census municipality → parent(s) genealogy (FAL-POP-AMC). Returns [] if absent."""
+    from pathlib import Path
+
+    from pegasus.core.config import load_yaml
+
+    p = Path(path)
+    if not p.exists():
+        return []
+    payload = load_yaml(p) or {}
+    return list(payload.get("entries", []) or [])
+
+
+def carve_pre_census_children(records: list[dict], genealogy: list[dict]) -> dict[str, float]:
+    """FAL-POP-AMC: carve municipalities installed AFTER a census out of their parents (mass-preserving).
+
+    A municipality absent from a census (installed later) has its residents counted inside its parent(s)
+    in that census. Back-projecting the child's later population into the census year would double-count
+    the parents. This carves it out: the child's estimated census-year population `X` (its earliest-
+    census population back-projected by the state census-to-census ratio) is **subtracted from the
+    parents** (split by parent census size, scaling each parent's cells down) and **assigned to the
+    child** (its earliest-census age×sex×race shape, scaled to `X`). The census-year total is unchanged
+    (parents lose `X`, child gains `X`), so it stays the enumerated total, and the child gets a real
+    denominator. Mutates ``records`` in place; the child→parent map is AUTHORITATIVE (never inferred)."""
+    by_pc: dict[tuple[str, str], list[dict]] = {}
+    period_totals: dict[str, float] = {}
+    for r in records:
+        by_pc.setdefault((r["period"], r["municipality_cod6"]), []).append(r)
+        period_totals[r["period"]] = period_totals.get(r["period"], 0.0) + float(r["value"])
+
+    carved_population = 0.0
+    children_carved = 0
+    for entry in genealogy:
+        child = str(entry["child_cod6"])
+        parents = [str(p) for p in entry.get("parents_cod6", [])]
+        ref_year = str(entry.get("reference_census_year", "2010"))
+        for cy in (str(y) for y in entry.get("absent_census_years", [])):
+            if by_pc.get((cy, child)):
+                continue  # the child WAS enumerated in cy — nothing to carve
+            child_ref = by_pc.get((ref_year, child), [])
+            child_ref_pop = sum(float(r["value"]) for r in child_ref)
+            state_cy, state_ref = period_totals.get(cy, 0.0), period_totals.get(ref_year, 0.0)
+            if child_ref_pop <= 0 or state_ref <= 0 or not parents:
+                continue
+            X = child_ref_pop * (state_cy / state_ref)  # child's estimated census-year population
+            parent_pops = {p: sum(float(r["value"]) for r in by_pc.get((cy, p), [])) for p in parents}
+            parent_total = sum(parent_pops.values())
+            if parent_total <= 0:
+                continue
+            X = min(X, parent_total)  # never carve more than the parents hold
+            for p in parents:
+                if parent_pops[p] <= 0:
+                    continue
+                factor = max(0.0, 1.0 - (X * parent_pops[p] / parent_total) / parent_pops[p])
+                for r in by_pc.get((cy, p), []):
+                    r["value"] = float(r["value"]) * factor
+            scale = X / child_ref_pop  # give the child its ref-year shape scaled to X
+            for r in child_ref:
+                records.append({**r, "period": cy, "value": float(r["value"]) * scale})
+            carved_population += X
+            children_carved += 1
+    return {"amc_carved_population": carved_population, "amc_children_carved": float(children_carved)}
+
+
 __all__ = [
     "CLEAN_AGE_BRACKETS_2093",
     "SIDRA_2093_UNDECLARED_RACE",
@@ -206,4 +272,6 @@ __all__ = [
     "disaggregate_2000_strata_to_single_year",
     "assemble_2000_single_year_records",
     "reconcile_undeclared_race",
+    "load_municipality_genealogy",
+    "carve_pre_census_children",
 ]

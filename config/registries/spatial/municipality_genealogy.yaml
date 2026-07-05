@@ -1,0 +1,22 @@
+# FAL-POP-AMC (§II.4): temporal municipality-boundary harmonization by CARVING.
+#
+# A municipality *installed* after a census (created by law earlier, but not a separate enumeration
+# unit on the census reference date) has NO row in that census — its residents were counted inside
+# its parent municipality/ies. Naïvely back-projecting the child's later population into the census
+# year DOUBLE-COUNTS the parents. The build CARVES the child out of its parents (mass-preserving): the
+# child's estimated census-year population is subtracted from the parents (split by parent size) and
+# assigned to the child, so the census-year total stays exactly the enumerated total AND the child
+# still gets a real denominator (§II.4 FAL-POP-AMC contract).
+#
+# Codes are 6-digit IBGE (cod6). `parents_cod6` is the AUTHORITATIVE origin from IBGE's territorial
+# evolution — NEVER inferred from data (a wrong parent is worse than the deviation). Multi-parent
+# splits are supported (the carve is distributed across parents by their census population).
+#
+# STATUS: seeded for the municipalities encountered so far. National completeness requires onboarding
+# IBGE's full "Evolução da Divisão Territorial do Brasil" succession table (FAL-POP-AMC national task).
+entries:
+  - child_cod6: "270375"                     # Jequiá da Praia (IBGE 2703759)
+    absent_census_years: ["2000"]            # Lei 5.675/1995, installed ~2001 -> absent from Censo 2000
+    parents_cod6: ["270860", "270230"]       # São Miguel dos Campos (2708600), Coruripe (2702306)
+    reference_census_year: "2010"            # earliest census that enumerates the child
+    source: "IBGE Evolução da Divisão Territorial; pt.wikipedia/Jequiá_da_Praia (Lei 5.675/1995)"

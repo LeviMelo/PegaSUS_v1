@@ -8,15 +8,42 @@ single-year profile follows the reference (2010) shape — with a safe uniform f
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from pegasus.sidra.population_cube.census_2000 import (
     CLEAN_AGE_BRACKETS_2093,
     assemble_2000_single_year_records,
     bracket_single_year_labels,
+    carve_pre_census_children,
     disaggregate_2000_strata_to_single_year,
     disaggregate_bracket,
     reconcile_undeclared_race,
 )
+
+
+def test_carve_pre_census_child_preserves_total_and_seeds_child() -> None:
+    """FAL-POP-AMC: a municipality installed after a census is carved out of its parents
+    (mass-preserving) instead of double-counting."""
+    def rec(cod6, period, value):
+        return {"municipality_cod6": cod6, "period": period, "age_group": "total", "sex": "total", "race": "total", "value": float(value)}
+    # 2000: only the two parents enumerated (child absent). 2010: all three enumerated.
+    records = [
+        rec("P1", "2000", 60000.0), rec("P2", "2000", 40000.0),           # parents' 2000 census (include child)
+        rec("P1", "2010", 66000.0), rec("P2", "2010", 44000.0), rec("C", "2010", 10000.0),  # 2010 all
+    ]
+    genealogy = [{"child_cod6": "C", "absent_census_years": ["2000"], "parents_cod6": ["P1", "P2"], "reference_census_year": "2010"}]
+    total_2000_before = sum(r["value"] for r in records if r["period"] == "2000")
+    stats = carve_pre_census_children(records, genealogy)
+    assert stats["amc_children_carved"] == 1
+    total_2000_after = sum(r["value"] for r in records if r["period"] == "2000")
+    assert total_2000_after == pytest.approx(total_2000_before)  # mass-preserving: census-year total unchanged
+    # child now has a 2000 record (carved in), parents reduced
+    child_2000 = sum(r["value"] for r in records if r["municipality_cod6"] == "C" and r["period"] == "2000")
+    assert child_2000 > 0
+    # state ratio back-projection: X = child_2010 * (state_2000/state_2010) = 10000 * (100000/120000)
+    assert child_2000 == pytest.approx(10000.0 * (100000.0 / 120000.0), rel=1e-9)
+    # already-enumerated child is untouched (idempotent)
+    assert carve_pre_census_children(records, genealogy)["amc_children_carved"] == 0
 
 
 def test_reconcile_undeclared_race_preserves_total_by_local_composition() -> None:

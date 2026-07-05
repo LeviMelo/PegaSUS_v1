@@ -1039,6 +1039,17 @@ def solve_population_tensor_from_sidra_strata(
             for axis in AXES:
                 categories_by_axis[axis].add(record[axis])
 
+    # FAL-POP-AMC (§II.4): carve municipalities installed AFTER a census out of their parents, so a
+    # census-year total stays the enumerated total instead of double-counting the child's people (which
+    # were counted inside the parents). The child→parent map is authoritative (IBGE territorial
+    # evolution), never inferred. Mass-preserving: parents lose X, child gains X.
+    from pegasus.sidra.population_cube.census_2000 import carve_pre_census_children, load_municipality_genealogy
+
+    amc_stats = carve_pre_census_children(records, load_municipality_genealogy())
+    for record in records:  # the carve may introduce a child's cells at a new census period
+        for axis in AXES:
+            categories_by_axis[axis].add(record[axis])
+
     # `totals` stitches the census-year (9606) and intercensal (6579) population
     # totals into one (municipality, year) closure panel (MSD §2.8.10); its period
     # coverage is a superset of the strata's (strata/disaggregation only exists for
@@ -1195,6 +1206,13 @@ def solve_population_tensor_from_sidra_strata(
         warnings.append(
             "census_2000_undeclared_race_unreconciled_no_declared"
             f"::mass={census_2000_recon['undeclared_dropped_no_declared']:.0f}"
+        )
+    # FAL-POP-AMC telemetry: post-census municipalities carved out of their parents (mass-preserving).
+    if amc_stats.get("amc_children_carved", 0) > 0:
+        warnings.append(
+            "census_boundary_amc_carved"
+            f"::children={int(amc_stats['amc_children_carved'])}"
+            f"::population={amc_stats['amc_carved_population']:.0f}"
         )
     # FAL-POP-SV telemetry: record that the intercensal closure is on the census (not 6579) vintage,
     # and flag municipalities that could not be re-anchored (kept on their prior 6579 closure).

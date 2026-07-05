@@ -209,7 +209,7 @@ def build_compile_stage_plan(
             required_for_level3=pirs_model_requested,
             can_execute=pirs_model_requested,
             skip_reason="intent does not request PIRS model execution",
-            executor="pegasus.pirs.model_execution.execute_pirs_model_from_design_matrix" if pirs_model_requested else None,
+            executor=None,  # PIRS model execution retired into the LDO investigate stage (LDO-06)
             expected_artifacts=("Tables/pirs_model_execution_manifest.json", "Tables/pirs_residual_values.parquet") if pirs_model_requested else (),
         ),
         _stage(
@@ -219,7 +219,7 @@ def build_compile_stage_plan(
             required_for_level3=pirs_hsic_requested,
             can_execute=pirs_hsic_requested,
             skip_reason="intent does not request HSIC residual scan",
-            executor="pegasus.pirs.hsic_run.execute_hsic_residual_scan" if pirs_hsic_requested else None,
+            executor=None,  # HSIC residual scan retired into the LDO residual audit (LDO-06)
             expected_artifacts=("Tables/hsic_residual_scan_manifest.json",) if pirs_hsic_requested else (),
         ),
     )

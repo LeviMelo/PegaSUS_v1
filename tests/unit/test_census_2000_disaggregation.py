@@ -21,29 +21,40 @@ from pegasus.sidra.population_cube.census_2000 import (
 )
 
 
-def test_carve_pre_census_child_preserves_total_and_seeds_child() -> None:
-    """FAL-POP-AMC: a municipality installed after a census is carved out of its parents
-    (mass-preserving) instead of double-counting."""
-    def rec(cod6, period, value):
-        return {"municipality_cod6": cod6, "period": period, "age_group": "total", "sex": "total", "race": "total", "value": float(value)}
+def _rec(cod6, period, value):
+    return {"municipality_cod6": cod6, "period": period, "age_group": "total", "sex": "total", "race": "total", "value": float(value)}
+
+
+def test_carve_auto_detects_child_via_override_and_preserves_total() -> None:
+    """FAL-POP-AMC: a child is auto-detected (present at a later census, absent earlier) and carved out
+    of its parents (mass-preserving). Explicit override supplies the parents."""
     # 2000: only the two parents enumerated (child absent). 2010: all three enumerated.
     records = [
-        rec("P1", "2000", 60000.0), rec("P2", "2000", 40000.0),           # parents' 2000 census (include child)
-        rec("P1", "2010", 66000.0), rec("P2", "2010", 44000.0), rec("C", "2010", 10000.0),  # 2010 all
+        _rec("P1", "2000", 60000.0), _rec("P2", "2000", 40000.0),
+        _rec("P1", "2010", 66000.0), _rec("P2", "2010", 44000.0), _rec("C", "2010", 10000.0),
     ]
-    genealogy = [{"child_cod6": "C", "absent_census_years": ["2000"], "parents_cod6": ["P1", "P2"], "reference_census_year": "2010"}]
     total_2000_before = sum(r["value"] for r in records if r["period"] == "2000")
-    stats = carve_pre_census_children(records, genealogy)
-    assert stats["amc_children_carved"] == 1
-    total_2000_after = sum(r["value"] for r in records if r["period"] == "2000")
-    assert total_2000_after == pytest.approx(total_2000_before)  # mass-preserving: census-year total unchanged
-    # child now has a 2000 record (carved in), parents reduced
+    stats = carve_pre_census_children(records, amc_crosswalk={}, overrides={"C": ["P1", "P2"]})
+    assert stats["amc_children_carved"] == 1  # auto-detected, no absent_census_years needed
+    assert sum(r["value"] for r in records if r["period"] == "2000") == pytest.approx(total_2000_before)
     child_2000 = sum(r["value"] for r in records if r["municipality_cod6"] == "C" and r["period"] == "2000")
-    assert child_2000 > 0
-    # state ratio back-projection: X = child_2010 * (state_2000/state_2010) = 10000 * (100000/120000)
-    assert child_2000 == pytest.approx(10000.0 * (100000.0 / 120000.0), rel=1e-9)
-    # already-enumerated child is untouched (idempotent)
-    assert carve_pre_census_children(records, genealogy)["amc_children_carved"] == 0
+    assert child_2000 == pytest.approx(10000.0 * (100000.0 / 120000.0), rel=1e-9)  # state-ratio back-projection
+    assert carve_pre_census_children(records, amc_crosswalk={}, overrides={"C": ["P1", "P2"]})["amc_children_carved"] == 0
+
+
+def test_carve_resolves_parents_from_amc_group_when_no_override() -> None:
+    """The automated path: parents = same-AMC-group members enumerated in the census year (no override).
+    A same-group sibling NOT enumerated in the census year is correctly excluded."""
+    records = [
+        _rec("P1", "2000", 50000.0), _rec("SIB", "2000", 30000.0),       # both in the group, enumerated 2000
+        _rec("P1", "2010", 55000.0), _rec("SIB", "2010", 33000.0), _rec("C", "2010", 8000.0),
+    ]
+    amc = {"P1": 42, "SIB": 42, "C": 42}  # all same AMC group; C installed after 2000
+    stats = carve_pre_census_children(records, amc_crosswalk=amc, overrides={})
+    assert stats["amc_children_carved"] == 1
+    # total preserved; child carved from both group siblings present in 2000
+    assert sum(r["value"] for r in records if r["period"] == "2000") == pytest.approx(80000.0)
+    assert sum(r["value"] for r in records if r["municipality_cod6"] == "C" and r["period"] == "2000") > 0
 
 
 def test_reconcile_undeclared_race_preserves_total_by_local_composition() -> None:

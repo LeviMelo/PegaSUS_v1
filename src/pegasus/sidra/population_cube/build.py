@@ -1041,9 +1041,15 @@ def solve_population_tensor_from_sidra_strata(
     # census-year total stays the enumerated total instead of double-counting the child's people (which
     # were counted inside the parents). The child→parent map is authoritative (IBGE territorial
     # evolution), never inferred. Mass-preserving: parents lose X, child gains X.
-    from pegasus.sidra.population_cube.census_2000 import carve_pre_census_children, load_municipality_genealogy
+    from pegasus.sidra.population_cube.census_2000 import (
+        carve_pre_census_children,
+        load_amc_crosswalk,
+        load_municipality_genealogy_overrides,
+    )
 
-    amc_stats = carve_pre_census_children(records, load_municipality_genealogy())
+    amc_stats = carve_pre_census_children(
+        records, load_amc_crosswalk(), load_municipality_genealogy_overrides()
+    )
     for record in records:  # the carve may introduce a child's cells at a new census period
         for axis in AXES:
             categories_by_axis[axis].add(record[axis])

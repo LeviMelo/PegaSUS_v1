@@ -8,12 +8,14 @@
 # assigned to the child, so the census-year total stays exactly the enumerated total AND the child
 # still gets a real denominator (§II.4 FAL-POP-AMC contract).
 #
-# Codes are 6-digit IBGE (cod6). `parents_cod6` is the AUTHORITATIVE origin from IBGE's territorial
-# evolution — NEVER inferred from data (a wrong parent is worse than the deviation). Multi-parent
-# splits are supported (the carve is distributed across parents by their census population).
+# Codes are 6-digit IBGE (cod6). `parents_cod6` is the AUTHORITATIVE origin — NEVER inferred from data.
 #
-# STATUS: seeded for the municipalities encountered so far. National completeness requires onboarding
-# IBGE's full "Evolução da Divisão Territorial do Brasil" succession table (FAL-POP-AMC national task).
+# ROLE: these are explicit OVERRIDES that take precedence over the automated AMC-crosswalk resolution
+# (`municipality_amc_crosswalk.parquet`). The AMC group is the national automated default (candidate
+# parents = same-group members enumerated in the census year); an override is used when it is more
+# precise (the AMC group can include co-descended SIBLINGS that did not spawn the child — e.g. Jequiá
+# split from São Miguel dos Campos + Coruripe only, though its AMC group 8024 also contains Teotônio
+# Vilela) or for post-2010 installs the AMC crosswalk (built through 2010) does not cover.
 entries:
   - child_cod6: "270375"                     # Jequiá da Praia (IBGE 2703759)
     absent_census_years: ["2000"]            # Lei 5.675/1995, installed ~2001 -> absent from Censo 2000

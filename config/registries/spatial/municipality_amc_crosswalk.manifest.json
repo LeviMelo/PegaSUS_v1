@@ -1,0 +1,13 @@
+{
+  "source": "Christian Moser amc.dta (Ehrl 2017 Minimum Comparable Areas 1872-2010)",
+  "url": "http://www.economoser.com/s/amc.dta",
+  "sha256": "75e3b529cd7fc0e62d3e3e2df149adcbb323fdda4bb1b7d2689202b10b8c85a0",
+  "rows": 5577,
+  "schema": [
+    "municipality_cod6",
+    "amc_group",
+    "name"
+  ],
+  "coverage": "census years through 2010",
+  "note": "undirected AMC grouping; carve candidate parents = same-group members enumerated in the census year"
+}

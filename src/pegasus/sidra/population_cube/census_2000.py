@@ -21,6 +21,7 @@ within-bracket single-year profile, borrowed from the nearest census that resolv
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -197,53 +198,101 @@ def assemble_2000_single_year_records(
     return records
 
 
-def load_municipality_genealogy(
-    path: str = "config/registries/spatial/municipality_genealogy.yaml",
-) -> list[dict]:
-    """Authoritative post-census municipality → parent(s) genealogy (FAL-POP-AMC). Returns [] if absent."""
-    from pathlib import Path
+def load_amc_crosswalk(
+    path: str = "config/registries/spatial/municipality_amc_crosswalk.parquet",
+) -> dict[str, int]:
+    """Áreas Mínimas Comparáveis crosswalk `cod6 → amc_group` (Ehrl 2017 / Moser). Empty if absent.
 
+    The AMC group bundles each municipality with the parent(s)/sibling(s) it split from into one
+    time-comparable unit — the authoritative *automated* source for identifying a post-census child's
+    candidate parents (§II.4 FAL-POP-AMC). No public directed child→parent map exists; the group +
+    which members were enumerated in the census year gives the carve targets."""
+    import polars as pl
+
+    p = Path(path)
+    if not p.exists():
+        return {}
+    df = pl.read_parquet(p).filter(pl.col("municipality_cod6").is_not_null() & pl.col("amc_group").is_not_null())
+    return {str(r["municipality_cod6"]): int(r["amc_group"]) for r in df.iter_rows(named=True)}
+
+
+def load_municipality_genealogy_overrides(
+    path: str = "config/registries/spatial/municipality_genealogy.yaml",
+) -> dict[str, list[str]]:
+    """Explicit `child_cod6 → [parent_cod6]` overrides (FAL-POP-AMC). These take precedence over the
+    AMC group (which can over-include co-descended siblings), and cover post-2010 installs the AMC
+    crosswalk — which is built through 2010 — does not. Returns {} if absent."""
     from pegasus.core.config import load_yaml
 
     p = Path(path)
     if not p.exists():
-        return []
+        return {}
     payload = load_yaml(p) or {}
-    return list(payload.get("entries", []) or [])
+    return {
+        str(e["child_cod6"]): [str(x) for x in e.get("parents_cod6", [])]
+        for e in (payload.get("entries", []) or [])
+        if e.get("child_cod6") and e.get("parents_cod6")
+    }
 
 
-def carve_pre_census_children(records: list[dict], genealogy: list[dict]) -> dict[str, float]:
-    """FAL-POP-AMC: carve municipalities installed AFTER a census out of their parents (mass-preserving).
+def carve_pre_census_children(
+    records: list[dict],
+    amc_crosswalk: dict[str, int],
+    overrides: dict[str, list[str]] | None = None,
+) -> dict[str, float]:
+    """FAL-POP-AMC: AUTOMATICALLY carve municipalities installed after a census out of their parents.
 
-    A municipality absent from a census (installed later) has its residents counted inside its parent(s)
-    in that census. Back-projecting the child's later population into the census year would double-count
-    the parents. This carves it out: the child's estimated census-year population `X` (its earliest-
-    census population back-projected by the state census-to-census ratio) is **subtracted from the
-    parents** (split by parent census size, scaling each parent's cells down) and **assigned to the
-    child** (its earliest-census age×sex×race shape, scaled to `X`). The census-year total is unchanged
-    (parents lose `X`, child gains `X`), so it stays the enumerated total, and the child gets a real
-    denominator. Mutates ``records`` in place; the child→parent map is AUTHORITATIVE (never inferred)."""
+    Detection is automatic: a "child" is any municipality present in the record set at a LATER census
+    but absent from an earlier census `cy` (installed after `cy`, so its residents were counted inside
+    its parents then). Parent resolution: an explicit ``overrides`` entry if present (most precise),
+    else the child's AMC-group siblings that WERE enumerated in `cy` (authoritative automated fallback).
+    The carve is mass-preserving: the child's estimated `cy` population `X` (its earliest-census pop
+    back-projected by the state census-to-census ratio) is subtracted from the parents (split by size)
+    and assigned to the child — parents lose `X`, child gains `X`, so the census-year total stays the
+    enumerated total and the child gets a real denominator. Mutates ``records`` in place; parents are
+    authoritative (AMC/override), never inferred from population dynamics. Returns telemetry."""
+    overrides = overrides or {}
     by_pc: dict[tuple[str, str], list[dict]] = {}
+    present: dict[str, set[str]] = {}
     period_totals: dict[str, float] = {}
     for r in records:
         by_pc.setdefault((r["period"], r["municipality_cod6"]), []).append(r)
+        present.setdefault(r["municipality_cod6"], set()).add(r["period"])
         period_totals[r["period"]] = period_totals.get(r["period"], 0.0) + float(r["value"])
+
+    census_years = sorted(period_totals, key=int)
+    group_members: dict[int, set[str]] = {}
+    for m in present:
+        g = amc_crosswalk.get(m)
+        if g is not None:
+            group_members.setdefault(g, set()).add(m)
 
     carved_population = 0.0
     children_carved = 0
-    for entry in genealogy:
-        child = str(entry["child_cod6"])
-        parents = [str(p) for p in entry.get("parents_cod6", [])]
-        ref_year = str(entry.get("reference_census_year", "2010"))
-        for cy in (str(y) for y in entry.get("absent_census_years", [])):
-            if by_pc.get((cy, child)):
-                continue  # the child WAS enumerated in cy — nothing to carve
+    for cy in census_years:
+        for child in list(present):
+            if cy in present[child]:
+                continue  # enumerated in cy
+            later = [y for y in present[child] if int(y) > int(cy)]
+            if not later:
+                continue  # never enumerated after cy -> not a post-cy install (data gap, not a split)
+            ref_year = min(later, key=int)
+            if child in overrides:
+                parents = [p for p in overrides[child] if cy in present.get(p, set())]
+            else:
+                g = amc_crosswalk.get(child)
+                parents = (
+                    [m for m in group_members.get(g, set()) if m != child and cy in present.get(m, set())]
+                    if g is not None else []
+                )
+            if not parents:
+                continue
             child_ref = by_pc.get((ref_year, child), [])
             child_ref_pop = sum(float(r["value"]) for r in child_ref)
             state_cy, state_ref = period_totals.get(cy, 0.0), period_totals.get(ref_year, 0.0)
-            if child_ref_pop <= 0 or state_ref <= 0 or not parents:
+            if child_ref_pop <= 0 or state_ref <= 0:
                 continue
-            X = child_ref_pop * (state_cy / state_ref)  # child's estimated census-year population
+            X = child_ref_pop * (state_cy / state_ref)
             parent_pops = {p: sum(float(r["value"]) for r in by_pc.get((cy, p), [])) for p in parents}
             parent_total = sum(parent_pops.values())
             if parent_total <= 0:
@@ -255,7 +304,7 @@ def carve_pre_census_children(records: list[dict], genealogy: list[dict]) -> dic
                 factor = max(0.0, 1.0 - (X * parent_pops[p] / parent_total) / parent_pops[p])
                 for r in by_pc.get((cy, p), []):
                     r["value"] = float(r["value"]) * factor
-            scale = X / child_ref_pop  # give the child its ref-year shape scaled to X
+            scale = X / child_ref_pop
             for r in child_ref:
                 records.append({**r, "period": cy, "value": float(r["value"]) * scale})
             carved_population += X
@@ -272,6 +321,7 @@ __all__ = [
     "disaggregate_2000_strata_to_single_year",
     "assemble_2000_single_year_records",
     "reconcile_undeclared_race",
-    "load_municipality_genealogy",
+    "load_amc_crosswalk",
+    "load_municipality_genealogy_overrides",
     "carve_pre_census_children",
 ]

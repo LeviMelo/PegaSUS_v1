@@ -98,15 +98,29 @@ def run_datasus_profile(*, manifest: str | Path) -> dict[str, Any]:
     raw_path = Path(request.raw_path)
     processed_path = Path(request.processed_path)
 
-    if not raw_path.exists() or not processed_path.exists():
-        return {"status": "blocked", "reason": "raw_or_processed_artifact_missing", "request": request}
+    # processed.parquet is the consumed, load-bearing artifact; raw.rds is an optional legacy
+    # sidecar (not written by the v4 bridge). The audit profiles what is present.
+    if not processed_path.exists():
+        return {"status": "blocked", "reason": "processed_artifact_missing", "request": request}
 
     raw_profile_path = Path("data/metadata/datasus/profiles") / request.system / request.request_hash / "raw_profile.json"
     processed_profile_path = Path("data/metadata/datasus/profiles") / request.system / request.request_hash / "processed_profile.json"
     compare_path = Path("data/metadata/datasus/schema_compare") / request.system / request.request_hash / "schema_compare.json"
 
-    raw_profile = profile_table(raw_path, output_path=raw_profile_path)
     processed_profile = profile_table(processed_path, output_path=processed_profile_path)
+    if not raw_path.exists():
+        return {
+            "status": "success",
+            "request": request,
+            "raw_profile_path": None,
+            "processed_profile_path": processed_profile_path,
+            "compare_path": None,
+            "raw_profile": None,
+            "processed_profile": processed_profile,
+            "comparison": None,
+        }
+
+    raw_profile = profile_table(raw_path, output_path=raw_profile_path)
     comparison = compare_profiles(raw_profile, processed_profile, output_path=compare_path)
 
     return {

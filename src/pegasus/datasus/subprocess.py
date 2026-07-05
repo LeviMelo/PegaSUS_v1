@@ -14,8 +14,27 @@ from pegasus.core.hashing import sha256_file
 from pegasus.core.schemas import DATASUSRequestManifest
 from pegasus.datasus.cache import DatasusCache
 
-DATASUS_BRIDGE_CONTRACT_VERSION = "datasus_r_bridge_v3_utf8_sanitized_raw_canonical_plus_microdatasus_sidecar"
+# v4 drops the redundant per-chunk sidecars (raw.rds + microdatasus_processed.parquet) and
+# writes processed.parquet with zstd. The CONSUMED artifact (processed.parquet, raw-coded, all
+# columns) is schema-identical to v3, so a v3 chunk stays cache-valid after its raw.rds is GC'd —
+# hence the accepted-versions set rather than a single-version equality gate.
+DATASUS_BRIDGE_CONTRACT_VERSION = "datasus_r_bridge_v4_zstd_canonical_only"
+ACCEPTED_DATASUS_CONTRACT_VERSIONS = frozenset({
+    "datasus_r_bridge_v3_utf8_sanitized_raw_canonical_plus_microdatasus_sidecar",
+    DATASUS_BRIDGE_CONTRACT_VERSION,
+})
 from pegasus.datasus.manifests import utc_now
+
+
+def _prune_success_ancillary(request: DATASUSRequestManifest) -> None:
+    """Delete per-chunk debug ephemera (stdout/stderr/heartbeat) once a chunk is durably
+    materialized. They exist only to diagnose a *failing* R subprocess; on success they are
+    tens of thousands of tiny files of pure slack. manifest.json + processed.parquet are kept."""
+    for attr in ("stdout_path", "stderr_path", "heartbeat_path"):
+        try:
+            Path(getattr(request, attr)).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def datasus_dependency_unavailable(*, dependency: str, detail: str) -> str:
@@ -153,12 +172,15 @@ def fetch_datasus_chunk(
     processed_path.parent.mkdir(parents=True, exist_ok=True)
 
     manifest_path = raw_path.parent / "manifest.json"
-    if manifest_path.exists() and raw_path.exists() and processed_path.exists():
+    # Cache validity is keyed on the CONSUMED artifact (processed.parquet) + its manifest, NOT on
+    # the raw.rds sidecar — so a chunk whose redundant raw.rds has been GC'd still hits cache and
+    # is never re-fetched.
+    if manifest_path.exists() and processed_path.exists():
         try:
             cached_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             if cached_payload.get("status") != "success":
                 raise ValueError("cached R manifest is not successful")
-            if cached_payload.get("processing_contract_version") != DATASUS_BRIDGE_CONTRACT_VERSION:
+            if cached_payload.get("processing_contract_version") not in ACCEPTED_DATASUS_CONTRACT_VERSIONS:
                 raise ValueError("cached R manifest uses an obsolete or non-UTF8-sanitized DATASUS bridge contract")
             return _finish(
                 request,
@@ -167,7 +189,7 @@ def fetch_datasus_chunk(
                 exit_code=0,
                 error_message=None,
                 updates={
-                    "raw_sha256": sha256_file(raw_path),
+                    "raw_sha256": sha256_file(raw_path) if raw_path.exists() else "",
                     "processed_sha256": sha256_file(processed_path),
                     "row_counts": cached_payload.get("row_counts", {}),
                     "column_lists": cached_payload.get("column_lists", {}),
@@ -250,28 +272,31 @@ def fetch_datasus_chunk(
 
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        actual_raw_path = Path(payload.get("raw_path", request.raw_path))
+        raw_value = payload.get("raw_path", request.raw_path)
+        actual_raw_path = Path(raw_value) if raw_value else None
         actual_processed_path = Path(payload.get("processed_path", request.processed_path))
 
-        if not actual_raw_path.exists() or not actual_processed_path.exists():
+        # Only the consumed artifact (processed.parquet) is required; raw.rds is optional and,
+        # under the v4 bridge, not written at all.
+        if not actual_processed_path.exists():
             return _finish(
                 request,
                 started=started,
                 status="failed",
                 exit_code=50,
-                error_message="R manifest exists but raw or processed artifact is missing.",
+                error_message="R manifest exists but the processed.parquet artifact is missing.",
             )
 
-        return _finish(
+        finished = _finish(
             request,
             started=started,
             status="success",
             exit_code=0,
             error_message=None,
             updates={
-                "raw_path": str(actual_raw_path),
+                "raw_path": str(actual_raw_path) if actual_raw_path is not None else request.raw_path,
                 "processed_path": str(actual_processed_path),
-                "raw_sha256": sha256_file(actual_raw_path),
+                "raw_sha256": sha256_file(actual_raw_path) if actual_raw_path is not None and actual_raw_path.exists() else "",
                 "processed_sha256": sha256_file(actual_processed_path),
                 "row_counts": payload.get("row_counts", {}),
                 "column_lists": payload.get("column_lists", {}),
@@ -280,6 +305,8 @@ def fetch_datasus_chunk(
                 "read_dbc_version": payload.get("read_dbc_version"),
             },
         )
+        _prune_success_ancillary(finished)
+        return finished
     except Exception as exc:
         return _finish(
             request,

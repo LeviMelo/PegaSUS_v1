@@ -118,7 +118,9 @@ sanitize_utf8_dataframe <- function(df) {
 
 write_utf8_parquet <- function(df, path) {
   safe <- sanitize_utf8_dataframe(df)
-  arrow::write_parquet(safe, path)
+  # ZSTD (vs arrow's SNAPPY default) is ~30-40% denser at negligible read cost, and this is
+  # the single artifact PegaSUS keeps per chunk, so the codec compounds over the full archive.
+  arrow::write_parquet(safe, path, compression = "zstd")
   safe
 }
 
@@ -344,34 +346,44 @@ if (is.null(raw) || !is.data.frame(raw) || nrow(raw) == 0) {
   quit(status = 40)
 }
 
-saveRDS(raw, raw_path)
+# raw.rds is NOT written: it was an R-native re-serialization of `raw`, never read back by
+# PegaSUS (the Python normalizer consumes processed.parquet, which carries the same raw-coded,
+# full-fidelity columns). Dropping it removes ~half the per-chunk footprint at the source.
 
 write_heartbeat("processing", nrow(raw), "raw coded acquisition complete; writing canonical raw-coded Parquet")
 
 canonical_raw <- raw
 canonical_raw <- write_utf8_parquet(canonical_raw, processed_path)
 
+# microdatasus semantic processing (process_*) is OFF by default. Its output
+# (microdatasus_processed.parquet) is NOT consumed by the in-house codebook normalizer, and the
+# process_* step is super-linear -- the dominant per-chunk CPU cost. Skipping it shrinks storage
+# AND speeds up every fetch. Pass `--emit-microdatasus-sidecar 1` to regenerate it on demand for
+# a schema_compare audit.
+emit_sidecar <- identical(get_arg("--emit-microdatasus-sidecar", "0"), "1")
 microdatasus_processed_path <- file.path(out_dir, "microdatasus_processed.parquet")
-microdatasus_processing_status <- "not_attempted"
+microdatasus_processing_status <- if (emit_sidecar) "not_attempted" else "skipped_by_default"
 microdatasus_processing_error <- NULL
 microdatasus_processed_rows <- NA_integer_
 microdatasus_processed_columns <- character()
+processed_semantic <- NULL
 
-processed_semantic <- tryCatch(
-  process_datasus_dispatch(raw, system_id),
-  error = function(e) {
-    microdatasus_processing_error <<- conditionMessage(e)
-    NULL
+if (emit_sidecar) {
+  processed_semantic <- tryCatch(
+    process_datasus_dispatch(raw, system_id),
+    error = function(e) {
+      microdatasus_processing_error <<- conditionMessage(e)
+      NULL
+    }
+  )
+  if (!is.null(processed_semantic) && is.data.frame(processed_semantic) && nrow(processed_semantic) > 0) {
+    processed_semantic <- write_utf8_parquet(processed_semantic, microdatasus_processed_path)
+    microdatasus_processing_status <- "success"
+    microdatasus_processed_rows <- nrow(processed_semantic)
+    microdatasus_processed_columns <- names(processed_semantic)
+  } else {
+    microdatasus_processing_status <- "failed"
   }
-)
-
-if (!is.null(processed_semantic) && is.data.frame(processed_semantic) && nrow(processed_semantic) > 0) {
-  processed_semantic <- write_utf8_parquet(processed_semantic, microdatasus_processed_path)
-  microdatasus_processing_status <- "success"
-  microdatasus_processed_rows <- nrow(processed_semantic)
-  microdatasus_processed_columns <- names(processed_semantic)
-} else {
-  microdatasus_processing_status <- "failed"
 }
 
 rows <- nrow(canonical_raw)
@@ -381,7 +393,7 @@ manifest <- list(
   status = "success",
   system = system_id,
   uf = uf,
-  raw_path = normalizePath(raw_path, winslash = "/", mustWork = TRUE),
+  raw_path = NULL,
   processed_path = normalizePath(processed_path, winslash = "/", mustWork = TRUE),
   microdatasus_processed_path = if (file.exists(microdatasus_processed_path)) {
     normalizePath(microdatasus_processed_path, winslash = "/", mustWork = TRUE)
@@ -405,8 +417,8 @@ manifest <- list(
   read_dbc_version = as.character(utils::packageVersion("read.dbc")),
   acquisition_transport = acquisition_transport,
   fetch_error = fetch_error,
-  processing_contract_version = "datasus_r_bridge_v3_utf8_sanitized_raw_canonical_plus_microdatasus_sidecar",
-  processing_mode = "canonical_raw_codes_with_microdatasus_processed_sidecar",
+  processing_contract_version = "datasus_r_bridge_v4_zstd_canonical_only",
+  processing_mode = "canonical_raw_codes_zstd_no_rds_no_sidecar",
   canonical_processed_role = "raw_codes_for_python_normalizer",
   utf8_sanitization = list(
     applied = TRUE,

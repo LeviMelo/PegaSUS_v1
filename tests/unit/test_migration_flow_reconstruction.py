@@ -236,3 +236,27 @@ def test_build_emits_migration_flow_and_affinity_artifacts(tmp_path: Path):
     affinity = pl.read_parquet(build.migration_affinity_path)
     assert set(affinity.columns) == {"source_cod6", "target_cod6", "affinity"}
     assert (affinity["affinity"] > 0).all()
+
+
+def test_hop_distances_max_hops_bounds_radius_without_changing_kept_distances() -> None:
+    """M4: bounding the BFS radius records only pairs within max_hops, and those distances
+    match the unbounded all-pairs result — the memory win costs no candidate-support accuracy."""
+    from pegasus.sidra.population_cube.migration import hop_distances
+
+    # a path graph A-B-C-D-E: all-pairs has distances up to 4; max_hops=2 keeps only <=2.
+    adjacency = {
+        "A": ("B",), "B": ("A", "C"), "C": ("B", "D"), "D": ("C", "E"), "E": ("D",),
+    }
+    nodes = ["A", "B", "C", "D", "E"]
+
+    full = hop_distances(adjacency, nodes)
+    bounded = hop_distances(adjacency, nodes, max_hops=2)
+
+    # bounded is a strict subset (fewer pairs), and every kept distance equals the full one.
+    assert set(bounded) <= set(full)
+    assert all(bounded[k] == full[k] for k in bounded)
+    # the pairs the candidate support/gravity actually use (distance 1..2) are all retained.
+    assert all(full[k] <= 2 for k in bounded)
+    assert all(k in bounded for k, d in full.items() if d <= 2)
+    # far pairs (A-E distance 4) are dropped from the bounded dict.
+    assert ("A", "E") in full and ("A", "E") not in bounded

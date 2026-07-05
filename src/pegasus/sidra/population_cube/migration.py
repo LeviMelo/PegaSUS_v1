@@ -71,12 +71,20 @@ class MigrationFlowReconstruction:
         }
 
 
-def hop_distances(adjacency: dict[str, tuple[str, ...]], nodes: list[str]) -> dict[tuple[str, str], int]:
-    """All-pairs shortest hop count over the (undirected) contiguity adjacency.
+def hop_distances(
+    adjacency: dict[str, tuple[str, ...]], nodes: list[str], *, max_hops: int | None = None
+) -> dict[tuple[str, str], int]:
+    """Shortest hop count over the (undirected) contiguity adjacency.
 
     BFS from each node. Unreachable pairs are omitted (no key). Distance to self
     is 0. This is the distance proxy for the gravity prior — no coordinates exist,
     and contiguity-hop distance is a sound monotone stand-in for real distance.
+
+    ``max_hops`` bounds the BFS radius: only pairs within ``max_hops`` are recorded.
+    The gravity prior and candidate-pair support use distances in ``1..max_hops`` only,
+    so bounding loses nothing while turning the memory from O(N²) (a national all-pairs
+    dict is ~5,570² ≈ 31M entries, multi-GB) into O(N · neighbours-within-max_hops).
+    Left unbounded (``None``) it is the full all-pairs distance (small graphs / tests).
     """
     node_set = set(nodes)
     out: dict[tuple[str, str], int] = {}
@@ -86,6 +94,8 @@ def hop_distances(adjacency: dict[str, tuple[str, ...]], nodes: list[str]) -> di
         while queue:
             node = queue.popleft()
             d = seen[node]
+            if max_hops is not None and d >= max_hops:
+                continue  # do not expand past the radius the gravity prior can use
             for neighbour in adjacency.get(node, ()):  # type: ignore[union-attr]
                 if neighbour in node_set and neighbour not in seen:
                     seen[neighbour] = d + 1
@@ -262,7 +272,10 @@ def reconstruct_migration_flows(
     contiguity ``adjacency`` (shared across years) provides the candidate support and
     hop distances (computed once). Years with no net data are skipped.
     """
-    hops = hop_distances(adjacency, nodes)
+    # Bound the shared hop computation to the candidate radius: this is the national memory
+    # path (all-pairs over ~5,570 nodes would be a multi-GB dict). Distances beyond max_hops are
+    # never used by the candidate support or gravity prior for the non-anchored estimate.
+    hops = hop_distances(adjacency, nodes, max_hops=max_hops)
     census_flows_by_year = census_flows_by_year or {}
     out: list[MigrationFlowReconstruction] = []
     for year in sorted(net_by_year):

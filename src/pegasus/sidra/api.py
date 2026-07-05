@@ -200,50 +200,6 @@ class SidraClient:
             view=view,
         )
 
-    def fetch_chunks_parallel(
-        self,
-        chunks: list[SIDRAChunk],
-        *,
-        max_workers: int = 12,
-        view: str | None = None,
-    ) -> dict[str, SidraResponse]:
-        """Fetch many cell-budgeted chunks concurrently (MSD national-scale acquisition).
-
-        SIDRA throttles by *cells per request*, not by request rate, so the optimal
-        strategy is wide concurrency over chunks already sized just under the cell
-        ceiling. There is deliberately NO inter-request sleep — only per-request
-        exponential backoff on transient 429/5xx (handled in get_json). Distinct chunks
-        write distinct cache keys, so the file cache is safe under concurrency.
-
-        Returns ``{chunk_id: SidraResponse}``; callers inspect ``status_code`` per chunk.
-        """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        if not chunks:
-            return {}
-        workers = max(1, min(int(max_workers), len(chunks)))
-        results: dict[str, SidraResponse] = {}
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_chunk = {
-                executor.submit(self.values_from_chunk, chunk, view=view): chunk
-                for chunk in chunks
-            }
-            for future in as_completed(future_to_chunk):
-                chunk = future_to_chunk[future]
-                try:
-                    results[chunk.chunk_id] = future.result()
-                except Exception as exc:  # pragma: no cover - defensive; transport already guards
-                    results[chunk.chunk_id] = SidraResponse(
-                        url=chunk.request_url,
-                        params=dict(chunk.request_params),
-                        payload={"error": str(exc)},
-                        status_code=599,
-                        from_cache=False,
-                        attempt=0,
-                        seconds=0.0,
-                    )
-        return results
-
     def ping(self) -> SidraResponse:
         return self.catalog(nivel="N1")
 

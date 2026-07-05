@@ -157,51 +157,6 @@ def validate_request_against_metadata(
     return errors
 
 
-def plan_sidra_chunks_unchecked(
-    request: SIDRARequest,
-    *,
-    max_cells_per_request: int = 95000,
-    max_localities_per_request: int = 200,
-    base_url: str = DEFAULT_BASE_URL,
-) -> list[SIDRAChunk]:
-    """Cell-budget chunk planner without metadata validation.
-
-    For registry-trusted national acquisition where the request space is built from the
-    curated compendium (not user input). Bisects the request recursively until every
-    chunk fits just under the cell ceiling — fat chunks (default 95k, under SIDRA's
-    100k/request cap) minimize round trips; concurrency (client.fetch_chunks_parallel)
-    supplies the throughput, since SIDRA limits cells/request, not request rate.
-    """
-    pending = [request]
-    chunks: list[SIDRAChunk] = []
-    while pending:
-        current = pending.pop(0)
-        cells = estimate_cells(
-            localities=current.localities,
-            periods=current.periods,
-            variables=current.variables,
-            classifications=current.classifications,
-        )
-        if cells <= max_cells_per_request and len(current.localities) <= max_localities_per_request:
-            chunks.append(_make_chunk(
-                current,
-                localities=current.localities,
-                periods=current.periods,
-                variables=current.variables,
-                classifications=current.classifications,
-                base_url=base_url,
-            ))
-            continue
-        try:
-            pending = _split_request(current) + pending
-        except ValueError as exc:
-            raise ValueError(
-                f"SIDRA request cannot be split below ceiling {max_cells_per_request}; "
-                f"minimum unsplittable cell count={cells}"
-            ) from exc
-    return chunks
-
-
 def plan_sidra_chunks(
     request: SIDRARequest,
     metadata: SIDRAMetadata,

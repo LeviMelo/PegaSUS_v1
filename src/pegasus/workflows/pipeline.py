@@ -98,9 +98,12 @@ SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE = "217"
 SIDRA_CIVIL_REGISTRY_DEATHS_TABLE = "2683"
 SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE = "343"
 
-# SIDRA throttles by cells-per-request, not connection count (sidra/acquire.py), so the population
-# denominator chunk fetch runs wide -- was concurrency=_SIDRA_CHUNK_CONCURRENCY, which left the pool idle for small UFs.
+# SIDRA throttles by cells-per-request, not connection count, so the population denominator chunk
+# fetch runs wide -- was concurrency=4, which left the pool idle for small UFs.
 _SIDRA_CHUNK_CONCURRENCY = 12
+# Fat chunks just under IBGE's ~100k-cell per-request ceiling (proven-safe production value): half
+# the HTTP round-trips of the old 49_900 cap. plan.py still enforces max_localities_per_request=200.
+_SIDRA_MAX_CELLS_PER_REQUEST = 95_000
 
 
 def _population_tensor_requested(intent: UserIntent) -> bool:
@@ -460,7 +463,7 @@ def _acquire_sidra_population_table(
     )
     table_metadata = metadata.tables[table_id]
     metadata_hash = content_hash(table_metadata.model_dump(mode="json"))
-    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=_SIDRA_MAX_CELLS_PER_REQUEST)
     work_dir = data_root / "sidra" / f"{work_dir_label}_{uf}_{table_id}"
     work_dir.mkdir(parents=True, exist_ok=True)
     results = extract_chunk_plan(
@@ -619,7 +622,7 @@ def _acquire_sidra_population_strata(
         "population_strata_basis": "sex_race_single_year_age_nonoverlapping",
         "population_strata_periods": periods,
     })
-    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=_SIDRA_MAX_CELLS_PER_REQUEST)
     work_dir = data_root / "sidra" / f"population_strata_demographic_{uf}_{'_'.join(periods)}"
     work_dir.mkdir(parents=True, exist_ok=True)
     results = extract_chunk_plan(
@@ -703,7 +706,7 @@ def _acquire_sidra_census_2000_strata(
         "census_2000_strata_basis": "clean_partition_age_brackets_race_sex_situation_total",
         "census_2000_strata_periods": periods,
     })
-    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=_SIDRA_MAX_CELLS_PER_REQUEST)
     work_dir = data_root / "sidra" / f"census_2000_strata_{uf}"
     work_dir.mkdir(parents=True, exist_ok=True)
     results = extract_chunk_plan(
@@ -803,7 +806,7 @@ def _acquire_one_compendium_table(
             **table_metadata.model_dump(mode="json"),
             "compendium_request": plan.as_manifest(),
         })
-        chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+        chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=_SIDRA_MAX_CELLS_PER_REQUEST)
         work_dir = data_root / "sidra" / "context" / f"tier={plan.tier}" / f"uf={uf}" / f"table={plan.table_id}"
         work_dir.mkdir(parents=True, exist_ok=True)
         results = extract_chunk_plan(

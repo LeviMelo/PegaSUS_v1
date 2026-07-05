@@ -56,12 +56,20 @@ def canonical_categories(axis: str, *, registry_root: str | Path = "config/regis
     return tuple(str(c) for c in (spec.get("canonical_categories") or []))
 
 
+@lru_cache(maxsize=256)
+def _source_category_map_cached(axis: str, source_system: str, root: str) -> dict[str, str]:
+    spec = _axis_maps(root).get(axis, {})
+    source_maps = spec.get("source_maps", {}) or {}
+    return {str(k): str(v) for k, v in (source_maps.get(source_system) or {}).items()}
+
+
 def source_category_map(
     axis: str, source_system: str, *, registry_root: str | Path = "config/registries"
 ) -> dict[str, str]:
-    spec = _axis_maps(str(registry_root)).get(axis, {})
-    source_maps = spec.get("source_maps", {}) or {}
-    return {str(k): str(v) for k, v in (source_maps.get(source_system) or {}).items()}
+    # Cached: this is called O(n_records) times during a tensor build and rebuilt the same small dict
+    # every call (~4-8s of pure dict-comprehension at state scale). The returned dict is read-only for
+    # every caller (map_category does .get); do NOT mutate it.
+    return _source_category_map_cached(axis, source_system, str(registry_root))
 
 
 def source_column(

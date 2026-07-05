@@ -188,51 +188,74 @@ def _read_population_strata(path: str | Path) -> pl.DataFrame:
     )
 
 
-def _census_2000_records_from_facts(census_2000_path: str | Path, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _census_2000_records_from_facts(
+    census_2000_path: str | Path, records: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """Parse SIDRA 2093 (2000-census) facts into single-year age×sex×race records (FAL-POP #4).
 
     2093 reports age as clsf-58 *brackets*; each (locality, sex, race) bracket profile is CTR-
     disaggregated to single year using that cell's 2010 single-year shape drawn from ``records``
     (the 9606 rows already parsed, which now include 2010 thanks to census-scope invariance).
     Race/sex map through the shared codebook (clsf 86/2) so the 2000 records land on the same axis
-    labels as 9606. Returns [] on an absent/empty 2093 artifact (the 2000 anchor is optional)."""
+    labels as 9606. The **"Sem declaração" (undeclared-race) bin is collected and reconciled into the
+    declared races by local composition (§II.5 FAL-POP-RECON), never dropped** — so the 2000 anchor
+    sums to the enumerated census total, computationally equal to the 2010/2022 direct-total anchors.
+    Returns (records, reconciliation telemetry); ([], {}) on an absent/empty 2093 artifact."""
     from pegasus.sidra.population_cube.census_2000 import (
         CLEAN_AGE_BRACKETS_2093,
+        SIDRA_2093_UNDECLARED_RACE,
         assemble_2000_single_year_records,
+        reconcile_undeclared_race,
     )
 
     frame = pl.read_parquet(census_2000_path)
     required = {"table_id", "period", "locality_id", "category_tuple", "value_numeric", "value_status"}
     if required - set(frame.columns):
-        return []
+        return [], {}
     frame = frame.filter(
         (pl.col("table_id").cast(pl.Utf8) == "2093")
         & (pl.col("value_status").cast(pl.Utf8) == "numeric")
         & pl.col("value_numeric").is_not_null()
     )
     if frame.height == 0:
-        return []
+        return [], {}
 
     profiles: dict[tuple[str, str, str], dict[str, float]] = {}
+    undeclared: dict[tuple[str, str], dict[str, float]] = {}
     for row in frame.iter_rows(named=True):
         cats = _category_by_classification(row.get("category_tuple"))
         bracket = cats.get("58")
         if bracket not in CLEAN_AGE_BRACKETS_2093:  # skip roll-ups / Total (§II.4: never summed)
             continue
         sex = map_category("sex", "SIDRA", cats.get("2", ""))
-        race = map_category("race", "SIDRA", cats.get("86", ""))
-        if sex in {TOTAL, UNKNOWN} or race in {TOTAL, UNKNOWN}:
+        if sex in {TOTAL, UNKNOWN}:
             continue
-        key = (str(row["locality_id"])[:6], sex, race)
-        cell = profiles.setdefault(key, {})
-        cell[bracket] = cell.get(bracket, 0.0) + float(row["value_numeric"])
+        loc = str(row["locality_id"])[:6]
+        value = float(row["value_numeric"])
+        raw_race = str(cats.get("86", ""))
+        if raw_race == SIDRA_2093_UNDECLARED_RACE:
+            # "Sem declaração": collect by (locality, sex) — reconciled into the declared races below,
+            # NOT dropped (the prime directive: missingness is never silence).
+            ucell = undeclared.setdefault((loc, sex), {})
+            ucell[bracket] = ucell.get(bracket, 0.0) + value
+            continue
+        race = map_category("race", "SIDRA", raw_race)
+        if race in {TOTAL, UNKNOWN}:
+            continue
+        cell = profiles.setdefault((loc, sex, race), {})
+        cell[bracket] = cell.get(bracket, 0.0) + value
+
+    # §II.5 FAL-POP-RECON: reallocate the undeclared-race mass into the declared races by the local
+    # declared composition, so the 2000 strata sum to the complete enumerated total (census-exact).
+    recon_stats = reconcile_undeclared_race(profiles, undeclared)
 
     reference_2010: dict[tuple[str, str, str], dict[str, float]] = {}
     for rec in records:
         if rec["period"] == "2010":
             reference_2010.setdefault((rec["municipality_cod6"], rec["sex"], rec["race"]), {})[rec["age_group"]] = rec["value"]
 
-    return assemble_2000_single_year_records(bracket_profiles=profiles, reference_2010=reference_2010)
+    records_2000 = assemble_2000_single_year_records(bracket_profiles=profiles, reference_2010=reference_2010)
+    return records_2000, recon_stats
 
 
 def _resolve_geo_year_columns(frame: pl.DataFrame, *, geo_candidates: tuple[str, ...], year_candidates: tuple[str, ...]) -> pl.DataFrame | None:
@@ -1008,8 +1031,10 @@ def solve_population_tensor_from_sidra_strata(
     # FAL-POP #4 (§II.4): fold in the 2000 census (SIDRA 2093) as a third anchor, disaggregated from
     # its coarse age brackets to single year using the 2010 shape. Appended to the census record set
     # so the solver cohort-ages across 2000/2010/2022. Absent 2093 → no 2000 anchor (build uses 2010/2022).
+    census_2000_recon: dict[str, float] = {}
     if census_2000_strata_path is not None:
-        for record in _census_2000_records_from_facts(census_2000_strata_path, records):
+        records_2000, census_2000_recon = _census_2000_records_from_facts(census_2000_strata_path, records)
+        for record in records_2000:
             records.append(record)
             for axis in AXES:
                 categories_by_axis[axis].add(record[axis])
@@ -1157,6 +1182,20 @@ def solve_population_tensor_from_sidra_strata(
 
     death_rates: tuple[float | None, ...] | None = None
     warnings: list[str] = [*death_warnings, *birth_warnings, *migration_warnings]
+    # FAL-POP-RECON telemetry (§II.5): the undeclared-race mass reallocated into the declared races so
+    # the 2000 anchor sums to the enumerated total (census-exact), and any all-undeclared cells that
+    # fell back to a broader composition.
+    if census_2000_recon.get("undeclared_reallocated", 0.0) > 0:
+        warnings.append(
+            "census_2000_undeclared_race_reconciled"
+            f"::reallocated={census_2000_recon['undeclared_reallocated']:.0f}"
+            f"::fallback_cells={int(census_2000_recon.get('fallback_cells', 0))}"
+        )
+    if census_2000_recon.get("undeclared_dropped_no_declared", 0.0) > 0:
+        warnings.append(
+            "census_2000_undeclared_race_unreconciled_no_declared"
+            f"::mass={census_2000_recon['undeclared_dropped_no_declared']:.0f}"
+        )
     # FAL-POP-SV telemetry: record that the intercensal closure is on the census (not 6579) vintage,
     # and flag municipalities that could not be re-anchored (kept on their prior 6579 closure).
     if single_vintage_stats["reanchored_municipalities"] > 0:

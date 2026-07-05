@@ -15,7 +15,44 @@ from pegasus.sidra.population_cube.census_2000 import (
     bracket_single_year_labels,
     disaggregate_2000_strata_to_single_year,
     disaggregate_bracket,
+    reconcile_undeclared_race,
 )
+
+
+def test_reconcile_undeclared_race_preserves_total_by_local_composition() -> None:
+    """FAL-POP-RECON (§II.5): undeclared-race mass is reallocated into the declared races by the
+    local (locality, sex, bracket) composition — total preserved, nothing dropped."""
+    # locality M1, sex M, bracket "1140": declared branca=60, parda=40 (60/40 split); undeclared=10.
+    declared = {
+        ("M1", "male", "branca"): {"1140": 60.0},
+        ("M1", "male", "parda"): {"1140": 40.0},
+    }
+    undeclared = {("M1", "male"): {"1140": 10.0}}
+    stats = reconcile_undeclared_race(declared, undeclared)
+    assert stats["undeclared_reallocated"] == 10.0
+    # 10 undeclared split 60/40 -> branca 66, parda 44; total 110 (was 100 declared + 10 undeclared)
+    assert declared[("M1", "male", "branca")]["1140"] == 66.0
+    assert declared[("M1", "male", "parda")]["1140"] == 44.0
+    total = sum(v for prof in declared.values() for v in prof.values())
+    assert total == 110.0  # complete enumerated count; the 10 undeclared were reallocated, not dropped
+
+
+def test_reconcile_undeclared_race_hierarchical_fallback() -> None:
+    """A cell that is entirely undeclared (no local declared mass) borrows a broader composition,
+    never dropping the mass."""
+    declared = {
+        ("M1", "male", "branca"): {"1141": 80.0},   # composition known at (loc,sex) but not bracket 1140
+        ("M1", "male", "parda"): {"1141": 20.0},
+    }
+    undeclared = {("M1", "male"): {"1140": 50.0}}    # bracket 1140 has zero declared -> fallback
+    stats = reconcile_undeclared_race(declared, undeclared)
+    assert stats["undeclared_reallocated"] == 50.0
+    assert stats["fallback_cells"] == 1
+    # falls back to the (loc,sex) composition 80/20
+    assert declared[("M1", "male", "branca")]["1140"] == 40.0
+    assert declared[("M1", "male", "parda")]["1140"] == 10.0
+    total = sum(v for prof in declared.values() for v in prof.values())
+    assert total == 150.0  # 100 declared + 50 reallocated
 
 
 def test_clean_partition_is_contiguous_and_covers_0_to_100plus() -> None:

@@ -47,6 +47,68 @@ CLEAN_AGE_BRACKETS_2093: dict[str, tuple[int, int]] = {
 
 _TOP_AGE = 100  # canonical axis tops out at age_100_plus
 
+# SIDRA 2093 clsf-86 category for "Cor ou raça: Sem declaração" (undeclared race). Enumerated people
+# who did not declare race -- missing data on the race axis, reallocated by local composition
+# (§II.5 FAL-POP-RECON), NEVER dropped.
+SIDRA_2093_UNDECLARED_RACE = "2781"
+
+
+def reconcile_undeclared_race(
+    declared_profiles: dict[tuple[str, str, str], dict[str, float]],
+    undeclared_profiles: dict[tuple[str, str], dict[str, float]],
+) -> dict[str, float]:
+    """Reallocate undeclared-race census mass into the declared races by local composition (§II.5).
+
+    ``declared_profiles[(locality, sex, race)] = {bracket_id: count}`` for the declared races;
+    ``undeclared_profiles[(locality, sex)] = {bracket_id: undeclared_count}`` for "Sem declaração".
+
+    For each ``(locality, sex, bracket)`` the undeclared count is distributed across the declared races
+    in proportion to the **local declared composition** `π_local[race | locality, sex, bracket]` — the
+    max-entropy allocation given the margins, preserving the person's declared sex and age bracket and
+    imputing only race. Where a cell is entirely undeclared (no declared mass to form `π`), a
+    **hierarchical fallback** borrows the composition from `(locality, sex)`, then `(locality)`, then
+    the whole panel (small-area strength-borrowing, §III.3). Mutates ``declared_profiles`` in place so
+    it now sums to the complete enumerated total; returns telemetry. The undeclared bin is thereby
+    reconciled, never deleted (the prime directive — missingness is never silence)."""
+    declared_races = sorted({race for (_l, _s, race) in declared_profiles})
+    if not declared_races:
+        return {"undeclared_reallocated": 0.0, "undeclared_dropped_no_declared": float(
+            sum(v for prof in undeclared_profiles.values() for v in prof.values())
+        )}
+
+    # Fallback compositions over the declared races, precomputed once.
+    ls_comp: dict[tuple[str, str], dict[str, float]] = {}
+    l_comp: dict[str, dict[str, float]] = {}
+    g_comp: dict[str, float] = {race: 0.0 for race in declared_races}
+    for (loc, sex, race), prof in declared_profiles.items():
+        tot = float(sum(prof.values()))
+        ls_comp.setdefault((loc, sex), {}); ls_comp[(loc, sex)][race] = ls_comp[(loc, sex)].get(race, 0.0) + tot
+        l_comp.setdefault(loc, {}); l_comp[loc][race] = l_comp[loc].get(race, 0.0) + tot
+        g_comp[race] += tot
+
+    def _norm(counts: dict[str, float]) -> dict[str, float] | None:
+        s = float(sum(counts.get(r, 0.0) for r in declared_races))
+        return {r: counts.get(r, 0.0) / s for r in declared_races} if s > 0.0 else None
+
+    g_weights = _norm(g_comp) or {r: 1.0 / len(declared_races) for r in declared_races}
+
+    reallocated = 0.0
+    fallback_cells = 0
+    for (loc, sex), uprof in undeclared_profiles.items():
+        for bracket, u in uprof.items():
+            if u <= 0.0:
+                continue
+            local = {r: declared_profiles.get((loc, sex, r), {}).get(bracket, 0.0) for r in declared_races}
+            weights = _norm(local)
+            if weights is None:
+                weights = _norm(ls_comp.get((loc, sex), {})) or _norm(l_comp.get(loc, {})) or g_weights
+                fallback_cells += 1
+            for r in declared_races:
+                cell = declared_profiles.setdefault((loc, sex, r), {})
+                cell[bracket] = cell.get(bracket, 0.0) + u * weights[r]
+            reallocated += float(u)
+    return {"undeclared_reallocated": reallocated, "fallback_cells": float(fallback_cells)}
+
 
 def bracket_single_year_labels(age_low: int, age_high: int) -> list[str]:
     """Canonical single-year ``age_group`` labels spanned by a bracket. An open-ended top bracket
@@ -137,9 +199,11 @@ def assemble_2000_single_year_records(
 
 __all__ = [
     "CLEAN_AGE_BRACKETS_2093",
+    "SIDRA_2093_UNDECLARED_RACE",
     "BracketDisaggregation",
     "bracket_single_year_labels",
     "disaggregate_bracket",
     "disaggregate_2000_strata_to_single_year",
     "assemble_2000_single_year_records",
+    "reconcile_undeclared_race",
 ]

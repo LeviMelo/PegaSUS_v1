@@ -646,13 +646,16 @@ def _acquire_sidra_population_strata(
 
 
 def _census_2000_strata_classifications() -> dict[str, list[str]]:
-    """Clean-partition classification selection for SIDRA 2093 (§II.4): the 5 canonical races and
-    2 sexes crossed with the 13 non-overlapping age brackets, urban/rural situation pinned to Total.
-    Roll-up brackets (0-14, 15-64, 65+, 70+, 15-19) are excluded so nothing is double-counted."""
-    from pegasus.sidra.population_cube.census_2000 import CLEAN_AGE_BRACKETS_2093
+    """Clean-partition classification selection for SIDRA 2093 (§II.4): the 5 canonical races PLUS
+    "Sem declaração" (2781, undeclared race) and 2 sexes crossed with the 13 non-overlapping age
+    brackets, urban/rural situation pinned to Total. Roll-up brackets (0-14, 15-64, 65+, 70+, 15-19)
+    are excluded so nothing is double-counted. The undeclared-race bin (2781) is fetched so it can be
+    RECONCILED into the declared races by local composition at build time (§II.5 FAL-POP-RECON) rather
+    than silently dropped — without it the 2000 anchor sums short of the enumerated total."""
+    from pegasus.sidra.population_cube.census_2000 import CLEAN_AGE_BRACKETS_2093, SIDRA_2093_UNDECLARED_RACE
 
     return {
-        SIDRA_CENSUS_2000_STRATA_RACE_CLSF: ["2776", "2777", "2778", "2779", "2780"],
+        SIDRA_CENSUS_2000_STRATA_RACE_CLSF: ["2776", "2777", "2778", "2779", "2780", SIDRA_2093_UNDECLARED_RACE],
         SIDRA_CENSUS_2000_STRATA_SEX_CLSF: ["4", "5"],
         SIDRA_CENSUS_2000_STRATA_AGE_GROUP_CLSF: list(CLEAN_AGE_BRACKETS_2093.keys()),
         SIDRA_CENSUS_2000_STRATA_SITUATION_CLSF: ["0"],

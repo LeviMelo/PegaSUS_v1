@@ -1074,22 +1074,25 @@ def solve_population_tensor_from_sidra_strata(
     race_index = {value: idx for idx, value in enumerate(races)}
 
     n_cells = shape[0] * shape[1] * shape[2] * shape[3] * shape[4]
-    anchors: list[float | None] = [None] * n_cells
-    for record in records:
-        idx = _cell_index(
-            locality=record["municipality_cod6"],
-            period=record["period"],
-            age_group=record["age_group"],
-            sex=record["sex"],
-            race=record["race"],
-            locality_index=locality_index,
-            period_index=period_index,
-            age_index=age_index,
-            sex_index=sex_index,
-            race_index=race_index,
-            shape=shape,
-        )
-        anchors[idx] = (anchors[idx] or 0.0) + float(record["value"])
+    inner_cells = shape[2] * shape[3] * shape[4]
+    # Vectorized numpy anchor construction (§V.1): the flat cell index is computed for every record at
+    # once and scatter-added, so a national ~1.3e8-cell anchor field is a single float64 array (NaN =
+    # absent) instead of a Python list of ~1.3e8 objects, and the fill is one np.add.at not a per-record
+    # loop. Byte-identical to the old accumulate-per-record.
+    n_rec = len(records)
+    li = np.fromiter((locality_index.get(r["municipality_cod6"], -1) for r in records), dtype=np.int64, count=n_rec)
+    pi = np.fromiter((period_index.get(r["period"], -1) for r in records), dtype=np.int64, count=n_rec)
+    ai = np.fromiter((age_index.get(r["age_group"], -1) for r in records), dtype=np.int64, count=n_rec)
+    xi = np.fromiter((sex_index.get(r["sex"], -1) for r in records), dtype=np.int64, count=n_rec)
+    ri = np.fromiter((race_index.get(r["race"], -1) for r in records), dtype=np.int64, count=n_rec)
+    rvals = np.fromiter((float(r["value"]) for r in records), dtype=np.float64, count=n_rec)
+    valid = (li >= 0) & (pi >= 0) & (ai >= 0) & (xi >= 0) & (ri >= 0)
+    flat_idx = ((li * shape[1] + pi) * inner_cells) + (ai * (shape[3] * shape[4]) + xi * shape[4] + ri)
+    anchors = np.zeros(n_cells, dtype=np.float64)
+    np.add.at(anchors, flat_idx[valid], rvals[valid])
+    touched = np.zeros(n_cells, dtype=bool)
+    touched[flat_idx[valid]] = True
+    anchors[~touched] = np.nan  # NaN = no anchor (was None); accumulated sum otherwise
 
     closure: list[float | None] = [None] * (shape[0] * shape[1])
     for row in totals.iter_rows(named=True):
@@ -1097,15 +1100,13 @@ def solve_population_tensor_from_sidra_strata(
         period = str(row["year"])
         if locality in locality_index and period in period_index:
             closure[locality_index[locality] * shape[1] + period_index[period]] = float(row["value"])
-    for s in range(shape[0]):
-        for t in range(shape[1]):
-            idx = s * shape[1] + t
-            if closure[idx] is not None:
-                continue
-            start = ((s * shape[1] + t) * shape[2] * shape[3] * shape[4])
-            end = start + shape[2] * shape[3] * shape[4]
-            observed = [value for value in anchors[start:end] if value is not None]
-            closure[idx] = float(sum(observed)) if observed else None
+    # Strata-sum fallback for closure cells no totals table covers: sum the year's anchors (NaN-aware).
+    grouped = anchors.reshape(shape[0] * shape[1], inner_cells)
+    strata_sum = np.nansum(grouped, axis=1)
+    has_strata = ~np.isnan(grouped).all(axis=1)
+    for idx in range(len(closure)):
+        if closure[idx] is None and bool(has_strata[idx]):
+            closure[idx] = float(strata_sum[idx])
 
     # FAL-POP-SV (§II.4 anti-discontinuity contract): re-anchor the intercensal closure to the
     # CENSUS vintage. The panel above still carries SIDRA-6579 *projection*-vintage totals for
@@ -1240,13 +1241,12 @@ def solve_population_tensor_from_sidra_strata(
         feedback_warning = True
         reconstruction_uncertainty = 0.05
         warnings.append("sim_informed_population_feedback_risk")
-        rates: list[float | None] = []
-        for deaths, anchor in zip(sim_deaths, anchors, strict=True):
-            if deaths is None or anchor is None or anchor <= 0:
-                rates.append(None)
-            else:
-                rates.append(float(deaths) / float(anchor))
-        death_rates = tuple(rates)
+        # Vectorized rate = deaths / anchor where both present and anchor > 0, else NaN (was None).
+        sim_np = np.asarray([np.nan if d is None else float(d) for d in sim_deaths], dtype=np.float64)
+        rate_mask = ~np.isnan(sim_np) & ~np.isnan(anchors) & (anchors > 0)
+        death_rates_arr = np.full(n_cells, np.nan, dtype=np.float64)
+        death_rates_arr[rate_mask] = sim_np[rate_mask] / anchors[rate_mask]
+        death_rates = death_rates_arr
 
     # Layer 1 (MSD §2.8.10): closed-form prior-mean tensor -- census composition interpolated
     # across years, scaled to each closure total. This is the reconstruction in the data-poor
@@ -1255,7 +1255,12 @@ def solve_population_tensor_from_sidra_strata(
         records=records, closure=closure, locality_index=locality_index, period_index=period_index,
         age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
     )
-    census_year_count = len({record["period"] for record in records})
+    census_year_count = len(census_years)
+    # Free the O(n_records) records list before the solve/emit -- at national scale it is ~3-4 GB and is
+    # not needed past here (anchors/closure/priors are built), keeping the working set O(n_cells arrays).
+    import gc as _gc
+    del records
+    _gc.collect()
 
     weights = PopulationObjectiveWeights(
         anchor=10.0,
@@ -1324,26 +1329,22 @@ def solve_population_tensor_from_sidra_strata(
         warnings.append("population_reconstruction_closed_form_no_informative_flows")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # Vectorized tensor emission (§V.1): the enumerate-based axis indices make the flat cell order
-    # (locality, period, age, sex, race) row-major, so optimized.population/migration are already in
-    # order and the label columns are np.repeat/tile of the ordered axis tuples. Building 16.7M+ cells
-    # this way is ~1 GB of numpy, not the ~13 GB a list of per-cell dicts materialized.
+    # Streamed tensor emission (§V.1 M6): the flat cell order (locality, period, age, sex, race) is
+    # row-major, so each locality is a contiguous ``t*inner``-cell slab. Emit LOCALITY-BLOCKS through one
+    # ParquetWriter; each block's label columns are O(block), so a national ~1.3e8-cell tensor never
+    # materializes the full ~8 GB label frame. Byte-identical to a monolithic emit (same row order).
+    import pyarrow.parquet as pq
+
     s_count, t_count, a_count, x_count, r_count = shape
     inner = a_count * x_count * r_count
     pop = np.asarray(optimized.population, dtype=np.float64)
     mig = np.asarray(optimized.migration, dtype=np.float64)
-    anch = np.asarray(anchors, dtype=np.float64)  # NaN for absent (M1); → null below
-    simd = np.full(pop.shape[0], np.nan) if sim_deaths is None else np.asarray(sim_deaths, dtype=np.float64)
-    year_col = np.tile(np.repeat(np.array([int(p) for p in periods], dtype=np.int64), inner), s_count)
-    loc_col = np.repeat(np.asarray(localities, dtype=object), t_count * inner)
-    age_col = np.tile(np.repeat(np.asarray(age_groups, dtype=object), x_count * r_count), s_count * t_count)
-    sex_col = np.tile(np.repeat(np.asarray(sexes, dtype=object), r_count), s_count * t_count * a_count)
-    race_col = np.tile(np.asarray(races, dtype=object), s_count * t_count * a_count * x_count)
-
-    # FAL-POP-PROJ (§II.4): per-year anchor classification + horizon-growing uncertainty envelope,
-    # broadcast to every cell of a year via the same repeat/tile order as year_col. Projected years
-    # (beyond the census range) carry a wider, fragile/unreliable-typed uncertainty than enumerated or
-    # interpolated years -- so a rate on a projected denominator is visibly less certain.
+    anch = np.asarray(anchors, dtype=np.float64)
+    simd = (
+        np.full(pop.shape[0], np.nan) if sim_deaths is None
+        else np.asarray([np.nan if d is None else float(d) for d in sim_deaths], dtype=np.float64)
+    )
+    # FAL-POP-PROJ (§II.4): per-year anchor classification + horizon-growing uncertainty envelope.
     proj_map, anchored_range, max_horizon = _classify_projection_years(
         periods, census_years, reconstruction_uncertainty
     )
@@ -1354,41 +1355,55 @@ def solve_population_tensor_from_sidra_strata(
             f"::count={len(projected_periods)}::max_horizon={max_horizon}"
             f"::anchored_range={anchored_range[0]}-{anchored_range[1]}"
         )
-    cls_by_period = np.array([proj_map[p][0] for p in periods], dtype=object)
-    horizon_by_period = np.array([proj_map[p][1] for p in periods], dtype=np.int64)
-    state_by_period = np.array([proj_map[p][2] for p in periods], dtype=object)
-    unc_by_period = np.array([proj_map[p][3] for p in periods], dtype=np.float64)
-    anchor_class_col = np.tile(np.repeat(cls_by_period, inner), s_count)
-    horizon_col = np.tile(np.repeat(horizon_by_period, inner), s_count)
-    cell_state_col = np.tile(np.repeat(state_by_period, inner), s_count)
-    cell_unc_col = np.tile(np.repeat(unc_by_period, inner), s_count)
-
-    # anchor_value/sim_deaths are null (not float) for every intercensal demographic cell; NaN → null.
-    frame = pl.DataFrame(
-        {
-            "year": year_col, "municipality_cod6": loc_col, "age_group": age_col,
-            "sex": sex_col, "race": race_col, "value": pop, "migration": mig,
-            "anchor_value": anch, "sim_deaths": simd,
-            "anchor_class": anchor_class_col, "projection_horizon": horizon_col,
-            "cell_state": cell_state_col, "cell_uncertainty": cell_unc_col,
-        },
-        schema={
-            "year": pl.Int64, "municipality_cod6": pl.Utf8, "age_group": pl.Utf8, "sex": pl.Utf8,
-            "race": pl.Utf8, "value": pl.Float64, "migration": pl.Float64,
-            "anchor_value": pl.Float64, "sim_deaths": pl.Float64,
-            "anchor_class": pl.Utf8, "projection_horizon": pl.Int64,
-            "cell_state": pl.Utf8, "cell_uncertainty": pl.Float64,
-        },
-    ).with_columns(
-        pl.col("anchor_value").fill_nan(None),
-        pl.col("sim_deaths").fill_nan(None),
-        pl.lit(mode).alias("population_tensor_mode"),
-        pl.lit(solver.solver_id).alias("solver_id"),
-        pl.lit(solver.backend).alias("solver_backend"),
-        pl.lit(bool(solver.sparse_jacobian)).alias("sparse_jacobian"),
-        pl.lit(bool(feedback_warning)).alias("denominator_feedback_warning"),
-    )
-    frame.write_parquet(out_path, compression="zstd")
+    # One-locality (t*inner) label templates -- identical for every locality; only the muni id varies.
+    one_year = np.repeat(np.array([int(p) for p in periods], dtype=np.int64), inner)
+    one_age = np.tile(np.repeat(np.asarray(age_groups, dtype=object), x_count * r_count), t_count)
+    one_sex = np.tile(np.repeat(np.asarray(sexes, dtype=object), r_count), t_count * a_count)
+    one_race = np.tile(np.asarray(races, dtype=object), t_count * a_count * x_count)
+    one_cls = np.repeat(np.array([proj_map[p][0] for p in periods], dtype=object), inner)
+    one_hor = np.repeat(np.array([proj_map[p][1] for p in periods], dtype=np.int64), inner)
+    one_state = np.repeat(np.array([proj_map[p][2] for p in periods], dtype=object), inner)
+    one_unc = np.repeat(np.array([proj_map[p][3] for p in periods], dtype=np.float64), inner)
+    loc_arr = np.asarray(localities, dtype=object)
+    slab = t_count * inner
+    emit_block = max(1, 2_000_000 // slab)
+    out_schema = {
+        "year": pl.Int64, "municipality_cod6": pl.Utf8, "age_group": pl.Utf8, "sex": pl.Utf8,
+        "race": pl.Utf8, "value": pl.Float64, "migration": pl.Float64,
+        "anchor_value": pl.Float64, "sim_deaths": pl.Float64,
+        "anchor_class": pl.Utf8, "projection_horizon": pl.Int64,
+        "cell_state": pl.Utf8, "cell_uncertainty": pl.Float64,
+    }
+    writer = None
+    for s0 in range(0, s_count, emit_block):
+        s1 = min(s0 + emit_block, s_count)
+        nloc = s1 - s0
+        lo, hi = s0 * slab, s1 * slab
+        frame = pl.DataFrame(
+            {
+                "year": np.tile(one_year, nloc),
+                "municipality_cod6": np.repeat(loc_arr[s0:s1], slab),
+                "age_group": np.tile(one_age, nloc), "sex": np.tile(one_sex, nloc), "race": np.tile(one_race, nloc),
+                "value": pop[lo:hi], "migration": mig[lo:hi], "anchor_value": anch[lo:hi], "sim_deaths": simd[lo:hi],
+                "anchor_class": np.tile(one_cls, nloc), "projection_horizon": np.tile(one_hor, nloc),
+                "cell_state": np.tile(one_state, nloc), "cell_uncertainty": np.tile(one_unc, nloc),
+            },
+            schema=out_schema,
+        ).with_columns(
+            pl.col("anchor_value").fill_nan(None),
+            pl.col("sim_deaths").fill_nan(None),
+            pl.lit(mode).alias("population_tensor_mode"),
+            pl.lit(solver.solver_id).alias("solver_id"),
+            pl.lit(solver.backend).alias("solver_backend"),
+            pl.lit(bool(solver.sparse_jacobian)).alias("sparse_jacobian"),
+            pl.lit(bool(feedback_warning)).alias("denominator_feedback_warning"),
+        )
+        table = frame.to_arrow()
+        if writer is None:
+            writer = pq.ParquetWriter(str(out_path), table.schema, compression="zstd")
+        writer.write_table(table)
+    if writer is not None:
+        writer.close()
 
     diagnostics = population_tensor_diagnostics(
         request=PopulationTensorRequest(

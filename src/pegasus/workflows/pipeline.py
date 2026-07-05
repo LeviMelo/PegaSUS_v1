@@ -72,6 +72,20 @@ SIDRA_POPULATION_TOTAL_CLASSIFICATIONS: dict[str, list[str]] = {
 SIDRA_INTERCENSAL_POPULATION_TABLE = "6579"
 SIDRA_INTERCENSAL_POPULATION_VARIABLE = "9324"
 
+# SIDRA 2093 — the 2000 & 2010 census demographic strata (MSD-III §II.4: "table 2093 MUST be added
+# to the compendium as an anchor source"). 9606 only carries 2010 + 2022, so 2093 is the ONLY source
+# of the 2000 census age×sex×race breakdown — the third census anchor FAL-POP needs for a full-history
+# (2000–) cohort-projected tensor. It shares race (clsf 86) and sex (clsf 2) with 9606 but reports age
+# as 19 GROUPS (clsf 58) not single-year (clsf 287), plus an urban/rural situation axis (clsf 1) that
+# is pinned to Total. Its coarse age brackets are a CTR disaggregation instance (§II.4): the clean
+# 19-bracket partition is selected; the finer single-year axis is derived, roll-ups never summed.
+SIDRA_CENSUS_2000_STRATA_TABLE = "2093"
+SIDRA_CENSUS_2000_STRATA_VARIABLE = "93"
+SIDRA_CENSUS_2000_STRATA_RACE_CLSF = "86"
+SIDRA_CENSUS_2000_STRATA_SEX_CLSF = "2"
+SIDRA_CENSUS_2000_STRATA_AGE_GROUP_CLSF = "58"
+SIDRA_CENSUS_2000_STRATA_SITUATION_CLSF = "1"
+
 # SIDRA civil-registry (Registro Civil) vital-statistics tables, total-only, annual,
 # 5570 municipalities, 2003-2024. Feed the net-migration residual (MSD §2.8.7):
 # NetMig = dPopulation - Births + Deaths. Same IBGE universe as the population

@@ -22,7 +22,8 @@ entries:
 - {id: neoplasm_breast, label: Breast cancer, ranges: [[C50, C50]]}
 - {id: neoplasm_cervix, label: Cervix uteri cancer, ranges: [[C53, C53]]}
 - {id: neoplasm_prostate, label: Prostate cancer, ranges: [[C61, C61]]}
-- {id: neoplasm_other, label: Other neoplasms, ranges: [[C00, C15], [C17, C17], [C22, C32], [C35, C49], [C51, C52], [C54, C60], [C62, D48]]}
+- {id: neoplasm_pancreas, label: Malignant neoplasm of pancreas, ranges: [[C25, C25]]}
+- {id: neoplasm_other, label: Other neoplasms, ranges: [[C00, C15], [C17, C17], [C22, C24], [C26, C32], [C35, C49], [C51, C52], [C54, C60], [C62, D48]]}
 - {id: diabetes, label: Diabetes mellitus, ranges: [[E10, E14]]}
 - {id: nutritional_endocrine_other, label: Other endocrine/nutritional/metabolic, ranges: [[E00, E07], [E15, E90]]}
 - {id: mental_behavioural, label: Mental and behavioural disorders, ranges: [[F00, F99]]}

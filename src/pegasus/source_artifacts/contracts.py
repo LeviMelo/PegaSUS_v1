@@ -32,6 +32,8 @@ ALLOWED_ARTIFACT_ROLES = {
     "context_facts",
     "population_strata",
     "population_tensor",
+    # SIDRA 2093 2000-census age×sex×race strata: the third census anchor (FAL-POP / §II.4).
+    "census_2000_strata",
     # SIDRA civil-registry vital totals feeding the net-migration residual (MSD §2.8.7).
     "civil_registry_births",
     "civil_registry_deaths",

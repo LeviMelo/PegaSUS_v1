@@ -382,21 +382,33 @@ def _solve_projected_gradient_vectorized(
         trial_population = population
         trial_migration = migration
         trial = evaluation
-        for _ in range(30):
+        f0 = evaluation.total
+        # Safeguarded quadratic-interpolation backtracking. Blind halving needed ~18-22 evals per
+        # iteration on the real (warm-started, near-optimal, underdetermined) tensor -- the census
+        # warm start is already the optimum, so no line search finds descent and the loop just burns
+        # evals. Two fixes: (a) when a descent step DOES exist, fit the 1-D quadratic through
+        # (0,f0,slope=directional) and (lam,trial) and jump to its minimizer (2-3 evals, not ~18);
+        # (b) cap the doomed search at 8 backtracks instead of 30. Combined with the faster stall
+        # exit below, the underdetermined case drops from ~240 wasted evals to ~20.
+        for _ in range(8):
             trial_population = population + lam * dir_p
             trial_migration = migration + lam * dir_m
             trial = evaluate_population_loss(problem, trial_population, trial_migration)
             if trial.total <= reference + 1e-4 * lam * directional:
                 accepted = True
                 break
-            lam *= 0.5
+            denom = 2.0 * (trial.total - f0 - directional * lam)
+            lam_quad = (-directional * lam * lam / denom) if denom > 1e-30 else 0.5 * lam
+            lam = min(max(lam_quad, 0.1 * lam), 0.5 * lam)  # safeguard to a real fraction of lam
         if not accepted:
-            # No decrease along a descent direction within numerical precision: shrink the
-            # base step and continue; give up only after repeated stalls (stationary).
+            # No feasible descent along the projected gradient: the current point is a constrained
+            # (possibly underdetermined) stationary point -- the census warm start IS the answer
+            # (build.py §2.8.10 note). Bail after a few stalls instead of grinding the full budget;
+            # a well-conditioned problem accepts real steps (stall resets to 0) and never gets here.
             stall += 1
             step_size = max(step_size * 0.1, 1e-14)
             iterations = iteration
-            if stall >= 8:
+            if stall >= 3:
                 break
             continue
         stall = 0

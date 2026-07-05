@@ -72,23 +72,100 @@ def validate_population_problem(problem: PopulationTensorProblem) -> None:
         raise ValueError("SIM-informed denominator mode requires death weight lambda_D>0.")
 
 
-def _ilr_np(x: np.ndarray, epsilon: float = 1e-12) -> tuple[np.ndarray, np.ndarray]:
+_ILR_BASIS_CACHE: dict[int, np.ndarray] = {}
+
+
+def _ilr_basis(count: int) -> np.ndarray:
+    """The (count-1, count) ILR (Helmert-like) basis — depends ONLY on the category count, so it is
+    built once and cached, never per loss evaluation."""
+    cached = _ILR_BASIS_CACHE.get(count)
+    if cached is not None:
+        return cached
+    basis = np.zeros((max(count - 1, 0), count), dtype=np.float64)
+    for j in range(count - 1):
+        scale = math.sqrt((j + 1) / (j + 2))
+        basis[j, : j + 1] = scale / (j + 1)
+        basis[j, j + 1] = -scale
+    _ILR_BASIS_CACHE[count] = basis
+    return basis
+
+
+def _ilr_coords(x: np.ndarray, basis: np.ndarray, epsilon: float = 1e-12) -> np.ndarray:
+    """ILR coordinates of rows of ``x`` as a single matmul against the cached basis.
+
+    Equivalent to the old per-coordinate Python loop (``coords[j] = sum(log_x * row_j)``) but
+    vectorized: ``log_x @ basis.T``. Row-wise, so indexing a subset commutes with the transform."""
     x = np.maximum(x, epsilon)
     x = x / x.sum(axis=-1, keepdims=True)
     log_x = np.log(x)
+    return log_x @ basis.T
+
+
+def _ilr_np(x: np.ndarray, epsilon: float = 1e-12) -> tuple[np.ndarray, np.ndarray]:
+    """Back-compat wrapper: returns (coords, basis). Prefer :func:`_ilr_coords` with a cached basis."""
     count = x.shape[-1]
-    coords = []
-    basis = []
-    for j in range(count - 1):
-        scale = math.sqrt((j + 1) / (j + 2))
-        row = np.zeros(count)
-        row[:j+1] = scale / (j + 1)
-        row[j+1] = -scale
-        coords.append(np.sum(log_x * row, axis=-1))
-        basis.append(row)
-    if not coords:
+    basis = _ilr_basis(count)
+    if count <= 1:
         return np.array([]), np.array([])
-    return np.stack(coords, axis=-1), np.stack(basis, axis=0)
+    return _ilr_coords(x, basis, epsilon), basis
+
+
+@dataclass
+class _LossConstants:
+    """Problem-invariant quantities hoisted out of the per-iteration loss hot loop.
+
+    The solver calls :func:`evaluate_population_loss` hundreds of times with a CONSTANT ``problem`` and
+    a changing iterate. Everything derived only from ``problem`` — the anchor mask, the survival tensor
+    (``1 - death_rate``), the death-term masks, and the race prior's ILR (the *target* never changes) —
+    is computed ONCE here and cached on the problem, instead of being rebuilt every evaluation.
+    """
+    anchors: np.ndarray
+    anchor_mask: np.ndarray
+    survival: np.ndarray | None
+    death_dr: np.ndarray | None
+    death_mask: np.ndarray | None
+    race_mask: np.ndarray | None       # (S,T,A,X) cells with a fully-observed race prior
+    race_basis: np.ndarray | None
+    race_prior_masked_ilr: np.ndarray | None  # ILR of the prior for masked cells (target; constant)
+
+
+def _loss_constants(problem: PopulationTensorProblem) -> _LossConstants:
+    cached = getattr(problem, "_cached_loss_constants", None)
+    if cached is not None:
+        return cached
+    n = problem.n_cells
+    shape = problem.shape
+    anchors = np.asarray(problem.anchors, dtype=np.float64)
+    anchor_mask = ~np.isnan(anchors)
+
+    survival = None
+    if problem.death_rates is not None:
+        dr = np.nan_to_num(np.asarray(problem.death_rates, dtype=np.float64).reshape(shape), nan=0.0)
+        survival = 1.0 - dr
+
+    death_dr = death_mask = None
+    if problem.sim_deaths is not None:
+        death_dr = (
+            np.asarray(problem.death_rates, dtype=np.float64)
+            if problem.death_rates is not None else np.full(n, np.nan)
+        )
+        sim_deaths = np.asarray(problem.sim_deaths, dtype=np.float64)
+        death_mask = ~np.isnan(sim_deaths) & ~np.isnan(death_dr)
+
+    race_mask = race_basis = race_prior_masked_ilr = None
+    if problem.race_composition_prior is not None:
+        prior = np.asarray(problem.race_composition_prior, dtype=np.float64).reshape(shape)
+        race_mask = ~np.isnan(prior).any(axis=-1)
+        race_basis = _ilr_basis(shape[-1])
+        race_prior_masked_ilr = _ilr_coords(prior[race_mask], race_basis)
+
+    const = _LossConstants(
+        anchors=anchors, anchor_mask=anchor_mask, survival=survival,
+        death_dr=death_dr, death_mask=death_mask, race_mask=race_mask,
+        race_basis=race_basis, race_prior_masked_ilr=race_prior_masked_ilr,
+    )
+    object.__setattr__(problem, "_cached_loss_constants", const)
+    return const
 
 
 def evaluate_population_loss(
@@ -118,10 +195,15 @@ def evaluate_population_loss(
     M_tens = M.reshape(shape)
     gp_tens = gp.reshape(shape)
     gm_tens = gm.reshape(shape)
-    
+
+    # Problem-invariant constants (anchor mask, survival, death/race masks, target race ILR) are
+    # computed ONCE and cached on the problem — not rebuilt on every one of the solver's hundreds of
+    # loss evaluations. This is the dominant per-iteration cost fix (see _LossConstants).
+    const = _loss_constants(problem)
+
     # 1. Anchors  (problem fields are numpy arrays with NaN sentinels — read directly, no rebuild)
-    anchors_np = np.asarray(problem.anchors, dtype=np.float64)
-    anchor_mask = ~np.isnan(anchors_np)
+    anchors_np = const.anchors
+    anchor_mask = const.anchor_mask
     if w.anchor > 0 and anchor_mask.any():
         residual = P[anchor_mask] - anchors_np[anchor_mask]
         terms["anchor"] = float(w.anchor * np.sum(residual**2))
@@ -129,11 +211,9 @@ def evaluate_population_loss(
 
     # 2. Aging
     if w.aging > 0 and t_count > 1 and a_count > 1:
-        dr_flat = np.asarray(problem.death_rates, dtype=np.float64) if problem.death_rates is not None else np.full(n, np.nan)
-        # nan_to_num returns a NEW array — never mutate the problem's stored death_rates in place.
-        dr = np.nan_to_num(dr_flat.reshape(shape), nan=0.0)
-        survival = 1.0 - dr
-        
+        # survival = 1 - nan_to_num(death_rates), constant across iterations (cached).
+        survival = const.survival if const.survival is not None else np.ones(shape, dtype=np.float64)
+
         P_curr = P_tens[:, 1:, 1:, :, :]
         P_prior = P_tens[:, :-1, :-1, :, :]
         surv_prior = survival[:, :-1, :-1, :, :]
@@ -171,37 +251,36 @@ def evaluate_population_loss(
             gp_tens[:, 1:, 0, :, :][mask] += grad_res
             gm_tens[:, :-1, 0, :, :][mask] -= grad_res
 
-    # 4. Deaths
+    # 4. Deaths  (death_rates flat + the ~isnan mask are constant -> cached)
     if w.death > 0 and problem.sim_deaths is not None:
-        dr = np.asarray(problem.death_rates, dtype=np.float64) if problem.death_rates is not None else np.full(n, np.nan)
+        dr = const.death_dr
         sim_deaths = np.asarray(problem.sim_deaths, dtype=np.float64)
-        mask = ~np.isnan(sim_deaths) & ~np.isnan(dr)
+        mask = const.death_mask
         if mask.any():
             residual = dr[mask] * P[mask] - sim_deaths[mask]
             terms["death"] = float(w.death * np.sum(residual**2))
             gp[mask] += 2.0 * w.death * residual * dr[mask]
 
-    # 5. Race
-    if w.race > 0 and problem.race_composition_prior is not None:
-        prior = np.asarray(problem.race_composition_prior, dtype=np.float64).reshape(shape)
-        mask = ~np.isnan(prior).any(axis=-1)
+    # 5. Race  (race_mask, the ILR basis, and the TARGET prior ILR are all constant -> cached; only the
+    # observation ILR depends on the iterate. The old code recomputed the target ILR + basis every
+    # evaluation, which was ~half of the single dominant cost of the whole solve.)
+    if w.race > 0 and const.race_mask is not None:
+        mask = const.race_mask
+        basis = const.race_basis
         P_masked = P_tens[mask]
-        prior_masked = prior[mask]
-        
         valid = P_masked.sum(axis=-1) > 1e-12
         P_valid = P_masked[valid]
-        prior_valid = prior_masked[valid]
-        
+
         if len(P_valid) > 0:
-            obs_ilr, basis = _ilr_np(P_valid)
-            tgt_ilr, _ = _ilr_np(prior_valid)
+            obs_ilr = _ilr_coords(P_valid, basis)
+            tgt_ilr = const.race_prior_masked_ilr[valid]  # ilr(prior)[valid] == ilr(prior[valid]) (row-wise)
             residual = obs_ilr - tgt_ilr
-            
+
             terms["race"] = float(w.race * np.sum(residual**2))
-            
+
             deriv = residual @ basis
             grad = 2.0 * w.race * deriv / np.maximum(P_valid, 1e-12)
-            
+
             flat_mask = np.zeros(gp_tens.shape[:-1], dtype=bool)
             flat_mask[mask] = valid
             gp_tens[flat_mask] += grad

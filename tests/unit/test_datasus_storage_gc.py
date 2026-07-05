@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pegasus.datasus.storage_gc import gc_datasus_raw_sidecars
+import json
+
+from pegasus.datasus.storage_gc import gc_datasus_raw_sidecars, gc_sidra_raw_payloads
 
 
 def _make_chunk(data_root: Path, *, hash_id: str, with_processed: bool) -> Path:
@@ -62,3 +64,36 @@ def test_gc_dry_run_touches_nothing(tmp_path: Path) -> None:
     assert stats.files_deleted > 0  # counted, not performed
     assert (raw / "raw.rds").exists()  # dry-run left disk untouched
     assert (raw / "microdatasus_processed.parquet").exists()
+
+
+def _sidra_dump(tmp_path: Path, *, name: str, status: int) -> Path:
+    d = tmp_path / "sidra" / "population_totals_AL_9606" / "raw"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{name}.json"
+    p.write_text(
+        json.dumps({
+            "chunk": {"chunk_id": name},
+            "status_code": status,
+            "from_cache": False,
+            "sidecar": {"sha256": "abc", "bytes": 999},
+            "payload": [{"big": "x" * 5000}],
+        }),
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_sidra_gc_strips_success_payload_keeps_failure(tmp_path: Path) -> None:
+    ok = _sidra_dump(tmp_path, name="ok", status=200)
+    bad = _sidra_dump(tmp_path, name="bad", status=599)
+    before_ok = ok.stat().st_size
+
+    stats = gc_sidra_raw_payloads(data_root=tmp_path, dry_run=False)
+
+    assert stats.chunks_reclaimed == 1
+    assert ok.stat().st_size < before_ok
+    ok_rec = json.loads(ok.read_text(encoding="utf-8"))
+    assert "payload" not in ok_rec          # success payload stripped (archived in client cache)
+    assert ok_rec["sidecar"]["sha256"] == "abc"  # provenance retained
+    bad_rec = json.loads(bad.read_text(encoding="utf-8"))
+    assert "payload" in bad_rec             # failure payload kept for debugging

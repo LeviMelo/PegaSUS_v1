@@ -70,20 +70,22 @@ def extract_one_chunk(
     response = client.values_from_chunk(chunk)
     request_hash = content_hash(chunk.model_dump(mode="json"))
 
-    raw_path.write_text(
-        json.dumps(
-            {
-                "chunk": chunk.model_dump(mode="json"),
-                "status_code": response.status_code,
-                "from_cache": response.from_cache,
-                "sidecar": response.sidecar,
-                "payload": response.payload,
-            },
-            indent=2,
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    # The full response payload is already archived by the SidraClient cache
+    # (data/cache/sidra, namespace=values, keyed by url+params). Dumping it again here doubled the
+    # raw SIDRA JSON on disk. Keep a slim, compact provenance record (request + response metadata +
+    # payload hash pointing at the cache); retain the inline payload only for FAILURES, where it is
+    # a small error body and useful for debugging without hunting the cache.
+    raw_record: dict[str, Any] = {
+        "chunk": chunk.model_dump(mode="json"),
+        "status_code": response.status_code,
+        "from_cache": response.from_cache,
+        "sidecar": response.sidecar,
+        "payload_sha256": (response.sidecar or {}).get("sha256"),
+        "payload_archive": "data/cache/sidra (namespace=values)",
+    }
+    if response.status_code >= 400:
+        raw_record["payload"] = response.payload
+    raw_path.write_text(json.dumps(raw_record, ensure_ascii=False), encoding="utf-8")
 
     if response.status_code >= 400:
         return SIDRAChunkResult(

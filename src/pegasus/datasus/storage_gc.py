@@ -14,6 +14,7 @@ no re-fetch is triggered (the cache is keyed on ``processed.parquet`` + ``manife
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -106,4 +107,48 @@ def gc_datasus_raw_sidecars(
     return stats
 
 
-__all__ = ["GCStats", "gc_datasus_raw_sidecars"]
+def gc_sidra_raw_payloads(
+    *, data_root: str | Path = "data", dry_run: bool = True
+) -> GCStats:
+    """Strip the duplicated response ``payload`` from existing SIDRA extract dumps
+    (``data/sidra/**/raw/*.json``), rewriting them compact.
+
+    The payload is already archived in the SidraClient cache (``data/cache/sidra``), so the
+    inline copy in each extract dump is redundant. Successful chunks are slimmed to a provenance
+    record (request + sidecar + payload hash); failure dumps keep their (small) error payload for
+    debugging. The file is retained so provenance references stay valid — only the bytes shrink.
+    """
+    data_root = Path(data_root)
+    stats = GCStats()
+    sidra_root = data_root / "sidra"
+    if not sidra_root.exists():
+        return stats
+
+    for dump in sidra_root.rglob("raw/*.json"):
+        stats.chunks_scanned += 1
+        try:
+            before = dump.stat().st_size
+            record = json.loads(dump.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict) or "payload" not in record:
+            continue
+        if int(record.get("status_code", 200)) >= 400:
+            # keep small error payloads inline
+            continue
+        record.pop("payload", None)
+        record.setdefault("payload_archive", "data/cache/sidra (namespace=values)")
+        if not dry_run:
+            try:
+                dump.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                continue
+        after = len(json.dumps(record, ensure_ascii=False).encode("utf-8"))
+        saved = max(0, before - after)
+        stats.chunks_reclaimed += 1
+        stats.note_removed("sidra_payload_bytes", saved)
+
+    return stats
+
+
+__all__ = ["GCStats", "gc_datasus_raw_sidecars", "gc_sidra_raw_payloads"]

@@ -140,7 +140,7 @@ def write_facts_parquet(
 ) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    facts_to_frame(facts).write_parquet(output_path)
+    facts_to_frame(facts).write_parquet(output_path, compression="zstd")
     return output_path
 
 

@@ -1,2 +1,3 @@
 {"table_id": "9606", "purpose": "population_denominator_anchor", "status": "stable", "notes": "Slice 0 metadata seed only; no fetch performed."}
 {"table_id": "5938", "purpose": "gdp_context_candidate", "status": "deferred", "notes": "Slice 0 metadata seed only; no fetch performed."}
+{"table_id": "2093", "purpose": "population_composition_anchor_2000_2010", "status": "stable", "notes": "Census 2000/2010 race x sex x situation x age-groups; third census anchor (MSD-III II.4)."}

@@ -12,6 +12,7 @@
     "136",
     "9605",
     "9606",
+    "2093",
     "200",
     "1552",
     "9514",
@@ -7884,6 +7885,196 @@
           ]
         }
       ]
+    },
+    "2093": {
+      "table_id": "2093",
+      "name": "Resident population by Color, Sex, Household situation & Age groups (Sample)",
+      "group": "DEMOGRAPHICS, POPULATION STRUCTURE & GEOGRAPHY",
+      "tier": "T1_CORE",
+      "research": "Censo Demográfico",
+      "subject": "Cor ou raça",
+      "periods": "2000,2010",
+      "localities": "5570",
+      "variables": [
+        {
+          "variable_id": "93",
+          "description": "População residente",
+          "unit": "Pessoas",
+          "type": "c",
+          "default_keep": true
+        },
+        {
+          "variable_id": "1000093",
+          "description": "População residente - percentual do total geral",
+          "unit": "%",
+          "type": "p",
+          "default_keep": false
+        }
+      ],
+      "variables_same_as": null,
+      "classifications": [
+        {
+          "classification_id": "86",
+          "name": "Cor ou raça",
+          "axis": "race_color",
+          "category_count": 7,
+          "categories": [
+            {
+              "category_id": "0",
+              "label": "Total"
+            },
+            {
+              "category_id": "2776",
+              "label": "Branca"
+            },
+            {
+              "category_id": "2777",
+              "label": "Preta"
+            },
+            {
+              "category_id": "2778",
+              "label": "Amarela"
+            },
+            {
+              "category_id": "2779",
+              "label": "Parda"
+            },
+            {
+              "category_id": "2780",
+              "label": "Indígena"
+            },
+            {
+              "category_id": "2781",
+              "label": "Sem declaração"
+            }
+          ]
+        },
+        {
+          "classification_id": "2",
+          "name": "Sexo",
+          "axis": "sex",
+          "category_count": 3,
+          "categories": [
+            {
+              "category_id": "0",
+              "label": "Total"
+            },
+            {
+              "category_id": "4",
+              "label": "Homens"
+            },
+            {
+              "category_id": "5",
+              "label": "Mulheres"
+            }
+          ]
+        },
+        {
+          "classification_id": "1",
+          "name": "Situação do domicílio",
+          "axis": "household_situation",
+          "category_count": 3,
+          "categories": [
+            {
+              "category_id": "0",
+              "label": "Total"
+            },
+            {
+              "category_id": "1",
+              "label": "Urbana"
+            },
+            {
+              "category_id": "2",
+              "label": "Rural"
+            }
+          ]
+        },
+        {
+          "classification_id": "58",
+          "name": "Grupo de idade",
+          "axis": "age_group",
+          "category_count": 19,
+          "categories": [
+            {
+              "category_id": "0",
+              "label": "Total"
+            },
+            {
+              "category_id": "100402",
+              "label": "0 a 14 anos"
+            },
+            {
+              "category_id": "1140",
+              "label": "0 a 4 anos"
+            },
+            {
+              "category_id": "1141",
+              "label": "5 a 9 anos"
+            },
+            {
+              "category_id": "1142",
+              "label": "10 a 14 anos"
+            },
+            {
+              "category_id": "6797",
+              "label": "15 a 64 anos"
+            },
+            {
+              "category_id": "1143",
+              "label": "15 a 19 anos"
+            },
+            {
+              "category_id": "2792",
+              "label": "15 a 17 anos"
+            },
+            {
+              "category_id": "92982",
+              "label": "18 e 19 anos"
+            },
+            {
+              "category_id": "1144",
+              "label": "20 a 24 anos"
+            },
+            {
+              "category_id": "1145",
+              "label": "25 a 29 anos"
+            },
+            {
+              "category_id": "3299",
+              "label": "30 a 39 anos"
+            },
+            {
+              "category_id": "3300",
+              "label": "40 a 49 anos"
+            },
+            {
+              "category_id": "3301",
+              "label": "50 a 59 anos"
+            },
+            {
+              "category_id": "3520",
+              "label": "60 a 69 anos"
+            },
+            {
+              "category_id": "6798",
+              "label": "65 anos ou mais"
+            },
+            {
+              "category_id": "3244",
+              "label": "70 anos ou mais"
+            },
+            {
+              "category_id": "95252",
+              "label": "70 a 79 anos"
+            },
+            {
+              "category_id": "2503",
+              "label": "80 anos ou mais"
+            }
+          ]
+        }
+      ],
+      "notes": "2000/2010 census sample (Amostra) race x sex x situation x age-groups (var 93, Pessoas). Third census anchor for the two-layer population tensor (MSD-III II.4): table 9606 covers census years 2010/2022, 2093 covers 2000/2010, so together the tensor ingests all three censuses. Age classification 58 has OVERLAPPING brackets (e.g. '0 a 14 anos' spans '0 a 4' + '5 a 9' + '10 a 14') -> select the clean partition; roll-ups are derived, never summed (a CTR disaggregation instance)."
     }
   }
 }

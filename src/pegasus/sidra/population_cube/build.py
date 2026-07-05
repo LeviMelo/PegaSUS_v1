@@ -1060,64 +1060,45 @@ def solve_population_tensor_from_sidra_strata(
         )
         warnings.append("population_reconstruction_closed_form_no_informative_flows")
 
-    rows: list[dict[str, Any]] = []
-    for locality in localities:
-        for period in periods:
-            for age_group in age_groups:
-                for sex in sexes:
-                    for race in races:
-                        idx = _cell_index(
-                            locality=locality,
-                            period=period,
-                            age_group=age_group,
-                            sex=sex,
-                            race=race,
-                            locality_index=locality_index,
-                            period_index=period_index,
-                            age_index=age_index,
-                            sex_index=sex_index,
-                            race_index=race_index,
-                            shape=shape,
-                        )
-                        rows.append({
-                            "year": int(period),
-                            "municipality_cod6": locality,
-                            "age_group": age_group,
-                            "sex": sex,
-                            "race": race,
-                            "value": float(optimized.population[idx]),
-                            "migration": float(optimized.migration[idx]),
-                            "anchor_value": anchors[idx],
-                            "sim_deaths": None if sim_deaths is None else sim_deaths[idx],
-                            "population_tensor_mode": mode,
-                            "solver_id": solver.solver_id,
-                            "solver_backend": solver.backend,
-                            "sparse_jacobian": solver.sparse_jacobian,
-                            "denominator_feedback_warning": feedback_warning,
-                        })
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # Explicit schema: anchor_value/sim_deaths are None for every intercensal demographic
-    # cell (no per-cell strata anchor outside census years) and float only at census cells.
-    # Polars infers column types from the first ~100 rows, which are the null-anchor
-    # intercensal cells -> a later census float then fails to append. Declaring the schema
-    # is both correct and cheaper than scanning all rows for a big national tensor.
-    tensor_schema = {
-        "year": pl.Int64,
-        "municipality_cod6": pl.Utf8,
-        "age_group": pl.Utf8,
-        "sex": pl.Utf8,
-        "race": pl.Utf8,
-        "value": pl.Float64,
-        "migration": pl.Float64,
-        "anchor_value": pl.Float64,
-        "sim_deaths": pl.Float64,
-        "population_tensor_mode": pl.Utf8,
-        "solver_id": pl.Utf8,
-        "solver_backend": pl.Utf8,
-        "sparse_jacobian": pl.Boolean,
-        "denominator_feedback_warning": pl.Boolean,
-    }
-    pl.DataFrame(rows, schema=tensor_schema).write_parquet(out_path)
+    # Vectorized tensor emission (§V.1): the enumerate-based axis indices make the flat cell order
+    # (locality, period, age, sex, race) row-major, so optimized.population/migration are already in
+    # order and the label columns are np.repeat/tile of the ordered axis tuples. Building 16.7M+ cells
+    # this way is ~1 GB of numpy, not the ~13 GB a list of per-cell dicts materialized.
+    s_count, t_count, a_count, x_count, r_count = shape
+    inner = a_count * x_count * r_count
+    pop = np.asarray(optimized.population, dtype=np.float64)
+    mig = np.asarray(optimized.migration, dtype=np.float64)
+    anch = np.asarray(anchors, dtype=np.float64)  # NaN for absent (M1); → null below
+    simd = np.full(pop.shape[0], np.nan) if sim_deaths is None else np.asarray(sim_deaths, dtype=np.float64)
+    year_col = np.tile(np.repeat(np.array([int(p) for p in periods], dtype=np.int64), inner), s_count)
+    loc_col = np.repeat(np.asarray(localities, dtype=object), t_count * inner)
+    age_col = np.tile(np.repeat(np.asarray(age_groups, dtype=object), x_count * r_count), s_count * t_count)
+    sex_col = np.tile(np.repeat(np.asarray(sexes, dtype=object), r_count), s_count * t_count * a_count)
+    race_col = np.tile(np.asarray(races, dtype=object), s_count * t_count * a_count * x_count)
+
+    # anchor_value/sim_deaths are null (not float) for every intercensal demographic cell; NaN → null.
+    frame = pl.DataFrame(
+        {
+            "year": year_col, "municipality_cod6": loc_col, "age_group": age_col,
+            "sex": sex_col, "race": race_col, "value": pop, "migration": mig,
+            "anchor_value": anch, "sim_deaths": simd,
+        },
+        schema={
+            "year": pl.Int64, "municipality_cod6": pl.Utf8, "age_group": pl.Utf8, "sex": pl.Utf8,
+            "race": pl.Utf8, "value": pl.Float64, "migration": pl.Float64,
+            "anchor_value": pl.Float64, "sim_deaths": pl.Float64,
+        },
+    ).with_columns(
+        pl.col("anchor_value").fill_nan(None),
+        pl.col("sim_deaths").fill_nan(None),
+        pl.lit(mode).alias("population_tensor_mode"),
+        pl.lit(solver.solver_id).alias("solver_id"),
+        pl.lit(solver.backend).alias("solver_backend"),
+        pl.lit(bool(solver.sparse_jacobian)).alias("sparse_jacobian"),
+        pl.lit(bool(feedback_warning)).alias("denominator_feedback_warning"),
+    )
+    frame.write_parquet(out_path, compression="zstd")
 
     diagnostics = population_tensor_diagnostics(
         request=PopulationTensorRequest(

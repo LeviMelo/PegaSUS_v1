@@ -1117,6 +1117,10 @@ def _acquire_national(
             intent=intent, uf=uf, data_root=data_root, metadata_dir=sidra_metadata_dir, client=sidra_client)
         if strata is not None:
             per_uf_sidra.append(strata)
+        census_2000 = _acquire_sidra_census_2000_strata(
+            intent=intent, uf=uf, data_root=data_root, metadata_dir=sidra_metadata_dir, client=sidra_client)
+        if census_2000 is not None:
+            per_uf_sidra.append(census_2000)
         cr = _acquire_sidra_civil_registry_vital(
             intent=intent, uf=uf, data_root=data_root, metadata_dir=sidra_metadata_dir, client=sidra_client)
         per_uf_sidra.extend(a for a in (cr.get("births"), cr.get("deaths")) if a is not None)
@@ -1211,6 +1215,10 @@ def run_live_pipeline(
         intent=intent, uf=uf, data_root=data_root,
         metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
     )
+    census_2000_strata_artifact = _acquire_sidra_census_2000_strata(
+        intent=intent, uf=uf, data_root=data_root,
+        metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
+    )
     civil_registry = _acquire_sidra_civil_registry_vital(
         intent=intent, uf=uf, data_root=data_root,
         metadata_dir=Path(sidra_metadata_dir), client=sidra_client,
@@ -1223,6 +1231,7 @@ def run_live_pipeline(
     sidra_artifacts = [
         sidra_artifact,
         *([sidra_strata_artifact] if sidra_strata_artifact is not None else []),
+        *([census_2000_strata_artifact] if census_2000_strata_artifact is not None else []),
         *([civil_registry["births"]] if civil_registry["births"] is not None else []),
         *([civil_registry["deaths"]] if civil_registry["deaths"] is not None else []),
         *context_artifacts,

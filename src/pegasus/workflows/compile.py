@@ -292,6 +292,12 @@ def _build_population_tensor_artifact(
         (artifact for artifact in artifacts if artifact.source_system == "SIDRA" and artifact.artifact_role == "civil_registry_deaths"),
         None,
     )
+    # FAL-POP (§II.4): the 2000-census strata (SIDRA 2093) — the third census anchor. Optional: if
+    # absent, the tensor is anchored on 2010/2022 only.
+    census_2000 = next(
+        (artifact for artifact in artifacts if artifact.source_system == "SIDRA" and artifact.artifact_role == "census_2000_strata"),
+        None,
+    )
     # Only the "embedded_*" race_tensor_mode feeds the Bridge_R prior into the
     # population tensor's own birth/death race stratification (MSD §2.8.5/§2.8.6);
     # "downstream_bridge" attaches a separate standalone EFG field instead (see
@@ -305,6 +311,7 @@ def _build_population_tensor_artifact(
         population_strata_path=strata.path,
         total_anchor_path=total_anchor.path,
         output_path=output_path,
+        census_2000_strata_path=census_2000.path if census_2000 is not None else None,
         sim_events_path=None if sim_events is None else sim_events.path,
         sinasc_events_path=None if sinasc_events is None else sinasc_events.path,
         civil_registry_births_path=None if civil_births is None else civil_births.path,

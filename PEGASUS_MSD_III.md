@@ -253,6 +253,8 @@ National-monthly discovery MUST fit commodity hardware **with quantified validit
 
 Target: RTX 4050 (6 GB VRAM), i7-13700H, 32 GB RAM. All numerics honor `compute.yaml`: float32 bulk, `max_vram_fraction ≤ 0.80`, PyTorch/CUDA. A run that cannot fit MUST refuse with `scale_exceeds_compute_envelope`, never silently subsample.
 
+**This envelope binds every heavy numeric — the population-tensor / denominator solve (§II.4) included, not just the LDO.** Three consequences are contracts, not preferences: (a) a solve's working set MUST be numpy/torch arrays in **float32 bulk** — never `O(n_cells)` Python-object containers (a national demographic tensor is ~10⁸ cells; Python float *tuples* at ~32 B/element OOM a 32 GB box before the solver runs); (b) a solve whose dense form exceeds the envelope MUST be **blocked** (the population tensor is separable across localities given per-locality closure — solve in muni-blocks so peak memory is `O(block)`, not `O(national)`) or else refuse — **never OOM**; (c) where `compute.yaml` marks a task CUDA-enabled, a **wired GPU path MUST exist** with a CPU fallback and device-level telemetry — an aspirational, unwired flag over orphaned kernels is prohibited (it is precisely how orphaned/conflicting code accrues). *`POP-02` (landed) brought the population solver into compliance: (a) numpy-array storage (was Python tuples) + (b) exact locality-blocked solve (peak memory `O(block)`) fit it within the envelope on CPU; (c) the orphaned population GPU kernel and its aspirational `population_tensor_kernels` flag were removed, since the CPU-blocked solve is fast and fits — a GPU port there is a deferred optimization, not an unwired-flag violation. GPU remains wired+used for HSIC and STDFM.*
+
 ### V.2 Structural levers: sparsity and separability
 
 - **Sparsity** — the spatial GMRF (~6 neighbors/row), the disease Laplacian, and the graphical-lasso precision are all mostly zeros; stored sparse (`scipy.sparse`, sparse Cholesky), never densified.
@@ -283,6 +285,17 @@ Trading compute for scale without lying requires, normatively:
 1. **Bounded, not heuristic** — prefer methods with error bounds (V.3); their error is a known distribution.
 2. **Propagate approximation error into results** — numerical error becomes a component of each affected edge's `uncertainty` (widened error bars), consistent with the prime directive. Never present an approximated number as exact.
 3. **Exact certifies approximate** — a *state*-scale exact run MUST agree (within propagated bounds) with the national approximate run where they overlap; disagreement beyond bounds rejects the approximation loudly.
+
+### V.7 The data storage lifecycle (fetch → build footprint)
+
+Scale is bounded by **disk** as much as by compute; a full national all-source acquisition must land in the low tens of GB, not the hundreds. On-disk redundancy is correctness-adjacent, not cosmetic: a second serialization of the same rows misleads provenance and caps scaling. The fetch→build layer is therefore governed by four contracts:
+
+1. **One canonical serialization per acquired unit.** DATASUS retains only the raw-coded, full-fidelity `processed.parquet` (ZSTD, **all** source columns — column fidelity is a §II.2 requirement so a future registry binding never forces a re-fetch; pruning is prohibited). The R-native `raw.rds` and the microdatasus semantic sidecar are **not** persisted — neither is on the consumption path (the in-house codebook, §II.2, translates the raw-coded parquet; microdatasus is a *retiring fetch transport*, not the translator). Cache validity keys on the **consumed** artifact + its manifest, never on a dead sidecar.
+2. **One raw archive per SIDRA response.** The client response cache *is* the archive; the extract dump carries provenance (request + payload hash), not a duplicated payload; failures keep their small error body.
+3. **Lazy views, not re-materialization.** The per-UF `combined` → `canonical` → `national` layers MUST be lazy `scan_parquet` views over a Hive-partitioned dataset, not full copies; a single national file is materialized only when a consumer genuinely needs one, by streaming `sink_parquet`. Re-materializing the same events at each layer is prohibited.
+4. **Bounded run bundles.** The `ReproducibilityManifest` and every artifact manifest reference large tensors by path/hash; they **never** inline `O(n_cells)` arrays (inlining the population/migration tensors produced a ~430 MB manifest at national scale — the same anti-pattern as V.1(a)).
+
+Codecs are tuned (ZSTD + dictionary), not left at library defaults; debug ancillaries are pruned on success; intermediates are GC-able with the consumed artifact as the safety gate. Contracts 1, 2, and 4 are **landed** (`STORE-01`); contract 3 (the lazy-view collapse) is the open item (`STORE-02`).
 ---
 
 ## Part VI — The Foundational Asset Layer & Lifecycle
@@ -436,12 +449,13 @@ Carried forward and unified under MSD-III (predecessor `MII-*` / `MII-DIS-*` IDs
 
 - **Phase 0:** `T0-1` source-reality contracts; `T0-2` EFG legality/state-tensor; `T0-3` RaceBridge numerics; `T0-4` inference baseline; `REFACTOR-01` normalizer de-dup.
 - **Phase 1:** `REG-07` unified `kind`-tagged registry + validator; `SPG-01/02/03` spatial graph + circularity guard; `PANEL-01` CommonPanel + per-cell provenance + month resolution; `SCOPE-01` DataScope×ExecutionStage.
-- **Phase 2:** `EFG-OUT-01` measured-quantity objects; `POP-01` two-layer tensor (Layer-1 closed form + warm start + conditional solver) + table 2093; `RACE-01..07` per-source literature-informed emission matrices (§II.5); `DIS-01/02/03` concept registry + ICD adapter + DiseaseGraph.
+- **Phase 2:** `EFG-OUT-01` measured-quantity objects; `POP-01` two-layer tensor (Layer-1 closed form + warm start + conditional solver) + table 2093; `POP-02` **tensor compute contract** (§V.1: float32 numpy/torch arrays not Python tuples; locality-blocked solve; wired GPU kernels + CPU fallback + device telemetry; refuse-not-OOM) — remediates the OOM that blocks full-national demographics; `RACE-01..07` per-source literature-informed emission matrices (§II.5); `DIS-01/02/03` concept registry + ICD adapter + DiseaseGraph.
 - **Phase 3:** `LF-01` latent-field observation model (weighted, arbitrary-resolution); `MR-01` multiresolution hierarchical shrinkage on space/time/disease.
 - **Phase 4:** `LDO-00` assembly + link-record schema; `LDO-01` copula margins (incl. extensive count+exposure); `LDO-02` sparse+spatial+temporal precision; `LDO-03` low-rank latent factors; `LDO-04` lag extension (the Zika capability); `LDO-05` edge readout + stability selection + residual HSIC + `DIS-05` overlap; `LDO-06` certification + orchestrator (+ slice-zoo refactor).
 - **Phase 5:** `CAUSAL-01` rung-1 non-Gaussian orientation; `CAUSAL-02` quasi-experimental where shocks exist; `APC-01` adaptive precision controller (simple version); `VAL-01..04` the validation battery.
 - **Phase 6:** `FAL-01` asset tiers + scope-invariance + versioning + pinning; `FAL-02` incremental update + snapshots; `DISCO-01` continuous discovery scheduler (later milestone).
-- **Phase 7:** `RES-01` coarse→fine multi-resolution scanning; `EXH-01` heterogeneity screens + random audits + coverage manifest; `SCALE-01` national tiling/streaming + RandNLA.
+- **Phase 7:** `RES-01` coarse→fine multi-resolution scanning; `EXH-01` heterogeneity screens + random audits + coverage manifest; `SCALE-01` national **LDO-scan** tiling/streaming + RandNLA. *(Note: `SCALE-01` is the inference-scan scaling item; the national **acquisition/compile** path is `NAT-01`, a data-plane item — see cross-cutting below. Do not conflate.)*
+- **Cross-cutting (engineering-debt remediation — §V.1/§V.7 contracts; sequenced opportunistically, not phase-gated):** `NAT-01` national acquisition + combine + national compile scope (all 27 UFs → national municipality panel) — **landed**; `STORE-01` storage lifecycle contracts V.7(1,2,4) (single-serialization DATASUS v4 bridge, slim SIDRA, non-inlining manifests, ZSTD, GC) — **landed**; `STORE-02` V.7(3) lazy `scan_parquet` views over Hive-partitioned canonical/facts (retire the `combined`/`canonical`/`national` re-materialization) — **open**; `POP-02` the §V.1 tensor compute contract (above) — **landed** (M1 numpy-array storage, M3 exact locality-blocked solve, M4 bounded-BFS migration, G3 orphaned-GPU-kernel + aspirational-flag removed; float32/GPU-port deferred as the CPU-blocked solve already fits + is fast).
 
 ### XI.4 The program acceptance test
 

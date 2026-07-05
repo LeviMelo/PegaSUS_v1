@@ -586,7 +586,7 @@ def interpolate_census_composition(
     sex_index: dict[str, int],
     race_index: dict[str, int],
     shape: tuple[int, int, int, int, int],
-) -> list[float]:
+) -> np.ndarray:
     """Closed-form prior-mean population tensor (MSD §2.8.10 reconstruction, data-poor limit).
 
     The intercensal (age,sex,race) breakdown is a *reconstruction*, and in the absence of
@@ -625,7 +625,7 @@ def interpolate_census_composition(
             interp = _interpolate_shares(shares, census_years, int(period))
             base = (li * t_count + pi) * group_size
             values[base:base + group_size] = closure_total * interp
-    return values.tolist()
+    return values  # numpy array (not .tolist() — a national 1.3e8-element Python list is ~4 GB, §V.1)
 
 
 def _census_race_composition_prior(

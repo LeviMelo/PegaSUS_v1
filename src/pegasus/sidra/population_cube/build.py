@@ -528,6 +528,54 @@ def _sinasc_birth_priors(
     return tuple(values), []
 
 
+def _census_count_arrays(
+    records: list[dict[str, Any]],
+    *,
+    locality_index: dict[str, int],
+    age_index: dict[str, int],
+    sex_index: dict[str, int],
+    race_index: dict[str, int],
+    group_size: int,
+    x_count: int,
+    r_count: int,
+) -> dict[int, dict[str, np.ndarray]]:
+    """Per-(locality, census period) dense [group_size] count vector in canonical (age,sex,race) cell
+    order. One O(records) pass; the per-cell offset ``age*x*r + sex*r + race`` matches ``_cell_index``'s
+    within-group layout, so a [group_size] vector maps to a contiguous slice of the flat tensor."""
+    xr = x_count * r_count
+    out: dict[int, dict[str, np.ndarray]] = {}
+    for record in records:
+        li = locality_index.get(record["municipality_cod6"])
+        ai = age_index.get(record["age_group"])
+        xi = sex_index.get(record["sex"])
+        ri = race_index.get(record["race"])
+        if li is None or ai is None or xi is None or ri is None:
+            continue
+        by_year = out.setdefault(li, {})
+        arr = by_year.get(record["period"])
+        if arr is None:
+            arr = np.zeros(group_size, dtype=np.float64)
+            by_year[record["period"]] = arr
+        arr[ai * xr + xi * r_count + ri] += float(record["value"])
+    return out
+
+
+def _interpolate_shares(shares: dict[str, np.ndarray], census_years: list[str], t: int) -> np.ndarray:
+    """Linear share-space interpolation of the [group_size] composition to year ``t``, clamped to the
+    nearest census outside the observed bracket (MSD §2.8.8/§2.8.10 policy)."""
+    anchors = [int(y) for y in census_years]
+    if t <= anchors[0]:
+        return shares[census_years[0]]
+    if t >= anchors[-1]:
+        return shares[census_years[-1]]
+    lo_year = census_years[max(i for i, y in enumerate(anchors) if y <= t)]
+    hi_year = census_years[min(i for i, y in enumerate(anchors) if y >= t)]
+    if lo_year == hi_year:
+        return shares[lo_year]
+    w = (t - int(lo_year)) / (int(hi_year) - int(lo_year))
+    return (1.0 - w) * shares[lo_year] + w * shares[hi_year]
+
+
 def interpolate_census_composition(
     *,
     records: list[dict[str, Any]],
@@ -554,56 +602,30 @@ def interpolate_census_composition(
     """
     s_count, t_count, a_count, x_count, r_count = shape
     group_size = a_count * x_count * r_count
-    # locality -> census period -> {(age,sex,race): count}
-    by_loc: dict[str, dict[str, dict[tuple[str, str, str], float]]] = {}
-    for record in records:
-        loc = record["municipality_cod6"]
-        per = record["period"]
-        cell = (record["age_group"], record["sex"], record["race"])
-        by_loc.setdefault(loc, {}).setdefault(per, {})
-        by_loc[loc][per][cell] = by_loc[loc][per].get(cell, 0.0) + float(record["value"])
-
-    values = [0.0] * (s_count * t_count * group_size)
-    for loc, by_year in by_loc.items():
-        if loc not in locality_index:
-            continue
-        shares: dict[str, dict[tuple[str, str, str], float]] = {}
-        for year, counts in by_year.items():
-            total = sum(counts.values())
-            if total > 0:
-                shares[year] = {cell: count / total for cell, count in counts.items()}
-        census_years = sorted(shares)
+    # Vectorized (§V.1): build one dense [group_size] count vector per (locality, census year) in
+    # canonical cell order, then interpolate the WHOLE composition across periods with numpy and write
+    # a contiguous slice per (locality, period) -- no per-cell Python loop / _cell_index (was O(n_cells)
+    # calls; the dominant national input-construction cost).
+    census_counts = _census_count_arrays(
+        records, locality_index=locality_index, age_index=age_index, sex_index=sex_index,
+        race_index=race_index, group_size=group_size, x_count=x_count, r_count=r_count,
+    )
+    closure_arr = np.asarray([c if c is not None else np.nan for c in closure], dtype=np.float64)
+    values = np.zeros(s_count * t_count * group_size, dtype=np.float64)
+    period_pairs = sorted(period_index.items(), key=lambda kv: int(kv[0]))
+    for li, by_year in census_counts.items():
+        shares = {y: arr / s for y, arr in ((y, arr) for y, arr in by_year.items()) if (s := arr.sum()) > 0}
+        census_years = sorted(shares, key=int)
         if not census_years:
             continue
-        anchors_int = [int(y) for y in census_years]
-        for period in period_index:
-            closure_total = closure[locality_index[loc] * t_count + period_index[period]]
-            if closure_total is None or closure_total <= 0:
+        for period, pi in period_pairs:
+            closure_total = closure_arr[li * t_count + pi]
+            if not np.isfinite(closure_total) or closure_total <= 0:
                 continue
-            year_int = int(period)
-            if year_int <= anchors_int[0]:
-                lo = hi = census_years[0]
-                weight = 0.0
-            elif year_int >= anchors_int[-1]:
-                lo = hi = census_years[-1]
-                weight = 0.0
-            else:
-                lo = census_years[max(i for i, y in enumerate(anchors_int) if y <= year_int)]
-                hi = census_years[min(i for i, y in enumerate(anchors_int) if y >= year_int)]
-                weight = 0.0 if lo == hi else (year_int - int(lo)) / (int(hi) - int(lo))
-            lo_share, hi_share = shares[lo], shares[hi]
-            for cell in set(lo_share) | set(hi_share):
-                age_group, sex, race = cell
-                if age_group not in age_index or sex not in sex_index or race not in race_index:
-                    continue
-                share = (1.0 - weight) * lo_share.get(cell, 0.0) + weight * hi_share.get(cell, 0.0)
-                idx = _cell_index(
-                    locality=loc, period=period, age_group=age_group, sex=sex, race=race,
-                    locality_index=locality_index, period_index=period_index,
-                    age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
-                )
-                values[idx] = closure_total * share
-    return values
+            interp = _interpolate_shares(shares, census_years, int(period))
+            base = (li * t_count + pi) * group_size
+            values[base:base + group_size] = closure_total * interp
+    return values.tolist()
 
 
 def _census_race_composition_prior(
@@ -632,63 +654,39 @@ def _census_race_composition_prior(
     """
     if not any(value != TOTAL for value in race_index) or len(race_index) < 2:
         return None
-    # cell_composition[(locality, age, sex)][period] = {race: proportion}
-    totals: dict[tuple[str, str, str], dict[str, float]] = {}
-    for record in records:
-        key = (record["municipality_cod6"], record["age_group"], record["sex"])
-        totals.setdefault(key, {}).setdefault(record["period"], {})
-        totals[key][record["period"]][record["race"]] = totals[key].get(record["period"], {}).get(record["race"], 0.0) + float(record["value"])
-    census_years_sorted = sorted({record["period"] for record in records})
-    if not census_years_sorted:
-        return None
-
-    n = shape[0] * shape[1] * shape[2] * shape[3] * shape[4]
-    values: list[float | None] = [None] * n
-    for (locality, age_group, sex), by_year in totals.items():
-        if locality not in locality_index or age_group not in age_index or sex not in sex_index:
+    s_count, t_count, a_count, x_count, r_count = shape
+    group_size = a_count * x_count * r_count
+    # Vectorized (§V.1): per (locality, census year) build the [group_size] count vector, normalize
+    # over RACE within each (age,sex) block to a race composition, interpolate across periods with
+    # numpy, and write a contiguous per-(locality, period) slice. NaN marks cells with no census race
+    # data (masked out by the loss, exactly as the old per-cell None did). No per-cell Python loop.
+    census_counts = _census_count_arrays(
+        records, locality_index=locality_index, age_index=age_index, sex_index=sex_index,
+        race_index=race_index, group_size=group_size, x_count=x_count, r_count=r_count,
+    )
+    n = s_count * t_count * group_size
+    values = np.full(n, np.nan, dtype=np.float64)
+    period_pairs = sorted(period_index.items(), key=lambda kv: int(kv[0]))
+    any_set = False
+    for li, by_year in census_counts.items():
+        race_shares: dict[str, np.ndarray] = {}
+        for year, arr in by_year.items():
+            block = arr.reshape(a_count, x_count, r_count)
+            block_sum = block.sum(axis=-1, keepdims=True)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                share = np.where(block_sum > 0, block / block_sum, np.nan)  # NaN where the block has no data
+            race_shares[year] = share.reshape(group_size)
+        census_years = sorted(race_shares, key=int)
+        if not census_years:
             continue
-        proportions: dict[str, dict[str, float]] = {}
-        for year, race_counts in by_year.items():
-            total = sum(race_counts.values())
-            if total <= 0:
-                continue
-            proportions[year] = {race: count / total for race, count in race_counts.items()}
-        years_available = sorted(proportions)
-        if not years_available:
-            continue
-        for period in period_index:
-            year_int = int(period)
-            anchors_int = [int(year) for year in years_available]
-            if year_int <= anchors_int[0]:
-                lo = hi = years_available[0]
-                weight = 0.0
-            elif year_int >= anchors_int[-1]:
-                lo = hi = years_available[-1]
-                weight = 0.0
-            else:
-                lo = years_available[max(i for i, y in enumerate(anchors_int) if y <= year_int)]
-                hi = years_available[min(i for i, y in enumerate(anchors_int) if y >= year_int)]
-                weight = 0.0 if lo == hi else (year_int - int(lo)) / (int(hi) - int(lo))
-            lo_dist, hi_dist = proportions[lo], proportions[hi]
-            for race in race_index:
-                p = (1.0 - weight) * lo_dist.get(race, 0.0) + weight * hi_dist.get(race, 0.0)
-                idx = _cell_index(
-                    locality=locality,
-                    period=period,
-                    age_group=age_group,
-                    sex=sex,
-                    race=race,
-                    locality_index=locality_index,
-                    period_index=period_index,
-                    age_index=age_index,
-                    sex_index=sex_index,
-                    race_index=race_index,
-                    shape=shape,
-                )
-                values[idx] = p
-    if not any(value is not None for value in values):
+        for period, pi in period_pairs:
+            interp = _interpolate_shares(race_shares, census_years, int(period))
+            base = (li * t_count + pi) * group_size
+            values[base:base + group_size] = interp
+            any_set = True
+    if not any_set or bool(np.isnan(values).all()):
         return None
-    return tuple(values)
+    return values
 
 
 

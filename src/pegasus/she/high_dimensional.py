@@ -1,3 +1,4 @@
+# PANEL-01 pre-build, unwired — do not reap (PEGASUS_REFACTOR_MASTER_PLAN.md §1c).
 from __future__ import annotations
 
 from dataclasses import dataclass

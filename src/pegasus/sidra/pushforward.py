@@ -12,6 +12,8 @@ frame:
                                  denominator separately, then divide (direct
                                  marginalization of a ratio is illegal, §3.9.1)
 * classification projection    : ``Y_axis = Σ_χ Π_{α,χ} Y_raw`` for additive
+
+PANEL-01 pre-build, unwired — do not reap (PEGASUS_REFACTOR_MASTER_PLAN.md §1c).
                                  measures; rates require numerator/denominator
                                  recovery, §2.12.2.
 """

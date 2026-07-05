@@ -1,4 +1,5 @@
 """Arrow conversion helpers used by the storage boundary."""
+# SCALE-01 substrate, unwired — do not reap (PEGASUS_REFACTOR_MASTER_PLAN.md §1c).
 
 from __future__ import annotations
 

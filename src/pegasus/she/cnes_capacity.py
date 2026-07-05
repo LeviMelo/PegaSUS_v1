@@ -1,3 +1,4 @@
+# Capacity carrier, unwired (EFG-bundle consumer removed) — PANEL-01 reconcile (§1c).
 from __future__ import annotations
 
 import json

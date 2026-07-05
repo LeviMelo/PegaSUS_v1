@@ -52,7 +52,7 @@ class UserIntent(BaseModel):
         "municipality", "microregion", "immediate_region", "mesoregion", "intermediate_region"
     ] = "municipality"
 
-    execution_scale: Literal["smoke", "state", "region", "national_blocked"]
+    execution_scale: Literal["smoke", "state", "region", "national", "national_blocked"]
 
     # decoupled: population tensor's race axis ignores DATASUS-origin admin race
     # entirely (§2.8.5/§2.8.6 race-stratified births/deaths unwired, lambda=0).

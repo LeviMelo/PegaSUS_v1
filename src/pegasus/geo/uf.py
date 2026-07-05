@@ -45,6 +45,15 @@ _UF_BY_SIGLA: dict[str, UFCode] = {
 
 _UF_BY_COD2: dict[str, UFCode] = {value.ibge_cod2: value for value in _UF_BY_SIGLA.values()}
 
+# The 27 federative units — used for national-scale (all-UF) acquisition and validation.
+ALL_UF_SIGLAS: tuple[str, ...] = tuple(_UF_BY_SIGLA)
+VALID_DATASUS_PREFIXES: frozenset[str] = frozenset(_UF_BY_COD2)
+
+
+def is_valid_datasus_prefix(prefix: str | None) -> bool:
+    """True when ``prefix`` is one of the 27 valid IBGE UF codes (a real Brazilian state)."""
+    return prefix is not None and str(prefix).strip() in VALID_DATASUS_PREFIXES
+
 
 def resolve_uf_code(value: str) -> UFCode:
     key = str(value).strip().upper()

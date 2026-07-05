@@ -846,7 +846,11 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
 
     Lets the intent→params derivation be validated without a live acquisition."""
     _payload, intent = _load_intent(intent_path)
-    uf = _resolve_uf(intent)
+    # National plans over all 27 UFs; the compendium/locality preview uses the first UF as a
+    # representative (per-UF localities are combined at acquisition), so a national intent that
+    # declares no single UF still plans without error.
+    ufs = _resolve_ufs(intent)
+    uf = ufs[0]
     from pegasus.geo.uf import resolve_uf_code
     sidra_compendium_plan: dict[str, Any]
     selected = _selected_compendium_tables()
@@ -946,6 +950,83 @@ def plan_live_pipeline(*, intent_path: str | Path) -> dict[str, Any]:
     }
 
 
+def _resolve_ufs(intent: UserIntent) -> list[str]:
+    """The UF(s) to acquire. National scale acquires all 27 federative units; every other
+    scale acquires the single declared/derived UF (SCALE-01)."""
+    from pegasus.geo.uf import ALL_UF_SIGLAS
+
+    if intent.execution_scale == "national":
+        return list(ALL_UF_SIGLAS)
+    return [_resolve_uf(intent)]
+
+
+def _combine_national_artifacts(
+    per_uf_artifacts: list[SourceArtifact], *, data_root: Path
+) -> list[SourceArtifact]:
+    """Combine per-UF source artifacts into one national artifact per (system, role).
+
+    Uses streaming (lazy scan → sink) concat so national SIM/SIH tables (tens of millions
+    of rows across 27 states) never have to fit in RAM at once. One national artifact per
+    (source_system, artifact_role) feeds the national source manifest.
+    """
+    from collections import defaultdict
+
+    groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
+    for art in per_uf_artifacts:
+        groups[(art.source_system, art.artifact_role)].append(Path(art.path))
+
+    national: list[SourceArtifact] = []
+    for (system, role), paths in sorted(groups.items()):
+        out = data_root / "normalized" / "national" / f"{system}__{role}.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            pl.concat([pl.scan_parquet(p) for p in paths], how="diagonal_relaxed").sink_parquet(out)
+        except Exception:
+            # sink not available for this frame shape → eager concat fallback
+            pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed").write_parquet(out)
+        national.append(
+            inspect_source_artifact(
+                path=out, source_system=system, artifact_role=role,
+                provenance_mode="materialized_external", source_manifest_hash=sha256_file(out),
+            )
+        )
+    return national
+
+
+def _acquire_national(
+    *, intent: UserIntent, ufs: list[str], systems: list[str], years: str,
+    data_root: Path, sidra_metadata_dir: Path,
+    datasus_client: MicrodatasusClient | None, sidra_client: SidraClient | None,
+) -> tuple[list[SourceArtifact], list[SourceArtifact], dict[str, Any]]:
+    """National acquisition (SCALE-01): acquire every UF, then combine into national
+    per-(system,role) artifacts. DATASUS is cached from the parallel national fetch; SIDRA
+    is fetched per UF (population/strata/civil-registry/compendium) and concatenated."""
+    per_uf_datasus: list[SourceArtifact] = []
+    per_uf_sidra: list[SourceArtifact] = []
+    compendium_summary: dict[str, Any] = {"status": "national_per_uf_combined", "artifact_count": 0}
+    for uf in ufs:
+        per_uf_datasus.extend(
+            _acquire_datasus(systems=systems, uf=uf, years=years, data_root=data_root, client=datasus_client)
+        )
+        per_uf_sidra.append(_acquire_sidra_population(
+            intent=intent, uf=uf, data_root=data_root, metadata_dir=sidra_metadata_dir, client=sidra_client))
+        strata = _acquire_sidra_population_strata(
+            intent=intent, uf=uf, data_root=data_root, metadata_dir=sidra_metadata_dir, client=sidra_client)
+        if strata is not None:
+            per_uf_sidra.append(strata)
+        cr = _acquire_sidra_civil_registry_vital(
+            intent=intent, uf=uf, data_root=data_root, metadata_dir=sidra_metadata_dir, client=sidra_client)
+        per_uf_sidra.extend(a for a in (cr.get("births"), cr.get("deaths")) if a is not None)
+        ctx, ctx_summary = _acquire_sidra_compendium_context(
+            intent=intent, uf=uf, data_root=data_root, metadata_dir=sidra_metadata_dir, client=sidra_client)
+        per_uf_sidra.extend(ctx)
+        compendium_summary["artifact_count"] += len(ctx)
+
+    datasus_national = _combine_national_artifacts(per_uf_datasus, data_root=data_root)
+    sidra_national = _combine_national_artifacts(per_uf_sidra, data_root=data_root)
+    return datasus_national, sidra_national, compendium_summary
+
+
 def run_live_pipeline(
     *,
     intent_path: str | Path,
@@ -956,14 +1037,21 @@ def run_live_pipeline(
     sidra_client: SidraClient | None = None,
     dry_run: bool = False,
 ) -> LivePipelineResult:
-    """Acquire all required live sources, merge one manifest, and compile."""
+    """Acquire all required live sources, merge one manifest, and compile.
+
+    National scale (SCALE-01) acquires all 27 UFs and combines them into national
+    per-(system,role) artifacts before compiling a single national panel."""
     data_root = Path(data_root)
     intent_payload, intent = _load_intent(intent_path)
-    uf = _resolve_uf(intent)
+    ufs = _resolve_ufs(intent)
+    national = intent.execution_scale == "national"
+    uf = ufs[0]
     systems = _resolve_systems(intent)
     years = _years_token(intent)
     municipality_cod6: str | None = None
-    if intent.geography.codes:
+    if intent.geography.codes and not national:
+        # National declares no single municipality (codes may carry a country token like "BR");
+        # a per-municipality cod6 is only meaningful for smoke/state scopes.
         from pegasus.geo.municipality_crosswalk import ibge_cod7_to_datasus_cod6
 
         municipality_cod6 = ibge_cod7_to_datasus_cod6(intent.geography.codes[0], strict=True)
@@ -978,6 +1066,35 @@ def run_live_pipeline(
             compile_result=None,
             sidra_compendium=None,
             reason=json.dumps(plan_live_pipeline(intent_path=intent_path), sort_keys=True),
+        )
+
+    if national:
+        datasus_artifacts, sidra_artifacts, sidra_compendium = _acquire_national(
+            intent=intent, ufs=ufs, systems=systems, years=years, data_root=data_root,
+            sidra_metadata_dir=Path(sidra_metadata_dir),
+            datasus_client=datasus_client, sidra_client=sidra_client,
+        )
+        sidra_artifact = next((a for a in sidra_artifacts if a.artifact_role == "normalized_facts"), None)
+        race_prior_artifact = None  # national race prior selection is UF-independent; wired later
+        all_manifest_artifacts = [*datasus_artifacts, *sidra_artifacts]
+        intent_hash = sha256_file(Path(intent_path))
+        manifest_dir = data_root / "manifests" / "runs"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        combined_manifest_path = manifest_dir / f"live_{Path(intent_path).stem}_{intent_hash[:8]}.source_manifest.json"
+        write_source_artifact_manifest(artifacts=all_manifest_artifacts, output=combined_manifest_path)
+        compile_result = run_compile(
+            intent_path=intent_path, run_dir=run_dir, data_root=data_root,
+            source_manifest=combined_manifest_path, require_materialized_external=True,
+        )
+        validation = compile_result.get("validation")
+        ok = bool(getattr(validation, "ok", False))
+        return LivePipelineResult(
+            status="success" if ok else "compile_failed",
+            run_dir=str(compile_result.get("run_dir")) if compile_result.get("run_dir") else None,
+            source_manifest=str(combined_manifest_path),
+            datasus_artifacts=datasus_artifacts, sidra_artifact=sidra_artifact,
+            sidra_artifacts=sidra_artifacts, sidra_compendium=sidra_compendium,
+            compile_result=compile_result, reason=None if ok else "output bundle validation failed",
         )
 
     datasus_artifacts = _acquire_datasus(

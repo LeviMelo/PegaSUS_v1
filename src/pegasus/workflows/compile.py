@@ -76,6 +76,14 @@ def _write_compile_manifest(*, run_id: str, intent_path: Path, data_root: Path, 
 
 
 def _intent_municipality_filter_cod6(intent: UserIntent) -> str | None:
+    if intent.execution_scale == "national":
+        # National scope (SCALE-01): materializes a municipality-resolution panel over every
+        # UF; the selector level may be 'country' (whole-Brazil) or 'municipality'. No single-
+        # municipality filter; validation accepts every real UF via GeoScope.national.
+        if intent.geography.codes:
+            raise ValueError("National compile expects geography.codes=[] (all municipalities, all UFs).")
+        return None
+
     if intent.geography.level != "municipality":
         raise ValueError("Current compile supports geography.level='municipality' only.")
 
@@ -99,13 +107,6 @@ def _intent_municipality_filter_cod6(intent: UserIntent) -> str | None:
             raise ValueError("State compile requires exactly one UF in geography.uf.")
         return None
 
-    if intent.execution_scale == "national":
-        # National scope (SCALE-01): no single-municipality filter; validation accepts every
-        # real Brazilian UF via GeoScope.national. Requires a national source manifest (all UFs).
-        if intent.geography.codes:
-            raise ValueError("National compile expects geography.codes=[] (all municipalities, all UFs).")
-        return None
-
     raise ValueError(
         "Compile supports execution_scale='smoke', 'state', or 'national'. "
         f"Received {intent.execution_scale!r}."
@@ -114,7 +115,9 @@ def _intent_municipality_filter_cod6(intent: UserIntent) -> str | None:
 
 def _geo_scope_from_intent(intent: UserIntent, *, municipality_cod6: str | None) -> GeoScope:
     if intent.execution_scale == "national":
-        return GeoScope.national(level=intent.geography.level)
+        # National always materializes at municipality resolution (all UFs), even when the
+        # selector level is declared as 'country'.
+        return GeoScope.national(level="municipality")
     if intent.execution_scale == "state":
         if len(intent.geography.uf) != 1:
             raise ValueError("State compile requires exactly one UF in geography.uf.")

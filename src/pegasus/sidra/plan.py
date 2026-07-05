@@ -161,6 +161,7 @@ def plan_sidra_chunks_unchecked(
     request: SIDRARequest,
     *,
     max_cells_per_request: int = 95000,
+    max_localities_per_request: int = 200,
     base_url: str = DEFAULT_BASE_URL,
 ) -> list[SIDRAChunk]:
     """Cell-budget chunk planner without metadata validation.
@@ -181,7 +182,7 @@ def plan_sidra_chunks_unchecked(
             variables=current.variables,
             classifications=current.classifications,
         )
-        if cells <= max_cells_per_request:
+        if cells <= max_cells_per_request and len(current.localities) <= max_localities_per_request:
             chunks.append(_make_chunk(
                 current,
                 localities=current.localities,
@@ -206,6 +207,7 @@ def plan_sidra_chunks(
     metadata: SIDRAMetadata,
     *,
     max_cells_per_request: int = 49900,
+    max_localities_per_request: int = 200,
     base_url: str = DEFAULT_BASE_URL,
 ) -> list[SIDRAChunk]:
     errors = validate_request_against_metadata(request, metadata)
@@ -224,7 +226,12 @@ def plan_sidra_chunks(
             classifications=current.classifications,
         )
 
-        if cells <= max_cells_per_request:
+        # Cap localities/request independently of cells: IBGE's gateway times out (HTTP 599,
+        # empty body) on very long locality URLs even when the cell count is small — e.g. a
+        # census-total request for MG's 853 municipalities is <1k cells but one oversized URL.
+        # _split_request bisects localities first, so this splits such a chunk into servable
+        # batches (throughput is recovered by concurrency, not by fatter requests).
+        if cells <= max_cells_per_request and len(current.localities) <= max_localities_per_request:
             chunks.append(
                 _make_chunk(
                     current,

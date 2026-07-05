@@ -1,0 +1,41 @@
+{
+  "budget": "standard",
+  "context_policy": [
+    "actual_source_state_panel",
+    "official_sidra_anchor",
+    "no_sidra_compendium"
+  ],
+  "exclude_systems": ["SINASC"],
+  "execution_scale": "national",
+  "execution_stage": "compile",
+  "force_selectors": [],
+  "geo_mode": "native",
+  "geography": {
+    "codes": [],
+    "level": "country",
+    "uf": []
+  },
+  "geography_aggregation": "municipality",
+  "health_seeds": [
+    "all_cause_mortality",
+    "icd_chapter",
+    "icd_block",
+    "curated_cause"
+  ],
+  "mandatory_fields": [
+    "SIMDeathsAll"
+  ],
+  "population_mode": "official_sidra_anchor",
+  "race_tensor_mode": "decoupled",
+  "run_profile": "core_vital",
+  "system_weights": {
+    "SIDRA": 1.0,
+    "SIM-DO": 1.0
+  },
+  "time": {
+    "start_year": 2021,
+    "end_year": 2022,
+    "start_month": null,
+    "end_month": null
+  }
+}

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from pegasus.she.reconstruction.loss import evaluate_population_loss, validate_population_problem
 from pegasus.she.reconstruction.projected_gradient import (
     PopulationOptimizationResult,
@@ -77,4 +79,4 @@ def solve_population_block_coordinate(
         step_size=step,
         objective_terms=evaluation.terms,
     )
-    return PopulationOptimizationResult(tuple(population), tuple(migration), telemetry)
+    return PopulationOptimizationResult(np.asarray(population, dtype=np.float64), np.asarray(migration, dtype=np.float64), telemetry)

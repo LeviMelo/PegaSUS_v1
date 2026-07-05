@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
+import numpy as np
+
 from pegasus.compute.memory import MemoryPreflight, preflight_memory
 from pegasus.she.reconstruction.block_coordinate import solve_population_block_coordinate
 from pegasus.she.reconstruction.loss import evaluate_population_loss, validate_population_problem
@@ -153,4 +155,4 @@ def solve_population_admm(
         step_size=step_size,
         objective_terms=evaluation.terms | {"admm_rho": rho},
     )
-    return PopulationOptimizationResult(tuple(population), tuple(migration), telemetry), plan
+    return PopulationOptimizationResult(np.asarray(population, dtype=np.float64), np.asarray(migration, dtype=np.float64), telemetry), plan

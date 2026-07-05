@@ -158,7 +158,7 @@ def solve_population_tensor_blocked(
         step_size=0.0,
         objective_terms={"blocked_localities": float(block_localities), "n_blocks": float(len(pops))},
     )
-    return PopulationOptimizationResult(tuple(float(x) for x in population), tuple(float(x) for x in migration), telemetry)
+    return PopulationOptimizationResult(np.asarray(population, dtype=np.float64), np.asarray(migration, dtype=np.float64), telemetry)
 
 
 __all__ = ["solve_population_tensor_problem", "solve_population_tensor_blocked", "dense_national_abort_check"]

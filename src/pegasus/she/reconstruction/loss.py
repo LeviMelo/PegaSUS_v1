@@ -18,19 +18,22 @@ Non-convergence downgrades state and emits a warning in the solver result.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from pydantic import BaseModel
 
 from pegasus.she.reconstruction.schema import PopulationTensorProblem
 
 
-class PopulationLossEvaluation(BaseModel):
+@dataclass(frozen=True)
+class PopulationLossEvaluation:
+    # gradients are numpy arrays, NOT Python float tuples: the tuple(float(x) for x in gp) round-trip
+    # was ~99% of a loss evaluation (~110ms→~1ms at block scale, and the loss runs 2x per SPG iter).
     total: float
     terms: dict[str, float]
-    population_gradient: tuple[float, ...]
-    migration_gradient: tuple[float, ...]
+    population_gradient: np.ndarray
+    migration_gradient: np.ndarray
 
 
 def validate_population_problem(problem: PopulationTensorProblem) -> None:
@@ -245,6 +248,6 @@ def evaluate_population_loss(
     return PopulationLossEvaluation(
         total=float(sum(terms.values())),
         terms=terms,
-        population_gradient=tuple(float(x) for x in gp),
-        migration_gradient=tuple(float(x) for x in gm),
+        population_gradient=gp,  # numpy arrays, returned directly — no per-element Python conversion
+        migration_gradient=gm,
     )

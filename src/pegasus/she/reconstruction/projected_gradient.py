@@ -11,8 +11,11 @@ from pegasus.she.reconstruction.schema import PopulationSolverTelemetry, Populat
 
 @dataclass(frozen=True)
 class PopulationOptimizationResult:
-    population: tuple[float, ...]
-    migration: tuple[float, ...]
+    # numpy arrays, not Python float tuples — see PopulationLossEvaluation; the solver result at
+    # national scale is ~200M cells, and tuple(float(x) for x in ...) was ~1 GB + a redundant
+    # numpy→list→numpy round-trip at the emission site.
+    population: np.ndarray
+    migration: np.ndarray
     telemetry: PopulationSolverTelemetry
 
 
@@ -272,7 +275,7 @@ def solve_projected_gradient_small(
         step_size=step_size,
         objective_terms=evaluation.terms,
     )
-    return PopulationOptimizationResult(tuple(population), tuple(migration), telemetry)
+    return PopulationOptimizationResult(np.asarray(population, dtype=np.float64), np.asarray(migration, dtype=np.float64), telemetry)
 
 
 def _solve_projected_gradient_vectorized(
@@ -302,8 +305,8 @@ def _solve_projected_gradient_vectorized(
     migration = _np_project_migration(problem, init_migration, bounds)
 
     evaluation = evaluate_population_loss(problem, population, migration)
-    grad_p = np.array(evaluation.population_gradient, dtype=np.float64)
-    grad_m = np.array(evaluation.migration_gradient, dtype=np.float64)
+    grad_p = np.asarray(evaluation.population_gradient, dtype=np.float64)
+    grad_m = np.asarray(evaluation.migration_gradient, dtype=np.float64)
     initial_objective = evaluation.total
     previous_objective = initial_objective
     # First-step scale (standard SPG init): 1/||g||_inf so the very first projected step
@@ -428,4 +431,4 @@ def _solve_projected_gradient_vectorized(
         step_size=step_size,
         objective_terms=evaluation.terms,
     )
-    return PopulationOptimizationResult(tuple(float(x) for x in population), tuple(float(x) for x in migration), telemetry)
+    return PopulationOptimizationResult(np.asarray(population, dtype=np.float64), np.asarray(migration, dtype=np.float64), telemetry)

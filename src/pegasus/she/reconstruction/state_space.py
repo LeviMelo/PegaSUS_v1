@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+import numpy as np
+
 from pegasus.she.reconstruction.projected_gradient import PopulationOptimizationResult, _initial_population, _project_population
 from pegasus.she.reconstruction.schema import PopulationSolverTelemetry
 from pegasus.she.reconstruction.schema import PopulationTensorProblem
@@ -222,7 +224,7 @@ def solve_population_state_space_smoother(
     )
     return PopulationStateSpaceSmootherResult(
         state_space=state_space,
-        result=PopulationOptimizationResult(tuple(population), migration, telemetry),
+        result=PopulationOptimizationResult(np.asarray(population, dtype=np.float64), np.asarray(migration, dtype=np.float64), telemetry),
         process_variance=process_variance,
         observation_variance=observation_variance,
     )

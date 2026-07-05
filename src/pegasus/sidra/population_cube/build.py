@@ -1049,8 +1049,8 @@ def solve_population_tensor_from_sidra_strata(
         )
         projected = _project_population(problem, list(prior_mean))
         optimized = PopulationOptimizationResult(
-            population=tuple(projected),
-            migration=(0.0,) * n_cells,
+            population=np.asarray(projected, dtype=np.float64),
+            migration=np.zeros(n_cells, dtype=np.float64),
             telemetry=PopulationSolverTelemetry(
                 converged=True, iterations=0,
                 initial_objective=0.0, final_objective=0.0,
@@ -1139,7 +1139,7 @@ def solve_population_tensor_from_sidra_strata(
         solver_id=solver.solver_id,
         solver_backend=solver.backend,
         sparse_jacobian=solver.sparse_jacobian,
-        value=float(sum(optimized.population)),
+        value=float(np.asarray(optimized.population, dtype=np.float64).sum()),
         unit="persons",
         locality_id="panel",
         period="multi" if len(periods) != 1 else periods[0],

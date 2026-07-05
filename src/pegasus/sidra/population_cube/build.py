@@ -70,6 +70,12 @@ class PopulationTensorBuild:
     migration_flows_path: str | None = None
     migration_affinity_path: str | None = None
     migration_flow_manifests: tuple[dict[str, Any], ...] = ()
+    # FAL-POP-PROJ/VER: the census-anchored range [earliest, latest] and the max forward/backward
+    # projection horizon (years beyond that range). Feeds the versioned-asset manifest (§VI.2) so a
+    # consumer knows which years are enumerated/interpolated vs projected, and to what horizon.
+    anchored_range: tuple[int | None, int | None] = (None, None)
+    max_projection_horizon: int = 0
+    projected_periods: tuple[str, ...] = ()
 
     def as_manifest(self) -> dict[str, Any]:
         return {
@@ -83,6 +89,9 @@ class PopulationTensorBuild:
             "migration_flows_path": self.migration_flows_path,
             "migration_affinity_path": self.migration_affinity_path,
             "migration_flow_reconstructions": list(self.migration_flow_manifests),
+            "anchored_range": list(self.anchored_range),
+            "max_projection_horizon": self.max_projection_horizon,
+            "projected_periods": list(self.projected_periods),
         }
 
 
@@ -885,6 +894,62 @@ def _reanchor_closure_single_vintage(
     }
 
 
+# FAL-POP-PROJ (§II.4 native-projection contract): honesty envelope for years the tensor covers by
+# projection rather than enumeration. The projection VALUES already come from the solver's cohort-
+# component dynamics (loss.py aging/birth/death terms) run on the SV-extrapolated closure past the
+# last census -- the same operators that reconstruct intercensal years. What PROJ adds is the
+# prime-directive discipline: classify each year by its distance from the census anchors and attach a
+# per-cell uncertainty that GROWS monotonically with that horizon, typed fragile/unreliable, so a rate
+# on a projected denominator carries visibly wider bars than one on a census denominator.
+PROJECTION_H_SOFT = 5  # years: fragile within this horizon, unreliable (dashboard-blocked) beyond
+PROJECTION_UNCERTAINTY_PER_YEAR = 0.015  # per-year sigma contribution (variance accumulates in quadrature)
+
+
+def _classify_projection_years(
+    periods: tuple[str, ...],
+    census_years: frozenset[str],
+    base_uncertainty: float,
+    *,
+    h_soft: int = PROJECTION_H_SOFT,
+    per_year: float = PROJECTION_UNCERTAINTY_PER_YEAR,
+) -> tuple[dict[str, tuple[str, int, str, float]], tuple[int | None, int | None], int]:
+    """Per-year (anchor_class, horizon, state, uncertainty) + (anchored_range, max_horizon).
+
+    anchor_class:
+      - ``census``            a year with a real enumeration (2000/2010/2022); horizon 0, verified.
+      - ``interpolated``      strictly between two census anchors; bounded on both sides, verified.
+      - ``projected_forward`` past the latest census; horizon = years beyond, uncertainty accumulates.
+      - ``projected_backward`` before the earliest census; symmetric.
+      - ``unanchored``        no census anchor at all (degenerate single-window build); fragile.
+
+    uncertainty(h) = sqrt(base^2 + h * per_year^2) -- variance accumulates one per-year step per horizon
+    year (§II.4). state is ``fragile`` for 1<=h<=h_soft and ``unreliable`` beyond.
+    """
+    census_ints = sorted(int(y) for y in census_years)
+    if not census_ints:
+        return ({p: ("unanchored", 0, "fragile", base_uncertainty) for p in periods}, (None, None), 0)
+    lo, hi = census_ints[0], census_ints[-1]
+    census_set = set(census_ints)
+    out: dict[str, tuple[str, int, str, float]] = {}
+    max_h = 0
+    for p in periods:
+        t = int(p)
+        if t in census_set:
+            out[p] = ("census", 0, "verified", base_uncertainty)
+        elif lo < t < hi:
+            out[p] = ("interpolated", 0, "verified", base_uncertainty * 1.5)
+        else:
+            if t > hi:
+                h, cls = t - hi, "projected_forward"
+            else:
+                h, cls = lo - t, "projected_backward"
+            max_h = max(max_h, h)
+            unc = (base_uncertainty ** 2 + h * per_year ** 2) ** 0.5
+            state = "fragile" if h <= h_soft else "unreliable"
+            out[p] = (cls, h, state, unc)
+    return out, (lo, hi), max_h
+
+
 def solve_population_tensor_from_sidra_strata(
     *,
     population_strata_path: str | Path,
@@ -1214,17 +1279,44 @@ def solve_population_tensor_from_sidra_strata(
     sex_col = np.tile(np.repeat(np.asarray(sexes, dtype=object), r_count), s_count * t_count * a_count)
     race_col = np.tile(np.asarray(races, dtype=object), s_count * t_count * a_count * x_count)
 
+    # FAL-POP-PROJ (§II.4): per-year anchor classification + horizon-growing uncertainty envelope,
+    # broadcast to every cell of a year via the same repeat/tile order as year_col. Projected years
+    # (beyond the census range) carry a wider, fragile/unreliable-typed uncertainty than enumerated or
+    # interpolated years -- so a rate on a projected denominator is visibly less certain.
+    proj_map, anchored_range, max_horizon = _classify_projection_years(
+        periods, census_years, reconstruction_uncertainty
+    )
+    projected_periods = [p for p in periods if proj_map[p][0].startswith("projected")]
+    if projected_periods:
+        warnings.append(
+            "population_tensor_projected_years"
+            f"::count={len(projected_periods)}::max_horizon={max_horizon}"
+            f"::anchored_range={anchored_range[0]}-{anchored_range[1]}"
+        )
+    cls_by_period = np.array([proj_map[p][0] for p in periods], dtype=object)
+    horizon_by_period = np.array([proj_map[p][1] for p in periods], dtype=np.int64)
+    state_by_period = np.array([proj_map[p][2] for p in periods], dtype=object)
+    unc_by_period = np.array([proj_map[p][3] for p in periods], dtype=np.float64)
+    anchor_class_col = np.tile(np.repeat(cls_by_period, inner), s_count)
+    horizon_col = np.tile(np.repeat(horizon_by_period, inner), s_count)
+    cell_state_col = np.tile(np.repeat(state_by_period, inner), s_count)
+    cell_unc_col = np.tile(np.repeat(unc_by_period, inner), s_count)
+
     # anchor_value/sim_deaths are null (not float) for every intercensal demographic cell; NaN → null.
     frame = pl.DataFrame(
         {
             "year": year_col, "municipality_cod6": loc_col, "age_group": age_col,
             "sex": sex_col, "race": race_col, "value": pop, "migration": mig,
             "anchor_value": anch, "sim_deaths": simd,
+            "anchor_class": anchor_class_col, "projection_horizon": horizon_col,
+            "cell_state": cell_state_col, "cell_uncertainty": cell_unc_col,
         },
         schema={
             "year": pl.Int64, "municipality_cod6": pl.Utf8, "age_group": pl.Utf8, "sex": pl.Utf8,
             "race": pl.Utf8, "value": pl.Float64, "migration": pl.Float64,
             "anchor_value": pl.Float64, "sim_deaths": pl.Float64,
+            "anchor_class": pl.Utf8, "projection_horizon": pl.Int64,
+            "cell_state": pl.Utf8, "cell_uncertainty": pl.Float64,
         },
     ).with_columns(
         pl.col("anchor_value").fill_nan(None),
@@ -1318,6 +1410,9 @@ def solve_population_tensor_from_sidra_strata(
         migration_flows_path=migration_flows_path,
         migration_affinity_path=migration_affinity_path,
         migration_flow_manifests=migration_flow_manifests,
+        anchored_range=anchored_range,
+        max_projection_horizon=max_horizon,
+        projected_periods=tuple(projected_periods),
     )
 
 

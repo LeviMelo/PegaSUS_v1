@@ -95,7 +95,8 @@ def solve_population_admm(
     bounds = _migration_bounds(problem)
 
     population = _initial_population(problem)
-    migration = _project_migration(problem, list(problem.initial_migration or (0.0,) * problem.n_cells), bounds)
+    _init_mig = problem.initial_migration if problem.initial_migration is not None else [0.0] * problem.n_cells
+    migration = _project_migration(problem, list(_init_mig), bounds)
     z_population = list(population)
     z_migration = list(migration)
     u_population = [0.0] * problem.n_cells

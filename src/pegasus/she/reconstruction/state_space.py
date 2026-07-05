@@ -79,7 +79,8 @@ def iter_coordinates(shape: tuple[int, int, int, int, int]) -> Iterator[tuple[in
 def build_population_state_space(problem: PopulationTensorProblem) -> PopulationStateSpace:
     shape = problem.shape
     localities, periods, ages, sexes, races = shape
-    anchors = tuple(i for i, value in enumerate(problem.anchors) if value is not None)
+    # anchors is a numpy array; NaN marks 'absent' (was None). A present anchor is finite.
+    anchors = tuple(i for i, value in enumerate(problem.anchors) if math.isfinite(float(value)))
     aging: list[tuple[int, int]] = []
     births: list[tuple[int, int]] = []
     race_groups: list[tuple[int, ...]] = []
@@ -195,8 +196,8 @@ def solve_population_state_space_smoother(
                     birth_shape = (s_count, t_count, x_count, r_count)
                     for t in range(t_count):
                         birth_idx = (((s * birth_shape[1]) + t) * birth_shape[2] + x) * birth_shape[3] + r
-                        if observations[t] is None and problem.births[birth_idx] is not None:
-                            observations[t] = float(problem.births[birth_idx] or 0.0)
+                        if observations[t] is None and math.isfinite(float(problem.births[birth_idx])):
+                            observations[t] = float(problem.births[birth_idx])
                 smoothed = _smooth_path(
                     observations,
                     initial=values[newborn_path[0]],

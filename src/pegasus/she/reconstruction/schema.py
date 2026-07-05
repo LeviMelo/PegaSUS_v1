@@ -4,10 +4,30 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import numpy as np
+
 from pegasus.core.schemas import DenominatorContract
 
 
 PopulationTensorMode = Literal["independent_denominator", "sim_informed_denominator"]
+
+
+def _to_f64_array(value: Any) -> np.ndarray | None:
+    """Normalize an ``O(n_cells)`` value field to a float64 numpy array (``None`` elements → NaN,
+    which every consumer treats as 'absent'). A whole-field ``None`` stays ``None`` (term skipped).
+
+    This is the §V.1 memory contract: the problem holds numpy arrays, not Python float tuples
+    (~32 B/element → tens of GB at national scale), and the solver/loss read them directly instead
+    of rebuilding a numpy array from the tuple every iteration."""
+    if value is None:
+        return None
+    return np.asarray(value, dtype=np.float64)  # None → NaN in a float cast
+
+
+def _to_bool_array(value: Any) -> np.ndarray | None:
+    if value is None:
+        return None
+    return np.asarray(value, dtype=bool)
 
 
 @dataclass(frozen=True)
@@ -46,6 +66,20 @@ class PopulationTensorProblem:
     initial_population: tuple[float, ...] | None = None
     initial_migration: tuple[float, ...] | None = None
     weights: PopulationObjectiveWeights = field(default_factory=PopulationObjectiveWeights)
+
+    def __post_init__(self) -> None:
+        # Normalize every O(n_cells) array field to a numpy array once, at construction, so the
+        # problem is stored compactly (float64/bool arrays, not Python tuples) and downstream reads
+        # are direct. None elements become NaN (a sentinel every consumer already treats as absent);
+        # a whole-field None stays None. Callers may pass tuples/lists/arrays interchangeably.
+        object.__setattr__(self, "anchors", _to_f64_array(self.anchors))
+        object.__setattr__(self, "hard_anchor_mask", _to_bool_array(self.hard_anchor_mask))
+        for _name in (
+            "births", "death_rates", "sim_deaths", "race_composition_prior",
+            "closure_totals", "migration_totals", "migration_locality_totals",
+            "migration_bounds", "initial_population", "initial_migration",
+        ):
+            object.__setattr__(self, _name, _to_f64_array(getattr(self, _name)))
 
     @property
     def n_cells(self) -> int:

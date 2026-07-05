@@ -116,8 +116,8 @@ def evaluate_population_loss(
     gp_tens = gp.reshape(shape)
     gm_tens = gm.reshape(shape)
     
-    # 1. Anchors
-    anchors_np = np.array([a if a is not None else np.nan for a in problem.anchors], dtype=np.float64)
+    # 1. Anchors  (problem fields are numpy arrays with NaN sentinels — read directly, no rebuild)
+    anchors_np = np.asarray(problem.anchors, dtype=np.float64)
     anchor_mask = ~np.isnan(anchors_np)
     if w.anchor > 0 and anchor_mask.any():
         residual = P[anchor_mask] - anchors_np[anchor_mask]
@@ -126,8 +126,9 @@ def evaluate_population_loss(
 
     # 2. Aging
     if w.aging > 0 and t_count > 1 and a_count > 1:
-        dr = np.array([d if d is not None else np.nan for d in (problem.death_rates or [None]*n)], dtype=np.float64).reshape(shape)
-        dr[np.isnan(dr)] = 0.0
+        dr_flat = np.asarray(problem.death_rates, dtype=np.float64) if problem.death_rates is not None else np.full(n, np.nan)
+        # nan_to_num returns a NEW array — never mutate the problem's stored death_rates in place.
+        dr = np.nan_to_num(dr_flat.reshape(shape), nan=0.0)
         survival = 1.0 - dr
         
         P_curr = P_tens[:, 1:, 1:, :, :]
@@ -153,8 +154,7 @@ def evaluate_population_loss(
 
     # 3. Births
     if w.birth > 0 and problem.births is not None and t_count > 1:
-        births = np.array([b if b is not None else np.nan for b in problem.births], dtype=np.float64)
-        births = births.reshape((s_count, t_count, x_count, r_count))
+        births = np.asarray(problem.births, dtype=np.float64).reshape((s_count, t_count, x_count, r_count))
         P_curr = P_tens[:, 1:, 0, :, :]
         B_prior = births[:, :-1, :, :]
         M_eta = M_tens[:, :-1, 0, :, :]
@@ -170,8 +170,8 @@ def evaluate_population_loss(
 
     # 4. Deaths
     if w.death > 0 and problem.sim_deaths is not None:
-        dr = np.array([d if d is not None else np.nan for d in (problem.death_rates or [None]*n)], dtype=np.float64)
-        sim_deaths = np.array([d if d is not None else np.nan for d in problem.sim_deaths], dtype=np.float64)
+        dr = np.asarray(problem.death_rates, dtype=np.float64) if problem.death_rates is not None else np.full(n, np.nan)
+        sim_deaths = np.asarray(problem.sim_deaths, dtype=np.float64)
         mask = ~np.isnan(sim_deaths) & ~np.isnan(dr)
         if mask.any():
             residual = dr[mask] * P[mask] - sim_deaths[mask]
@@ -180,7 +180,7 @@ def evaluate_population_loss(
 
     # 5. Race
     if w.race > 0 and problem.race_composition_prior is not None:
-        prior = np.array([p if p is not None else np.nan for p in problem.race_composition_prior], dtype=np.float64).reshape(shape)
+        prior = np.asarray(problem.race_composition_prior, dtype=np.float64).reshape(shape)
         mask = ~np.isnan(prior).any(axis=-1)
         P_masked = P_tens[mask]
         prior_masked = prior[mask]
@@ -218,10 +218,7 @@ def evaluate_population_loss(
 
     # 6b. Migration total (per locality-year net-flow residual anchor, MSD §2.8.7)
     if w.migration_total > 0 and problem.migration_locality_totals is not None:
-        mig_obs = np.array(
-            [m if m is not None else np.nan for m in problem.migration_locality_totals],
-            dtype=np.float64,
-        ).reshape((s_count, t_count))
+        mig_obs = np.asarray(problem.migration_locality_totals, dtype=np.float64).reshape((s_count, t_count))
         mask_st = ~np.isnan(mig_obs)
         if mask_st.any():
             # Observed net migration for (s,t) is the sum of eta over (a,x,r).

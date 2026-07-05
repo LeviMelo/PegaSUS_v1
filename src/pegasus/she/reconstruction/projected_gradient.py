@@ -38,11 +38,12 @@ def _simplex_projection(values: list[float], total: float) -> list[float]:
 
 def _project_population(problem: PopulationTensorProblem, values: list[float]) -> list[float]:
     projected = [max(value, 0.0) for value in values]
-    hard = problem.hard_anchor_mask or (False,) * problem.n_cells
+    # Fields are numpy arrays: NaN is the 'absent' sentinel (was None), so element checks use isnan/isfinite.
+    hard = problem.hard_anchor_mask if problem.hard_anchor_mask is not None else np.zeros(problem.n_cells, dtype=bool)
     for i, locked in enumerate(hard):
         if locked:
-            anchor = problem.anchors[i]
-            if anchor is None or anchor < 0:
+            anchor = float(problem.anchors[i])
+            if not math.isfinite(anchor) or anchor < 0:
                 raise ValueError("Hard population anchors must be present and nonnegative.")
             projected[i] = anchor
 
@@ -52,8 +53,8 @@ def _project_population(problem: PopulationTensorProblem, values: list[float]) -
     group_size = a_count * x_count * r_count
     for s in range(s_count):
         for t in range(t_count):
-            total = problem.closure_totals[s * t_count + t]
-            if total is None:
+            total = float(problem.closure_totals[s * t_count + t])
+            if math.isnan(total):
                 continue
             start = (s * t_count + t) * group_size
             indices = list(range(start, start + group_size))
@@ -70,13 +71,14 @@ def _project_population(problem: PopulationTensorProblem, values: list[float]) -
 
 def _migration_bounds(problem: PopulationTensorProblem) -> tuple[float, ...]:
     if problem.migration_bounds is not None:
-        if any(bound < 0 or not math.isfinite(bound) for bound in problem.migration_bounds):
+        mb = np.asarray(problem.migration_bounds, dtype=np.float64)
+        if bool(np.any((mb < 0) | ~np.isfinite(mb))):
             raise ValueError("Migration bounds must be finite and nonnegative.")
-        return problem.migration_bounds
-    fallback = max((anchor or 0.0 for anchor in problem.anchors), default=0.0)
+        return mb
+    fallback = float(np.nan_to_num(np.asarray(problem.anchors, dtype=np.float64), nan=0.0).max(initial=0.0))
     if problem.closure_totals is not None:
-        fallback = max(fallback, max((value or 0.0 for value in problem.closure_totals), default=0.0))
-    return (max(fallback, 1.0),) * problem.n_cells
+        fallback = max(fallback, float(np.nan_to_num(np.asarray(problem.closure_totals, dtype=np.float64), nan=0.0).max(initial=0.0)))
+    return np.full(problem.n_cells, max(fallback, 1.0), dtype=np.float64)
 
 
 def _bounded_sum_projection(values: list[float], bounds: list[float], total: float) -> list[float]:
@@ -105,8 +107,8 @@ def _project_migration(problem: PopulationTensorProblem, values: list[float], bo
             for x in range(x_count):
                 for r in range(r_count):
                     total_index = (((t * a_count) + a) * x_count + x) * r_count + r
-                    total = problem.migration_totals[total_index]
-                    if total is None:
+                    total = float(problem.migration_totals[total_index])
+                    if math.isnan(total):
                         continue
                     indices = [((((s * t_count) + t) * a_count + a) * x_count + x) * r_count + r for s in range(s_count)]
                     group = _bounded_sum_projection([projected[i] for i in indices], [bounds[i] for i in indices], total)
@@ -126,8 +128,8 @@ def _initial_population(problem: PopulationTensorProblem) -> list[float]:
         return _project_population(problem, [float(v) for v in vals])
 
     if problem.initial_population is not None:
-        return _finish(np.array(problem.initial_population, dtype=np.float64))
-    anchors = np.array([a if a is not None else 0.0 for a in problem.anchors], dtype=np.float64)
+        return _finish(np.asarray(problem.initial_population, dtype=np.float64))
+    anchors = np.nan_to_num(np.asarray(problem.anchors, dtype=np.float64), nan=0.0)
     return _finish(anchors)
 
 
@@ -136,7 +138,7 @@ def _fast_projection_supported(problem: PopulationTensorProblem) -> bool:
     no per-cell hard anchors and no per-stratum migration-total equality (both use
     the additional per-cell/per-group bookkeeping the pure-Python paths implement).
     Everything in the current SIDRA population build hits this path."""
-    if problem.hard_anchor_mask is not None and any(problem.hard_anchor_mask):
+    if problem.hard_anchor_mask is not None and bool(np.asarray(problem.hard_anchor_mask).any()):
         return False
     if problem.migration_totals is not None:
         return False
@@ -173,7 +175,7 @@ def _np_project_population(problem: PopulationTensorProblem, values: np.ndarray)
     s_count, t_count, a_count, x_count, r_count = problem.shape
     group_size = a_count * x_count * r_count
     grouped = projected.reshape(s_count * t_count, group_size)
-    totals = np.array([t if t is not None else np.nan for t in problem.closure_totals], dtype=np.float64)
+    totals = np.asarray(problem.closure_totals, dtype=np.float64)
     mask = ~np.isnan(totals)
     if mask.any():
         grouped[mask] = _simplex_project_rows(grouped[mask], totals[mask])
@@ -201,7 +203,8 @@ def solve_projected_gradient_small(
 
     population = _initial_population(problem)
     bounds = _migration_bounds(problem)
-    migration = _project_migration(problem, list(problem.initial_migration or (0.0,) * problem.n_cells), bounds)
+    _init_mig = problem.initial_migration if problem.initial_migration is not None else np.zeros(problem.n_cells)
+    migration = _project_migration(problem, list(_init_mig), bounds)
     evaluation = evaluate_population_loss(problem, population, migration)
     initial_objective = evaluation.total
     previous_objective = initial_objective
@@ -291,10 +294,12 @@ def _solve_projected_gradient_vectorized(
     """
     n = problem.n_cells
     population = np.array(_initial_population(problem), dtype=np.float64)
-    bounds = np.array(_migration_bounds(problem), dtype=np.float64)
-    migration = _np_project_migration(
-        problem, np.array(problem.initial_migration or (0.0,) * n, dtype=np.float64), bounds,
+    bounds = np.asarray(_migration_bounds(problem), dtype=np.float64)
+    init_migration = (
+        np.asarray(problem.initial_migration, dtype=np.float64)
+        if problem.initial_migration is not None else np.zeros(n, dtype=np.float64)
     )
+    migration = _np_project_migration(problem, init_migration, bounds)
 
     evaluation = evaluate_population_loss(problem, population, migration)
     grad_p = np.array(evaluation.population_gradient, dtype=np.float64)

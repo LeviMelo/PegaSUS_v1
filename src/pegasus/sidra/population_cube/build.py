@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import polars as pl
 
 from pegasus.core.hashing import content_hash, sha256_file
@@ -1003,19 +1004,22 @@ def solve_population_tensor_from_sidra_strata(
         race=0.1 if race_composition_prior is not None else 0.0,
         age_smooth=0.05 if shape[2] >= 3 else 0.0,
     )
+    # Pass numpy arrays (not Python tuples): PopulationTensorProblem stores them as-is (§V.1),
+    # so the O(n_cells) inputs never materialize as ~32 B/element Python float tuples. hard_anchor_mask
+    # is left None (no hard anchors in the SIDRA build) rather than an all-False n_cells vector.
     problem = PopulationTensorProblem(
         shape=shape,
-        anchors=tuple(anchors),
-        hard_anchor_mask=(False,) * n_cells,
+        anchors=np.asarray(anchors, dtype=np.float64),
+        hard_anchor_mask=None,
         mode=mode,  # type: ignore[arg-type]
         births=births,
         death_rates=death_rates,
         sim_deaths=sim_deaths,
         race_composition_prior=race_composition_prior,
-        closure_totals=tuple(closure),
+        closure_totals=np.asarray(closure, dtype=np.float64),
         migration_locality_totals=migration_locality_totals,
-        migration_bounds=tuple(migration_bounds),
-        initial_population=tuple(prior_mean),
+        migration_bounds=np.asarray(migration_bounds, dtype=np.float64),
+        initial_population=np.asarray(prior_mean, dtype=np.float64),
         weights=weights,
     )
     solver = select_population_solver(mode=mode, solver_id=solver_id, n_cells=problem.n_cells)

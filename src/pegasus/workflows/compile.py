@@ -99,13 +99,22 @@ def _intent_municipality_filter_cod6(intent: UserIntent) -> str | None:
             raise ValueError("State compile requires exactly one UF in geography.uf.")
         return None
 
+    if intent.execution_scale == "national":
+        # National scope (SCALE-01): no single-municipality filter; validation accepts every
+        # real Brazilian UF via GeoScope.national. Requires a national source manifest (all UFs).
+        if intent.geography.codes:
+            raise ValueError("National compile expects geography.codes=[] (all municipalities, all UFs).")
+        return None
+
     raise ValueError(
-        "Compile currently supports execution_scale='smoke' or execution_scale='state'. "
+        "Compile supports execution_scale='smoke', 'state', or 'national'. "
         f"Received {intent.execution_scale!r}."
     )
 
 
 def _geo_scope_from_intent(intent: UserIntent, *, municipality_cod6: str | None) -> GeoScope:
+    if intent.execution_scale == "national":
+        return GeoScope.national(level=intent.geography.level)
     if intent.execution_scale == "state":
         if len(intent.geography.uf) != 1:
             raise ValueError("State compile requires exactly one UF in geography.uf.")

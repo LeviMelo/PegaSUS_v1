@@ -642,6 +642,83 @@ def _acquire_sidra_population_strata(
     )
 
 
+def _census_2000_strata_classifications() -> dict[str, list[str]]:
+    """Clean-partition classification selection for SIDRA 2093 (§II.4): the 5 canonical races and
+    2 sexes crossed with the 13 non-overlapping age brackets, urban/rural situation pinned to Total.
+    Roll-up brackets (0-14, 15-64, 65+, 70+, 15-19) are excluded so nothing is double-counted."""
+    from pegasus.sidra.population_cube.census_2000 import CLEAN_AGE_BRACKETS_2093
+
+    return {
+        SIDRA_CENSUS_2000_STRATA_RACE_CLSF: ["2776", "2777", "2778", "2779", "2780"],
+        SIDRA_CENSUS_2000_STRATA_SEX_CLSF: ["4", "5"],
+        SIDRA_CENSUS_2000_STRATA_AGE_GROUP_CLSF: list(CLEAN_AGE_BRACKETS_2093.keys()),
+        SIDRA_CENSUS_2000_STRATA_SITUATION_CLSF: ["0"],
+    }
+
+
+def _acquire_sidra_census_2000_strata(
+    *,
+    intent: UserIntent,
+    uf: str,
+    data_root: Path,
+    metadata_dir: Path,
+    client: SidraClient | None,
+) -> SourceArtifact | None:
+    """Acquire the 2000-census age-bracket × sex × race strata from SIDRA 2093 — the third census
+    anchor (FAL-POP / §II.4), on 2093's coarse-bracket age axis (disaggregated to single-year at
+    build time by ``population_cube.census_2000``). Gated on the population tensor being requested;
+    a 2093 outage yields ``None`` (the 2000 anchor is absent, not fatal — the build still has
+    2010/2022)."""
+    if not _population_tensor_requested(intent):
+        return None
+    metadata = _ensure_sidra_metadata_tables(
+        table_ids=[SIDRA_CENSUS_2000_STRATA_TABLE], metadata_dir=metadata_dir, data_root=data_root, client=client,
+    )
+    if SIDRA_CENSUS_2000_STRATA_TABLE not in metadata.tables:
+        return None
+    locality_level, localities = _sidra_population_localities(metadata, uf, table_id=SIDRA_CENSUS_2000_STRATA_TABLE)
+    periods = ["2000"]  # the 2000 census; 2093's 2010 is redundant with 9606's single-year 2010.
+    classifications = _census_2000_strata_classifications()
+    request = SIDRARequest(
+        table_id=SIDRA_CENSUS_2000_STRATA_TABLE,
+        variables=[SIDRA_CENSUS_2000_STRATA_VARIABLE],
+        periods=periods,
+        locality_level=locality_level,
+        localities=localities,
+        classifications=classifications,
+    )
+    table_metadata = metadata.tables[SIDRA_CENSUS_2000_STRATA_TABLE]
+    metadata_hash = content_hash({
+        **table_metadata.model_dump(mode="json"),
+        "census_2000_strata_basis": "clean_partition_age_brackets_race_sex_situation_total",
+        "census_2000_strata_periods": periods,
+    })
+    chunks = plan_sidra_chunks(request, metadata, max_cells_per_request=49_900)
+    work_dir = data_root / "sidra" / f"census_2000_strata_{uf}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    results = extract_chunk_plan(
+        chunks, client=client or SidraClient(), concurrency=4,
+        raw_dir=work_dir / "raw", facts_root=work_dir / "facts",
+        metadata_hash=metadata_hash, unit_by_variable=table_metadata.units_by_variable,
+    )
+    failures = [r for r in results if r.status != "success"]
+    if failures:
+        raise LivePipelineError(f"SIDRA 2093 (2000 census) extraction failed: {failures[0].status} ({len(failures)} chunk failures)")
+    facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
+    if not facts_paths:
+        return None
+    combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
+    combined_path = work_dir / "census_2000_strata_facts.parquet"
+    combined.write_parquet(combined_path, compression="zstd")
+    return inspect_source_artifact(
+        path=combined_path,
+        source_system="SIDRA",
+        artifact_role="census_2000_strata",
+        provenance_mode="materialized_external",
+        source_manifest_hash=metadata_hash,
+    )
+
+
 def _compendium_enabled(intent: UserIntent) -> bool:
     disabled = {"no_sidra_compendium", "disable_sidra_compendium"}
     if set(intent.context_policy) & disabled:

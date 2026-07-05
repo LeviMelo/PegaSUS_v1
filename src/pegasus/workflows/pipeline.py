@@ -98,12 +98,15 @@ SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE = "217"
 SIDRA_CIVIL_REGISTRY_DEATHS_TABLE = "2683"
 SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE = "343"
 
-# SIDRA throttles by cells-per-request, not connection count, so the population denominator chunk
-# fetch runs wide -- was concurrency=4, which left the pool idle for small UFs.
-_SIDRA_CHUNK_CONCURRENCY = 12
-# Fat chunks just under IBGE's ~100k-cell per-request ceiling (proven-safe production value): half
-# the HTTP round-trips of the old 49_900 cap. plan.py still enforces max_localities_per_request=200.
-_SIDRA_MAX_CELLS_PER_REQUEST = 95_000
+# SIDRA has NO request-rate limit -- only a per-request CELL cap -- so acquisition is aggressively
+# parallel: many concurrent chunk requests, each just under the cell cap. Wide concurrency (was 4,
+# which left the pool idle for small UFs).
+_SIDRA_CHUNK_CONCURRENCY = 16
+# EMPIRICALLY MEASURED cell cap: the IBGE /valores endpoint returns HTTP 500 at 50,000 cells and
+# succeeds at 48,000 (probed 2026-07 on table 9606). The true ceiling is <50k; 49_900 is the safe
+# margin. (An earlier "95k proven-safe" was fiction inferred from dead code -- 95k-cell chunks 500.)
+# plan.py additionally enforces max_localities_per_request=200.
+_SIDRA_MAX_CELLS_PER_REQUEST = 49_900
 
 
 def _population_tensor_requested(intent: UserIntent) -> bool:

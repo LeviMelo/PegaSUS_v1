@@ -13,7 +13,9 @@ compute:
       - "race_bridge_posterior"
       - "race_bridge_tensor_embedded"
       - "stdfm_solver"
-      - "population_tensor_kernels"
+      # population_tensor_kernels removed (MSD-III §V.1c): the denominator solve is CPU
+      # locality-blocked (POP-02 M3 — fast + O(block) memory, fits the envelope); no GPU kernel is
+      # wired, and an aspirational flag over orphaned code is prohibited. Re-add with a wired path.
     require_cuda_for_region_hsic: true
     dtype: "float32"
     max_vram_fraction: 0.80

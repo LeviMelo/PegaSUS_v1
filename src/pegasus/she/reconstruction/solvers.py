@@ -54,9 +54,10 @@ def dense_national_abort_check(*, localities: int, periods: int, strata: int = 1
     )
 
 
-# §V.1(b): target working-set per block. A block of this many cells keeps each sub-solve well
-# under the dense-solver ceiling (fast path) and its arrays to ~a few hundred MB.
-_BLOCK_TARGET_CELLS = 4_000_000
+# §V.1(b): target cells per block. The dense sub-solver holds ~15 float64 working arrays, so this
+# bounds a block's working set to ~250 MB — small enough to fit even a loaded box, and well under
+# the 10M-cell dense-solver ceiling so every block takes the fast dense path.
+_BLOCK_TARGET_CELLS = 2_000_000
 
 
 def _slice_localities(problem: PopulationTensorProblem, s0: int, s1: int) -> PopulationTensorProblem:

@@ -140,6 +140,60 @@ def load_combined_population_totals_frame(facts_path: str | Path) -> pl.DataFram
     return pl.concat([census, intercensal_only], how="vertical_relaxed").sort(["municipality_cod6", "year"])
 
 
+def geometric_interpolate_closure(
+    census_anchors: dict[int, float],
+    target_years: Any,
+) -> dict[int, float]:
+    """Single-vintage intercensal closure totals (§II.4 FAL-POP-SV, the anti-discontinuity contract).
+
+    Given a municipality's CENSUS-year population totals (2000 via SIDRA 2093, 2010/2022 via 9606
+    -- all one census vintage), return a total for every ``target_years`` entry by **geometric
+    (constant-rate) interpolation** between the bounding census anchors, and geometric extrapolation
+    beyond the anchor range using the nearest inter-census rate.
+
+    This replaces the SIDRA-6579 post-censal *projection* series as the intercensal closure. 6579
+    carries IBGE's pre-census projection vintage, which the 2022 census then revised down ~10M
+    nationally; anchoring 2021 to 6579 (213M) and 2022 to the census (203M) injects a spurious ~5%
+    denominator jump that reads as an epidemiological trend. Interpolating 2021 between the 2010 and
+    2022 census enumerations instead puts the whole series on one census-consistent vintage and
+    removes the jump. 6579/EstimaPOP is then a validation cross-check, not the anchor.
+
+    Geometric (rather than linear) interpolation is the standard intercensal method: it holds the
+    annual growth *rate* constant between enumerations, `P(t) = Pa * (Pb/Pa)^((t-ya)/(yb-ya))`,
+    matching how populations actually compound. Requires >= 2 census anchors to define a rate; with
+    fewer it returns only the census points it has (the caller keeps the prior closure for the rest,
+    since a single anchor cannot yield a defensible single-vintage series).
+
+    Years beyond the census range are extrapolated (the nearest inter-census rate carried forward /
+    backward) -- a minimal cohort-consistent projection; `FAL-POP-PROJ` supersedes it with the full
+    process-model projection and its anchor-distance uncertainty typing.
+    """
+    anchors = sorted((int(y), float(p)) for y, p in census_anchors.items())
+    if len(anchors) < 2:
+        return {y: p for y, p in anchors}
+    years = [y for y, _ in anchors]
+    known = dict(anchors)
+    out: dict[int, float] = {}
+    for raw in target_years:
+        t = int(raw)
+        if t in known:
+            out[t] = known[t]
+            continue
+        if t < years[0]:
+            (ya, pa), (yb, pb) = anchors[0], anchors[1]
+        elif t > years[-1]:
+            (ya, pa), (yb, pb) = anchors[-2], anchors[-1]
+        else:
+            hi = next(i for i, y in enumerate(years) if y > t)
+            (ya, pa), (yb, pb) = anchors[hi - 1], anchors[hi]
+        frac = (t - ya) / (yb - ya)
+        if pa <= 0.0 or pb <= 0.0:
+            out[t] = pa + (pb - pa) * frac  # ratio undefined through zero -> linear fallback
+        else:
+            out[t] = pa * (pb / pa) ** frac
+    return out
+
+
 def load_sidra_population_total_anchor(facts_path: str | Path) -> SidraPopulationAnchor:
     facts_path = Path(facts_path)
     df = pl.from_arrow(read_table(facts_path))

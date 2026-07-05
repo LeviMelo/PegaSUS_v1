@@ -30,7 +30,11 @@ from pegasus.she.reconstruction.schema import (
     PopulationTensorResult,
 )
 from pegasus.she.reconstruction.solvers import solve_population_tensor_blocked, solve_population_tensor_problem
-from pegasus.sidra.population_cube.anchor import load_combined_population_totals_frame, load_sidra_population_total_anchor
+from pegasus.sidra.population_cube.anchor import (
+    geometric_interpolate_closure,
+    load_combined_population_totals_frame,
+    load_sidra_population_total_anchor,
+)
 
 
 AXES = ("age_group", "sex", "race")
@@ -833,6 +837,54 @@ def _reconstruct_and_persist_migration_flows(
     return str(flows_path), str(affinity_path), tuple(rec.as_manifest() for rec in reconstructions)
 
 
+def _reanchor_closure_single_vintage(
+    *,
+    closure: list[float | None],
+    localities: tuple[str, ...],
+    periods: tuple[str, ...],
+    census_years: frozenset[str],
+    shape: tuple[int, ...],
+    period_index: dict[str, int],
+) -> dict[str, int]:
+    """Overwrite intercensal closure cells with census-anchored geometric interpolation, in place.
+
+    See the FAL-POP-SV block in :func:`solve_population_tensor_from_sidra_strata`. Returns telemetry:
+    how many municipalities were re-anchored vs kept on their prior (6579) closure for lack of >=2
+    census anchors, and the count of cells rewritten.
+    """
+    n_periods = shape[1]
+    census_period_list = sorted((p for p in periods if p in census_years), key=lambda p: int(p))
+    target_year_ints = [int(p) for p in periods]
+    reanchored = 0
+    kept_single_anchor = 0
+    cells_rewritten = 0
+    for s in range(len(localities)):
+        anchors: dict[int, float] = {}
+        for cp in census_period_list:
+            value = closure[s * n_periods + period_index[cp]]
+            if value is not None and value > 0.0:
+                anchors[int(cp)] = float(value)
+        if len(anchors) < 2:
+            kept_single_anchor += 1
+            continue
+        interpolated = geometric_interpolate_closure(anchors, target_year_ints)
+        for p in periods:
+            year = int(p)
+            if year in anchors:
+                continue  # census cell stays on its own vintage
+            new_value = interpolated.get(year)
+            if new_value is None:
+                continue
+            closure[s * n_periods + period_index[p]] = float(new_value)
+            cells_rewritten += 1
+        reanchored += 1
+    return {
+        "reanchored_municipalities": reanchored,
+        "kept_single_anchor_municipalities": kept_single_anchor,
+        "cells_rewritten": cells_rewritten,
+    }
+
+
 def solve_population_tensor_from_sidra_strata(
     *,
     population_strata_path: str | Path,
@@ -950,6 +1002,26 @@ def solve_population_tensor_from_sidra_strata(
             observed = [value for value in anchors[start:end] if value is not None]
             closure[idx] = float(sum(observed)) if observed else None
 
+    # FAL-POP-SV (§II.4 anti-discontinuity contract): re-anchor the intercensal closure to the
+    # CENSUS vintage. The panel above still carries SIDRA-6579 *projection*-vintage totals for
+    # intercensal years -- 6579's pre-census projection was revised down ~10M by the 2022 census,
+    # so anchoring 2021 to 6579 (~213M) and 2022 to the census (~203M) injects a spurious ~5%
+    # denominator jump that reads as a fake trend. Replace every non-census year with geometric
+    # interpolation between the bounding census enumerations (per municipality), putting the whole
+    # series on one vintage; 6579/EstimaPOP survives only as a validation cross-check (below), never
+    # the anchor. Census years (2000/2010/2022 -- the years the strata records cover) are untouched.
+    # Municipalities with <2 census anchors (created after 2000, boundary churn) keep their prior
+    # closure and are counted for the caller's telemetry.
+    census_years = frozenset(record["period"] for record in records)
+    single_vintage_stats = _reanchor_closure_single_vintage(
+        closure=closure,
+        localities=localities,
+        periods=periods,
+        census_years=census_years,
+        shape=shape,
+        period_index=period_index,
+    )
+
     sim_deaths, death_warnings = _sim_death_priors(
         sim_events_path=sim_events_path,
         locality_index=locality_index,
@@ -1020,6 +1092,14 @@ def solve_population_tensor_from_sidra_strata(
 
     death_rates: tuple[float | None, ...] | None = None
     warnings: list[str] = [*death_warnings, *birth_warnings, *migration_warnings]
+    # FAL-POP-SV telemetry: record that the intercensal closure is on the census (not 6579) vintage,
+    # and flag municipalities that could not be re-anchored (kept on their prior 6579 closure).
+    if single_vintage_stats["reanchored_municipalities"] > 0:
+        warnings.append(
+            "closure_single_vintage_census_anchored"
+            f"::reanchored={single_vintage_stats['reanchored_municipalities']}"
+            f"::single_anchor_kept={single_vintage_stats['kept_single_anchor_municipalities']}"
+        )
     feedback_warning = False
     reconstruction_uncertainty = 0.02
     # sim_informed REQUIRES a SIM death prior (lambda_D>0). When none is available

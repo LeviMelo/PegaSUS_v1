@@ -29,7 +29,7 @@ from pegasus.she.reconstruction.schema import (
     PopulationTensorRequest,
     PopulationTensorResult,
 )
-from pegasus.she.reconstruction.solvers import solve_population_tensor_problem
+from pegasus.she.reconstruction.solvers import solve_population_tensor_blocked, solve_population_tensor_problem
 from pegasus.sidra.population_cube.anchor import load_combined_population_totals_frame, load_sidra_population_total_anchor
 
 
@@ -1034,7 +1034,9 @@ def solve_population_tensor_from_sidra_strata(
         or weights.migration_total > 0.0
     )
     if informative:
-        optimized = solve_population_tensor_problem(
+        # §V.1(b): solve in locality-blocks so national peak memory is O(block), not O(national).
+        # Exact for the SIDRA denominator (locality-separable); each block takes the fast dense path.
+        optimized = solve_population_tensor_blocked(
             problem, solver_id=solver.solver_id, max_iterations=max_iterations, tolerance=tolerance,
         )
         if not optimized.telemetry.converged:

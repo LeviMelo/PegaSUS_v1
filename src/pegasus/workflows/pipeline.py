@@ -980,10 +980,10 @@ def _combine_national_artifacts(
         out = data_root / "normalized" / "national" / f"{system}__{role}.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         try:
-            pl.concat([pl.scan_parquet(p) for p in paths], how="diagonal_relaxed").sink_parquet(out)
+            pl.concat([pl.scan_parquet(p) for p in paths], how="diagonal_relaxed").sink_parquet(out, compression="zstd")
         except Exception:
             # sink not available for this frame shape → eager concat fallback
-            pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed").write_parquet(out)
+            pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed").write_parquet(out, compression="zstd")
         national.append(
             inspect_source_artifact(
                 path=out, source_system=system, artifact_role=role,

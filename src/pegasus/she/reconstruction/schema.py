@@ -221,6 +221,12 @@ class PopulationTensorResult:
             "warnings": list(self.warnings),
             "diagnostics": self.diagnostics.as_manifest(),
             "tensor_shape": list(self.tensor_shape),
-            "tensor_values": list(self.tensor_values),
-            "migration_values": list(self.migration_values),
+            # tensor_values and migration_values are O(muni x year x sex x race x age) arrays.
+            # They are persisted to the population-tensor parquet (sidra.population_cube.build) and
+            # are never read back from this manifest, so the manifest references them by length only
+            # rather than inlining. Inlining them produced a ~450MB ReproducibilityManifest at
+            # national scale (22M+ float literals) that dominated run memory and disk.
+            "tensor_values_count": len(self.tensor_values),
+            "migration_values_count": len(self.migration_values),
+            "large_arrays_persisted_to": "population_tensor parquet (values not inlined in manifest)",
         }

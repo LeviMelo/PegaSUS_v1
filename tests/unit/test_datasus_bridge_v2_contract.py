@@ -6,7 +6,7 @@ from pegasus.datasus.manifests import _request_identity
 from pegasus.datasus.subprocess import DatasusConfig
 
 MANIFEST_CONTRACT = "datasus_r_bridge_v2_raw_canonical_plus_microdatasus_sidecar"
-R_BRIDGE_CONTRACT = "datasus_r_bridge_v3_utf8_sanitized_raw_canonical_plus_microdatasus_sidecar"
+R_BRIDGE_CONTRACT = "datasus_r_bridge_v4_zstd_canonical_only"
 
 
 def test_datasus_config_from_mapping_preserves_local_r_library() -> None:

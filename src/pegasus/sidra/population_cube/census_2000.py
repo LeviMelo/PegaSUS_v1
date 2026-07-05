@@ -102,10 +102,44 @@ def disaggregate_2000_strata_to_single_year(
     return out
 
 
+def assemble_2000_single_year_records(
+    *,
+    bracket_profiles: dict[tuple[str, str, str], dict[str, float]],
+    reference_2010: dict[tuple[str, str, str], dict[str, float]],
+) -> list[dict]:
+    """Assemble 2000-census single-year age×sex×race records from parsed 2093 bracket profiles.
+
+    ``bracket_profiles[(locality, sex, race)] = {bracket_category_id: 2000_count}`` (clean partition).
+    ``reference_2010[(locality, sex, race)] = {single_year_label: 2010_count}`` supplies the shape.
+    Each (locality, sex, race) is disaggregated independently; the shape falls back — specific cell →
+    locality-marginal (summed over sex/race) → uniform — so a cell with no matching 2010 mass still
+    resolves. Returns records shaped exactly like the build's 9606 records (period ``"2000"``), so the
+    caller appends them to the census record set and the existing solver cohort-ages across 2000/2010/2022.
+    """
+    # locality-marginal 2010 shape (summed over sex/race) as the first fallback.
+    loc_marginal: dict[str, dict[str, float]] = {}
+    for (loc, _sex, _race), shape in reference_2010.items():
+        acc = loc_marginal.setdefault(loc, {})
+        for age_label, v in shape.items():
+            acc[age_label] = acc.get(age_label, 0.0) + float(v)
+
+    records: list[dict] = []
+    for (loc, sex, race), brackets in bracket_profiles.items():
+        shape = reference_2010.get((loc, sex, race)) or loc_marginal.get(loc, {})
+        single = disaggregate_2000_strata_to_single_year(bracket_counts=brackets, reference_single_year=shape)
+        for age_label, value in single.items():
+            records.append({
+                "municipality_cod6": loc, "period": "2000",
+                "age_group": age_label, "sex": sex, "race": race, "value": float(value),
+            })
+    return records
+
+
 __all__ = [
     "CLEAN_AGE_BRACKETS_2093",
     "BracketDisaggregation",
     "bracket_single_year_labels",
     "disaggregate_bracket",
     "disaggregate_2000_strata_to_single_year",
+    "assemble_2000_single_year_records",
 ]

@@ -11,6 +11,7 @@ import numpy as np
 
 from pegasus.sidra.population_cube.census_2000 import (
     CLEAN_AGE_BRACKETS_2093,
+    assemble_2000_single_year_records,
     bracket_single_year_labels,
     disaggregate_2000_strata_to_single_year,
     disaggregate_bracket,
@@ -70,3 +71,22 @@ def test_full_profile_disaggregation_ignores_rollups_and_preserves_total() -> No
     out = disaggregate_2000_strata_to_single_year(bracket_counts=bracket_counts, reference_single_year=ref)
     assert abs(sum(out.values()) - 900.0) < 1e-9  # only the two clean brackets, roll-up excluded
     assert set(out.keys()) == {f"age_{a}" for a in range(10)}  # 0-4 + 5-9
+
+
+def test_assemble_records_preserves_totals_and_uses_locality_fallback() -> None:
+    # muni "A", female/parda has a specific 2010 shape; female/branca has NO specific 2010 → falls
+    # back to A's locality-marginal 2010 shape (still resolves, closure preserved).
+    profiles = {
+        ("A", "female", "parda"): {"1140": 100.0},   # 0-4
+        ("A", "female", "branca"): {"1140": 50.0},
+    }
+    reference_2010 = {
+        ("A", "female", "parda"): {f"age_{a}": float(v) for a, v in zip(range(5), [5, 4, 3, 2, 1])},
+    }
+    recs = assemble_2000_single_year_records(bracket_profiles=profiles, reference_2010=reference_2010)
+    by_group: dict[tuple[str, str], float] = {}
+    for r in recs:
+        assert r["period"] == "2000" and r["age_group"].startswith("age_")
+        by_group[(r["sex"], r["race"])] = by_group.get((r["sex"], r["race"]), 0.0) + r["value"]
+    assert abs(by_group[("female", "parda")] - 100.0) < 1e-9   # closure per cell
+    assert abs(by_group[("female", "branca")] - 50.0) < 1e-9   # fallback shape still preserves total

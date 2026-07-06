@@ -15,7 +15,16 @@ Center of gravity is the LDO math core, not cleanup. Landed so far, each test-ga
 - ✅ **VAL-03 identifiability** (4cd7388): planted factor made identifiable (3-var); scorer no longer counts `latent_shared` as false-positive direct edges → perfect recovery.
 - ✅ **Chokepoints** (separate): SIDRA `facts_to_frame` schema crash (e8d13b3); SIM normalizer O(1) age-maps + lazy projection (e4550d8).
 
-**Not yet done (next, by leverage):** spatial GMRF whitening wire (HIGH — cheapest §V correctness win); causal LiNGAM wiring into investigate (HIGH); Kronecker separability (§V.2, XL) + randomized NLA (§V.3) — the deep scale adaptations; disease variable-grammar reconciliation; STORE-02 lazy views; dead-code de-engorgement (LOW).
+**Workstream B/C (compute + inert milestones) — landed:**
+- ✅ **HIGH — spatial GMRF whitening wired** (fit_lagged_links now whitens by Σ_space^{-1/2}=(κI+L_W)^{1/2}; κ/L_W no longer inert). Test: GMRF Moran's I → ~0; fit changes under whitening.
+- ✅ **HIGH — causal LiNGAM orientation wired** into run_ldo (CAUSAL-01 was built+tested but never called); orients contemporaneous edges on the RAW non-Gaussian values. Test: non-Gaussian A→B oriented source=A; Gaussian left undirected.
+- ✅ **MEDIUM — §V.3 randomized SVD** for the low-rank factors (auto at scale, exact certifies approximate) + a noise-floor readout threshold that also removed spurious latent_shared factor pairs.
+- ✅ **#2 Kronecker (§V.2) reframed**: the LDO forms only the bounded (p·(K+1))² variable precision from cell *samples* — it never builds the (p·S·T)² object §V.2 targets, so that "biggest lever" does not apply to the LDO's sample-based design (space→GMRF whitening, time→lags). The R-step logdet prox stays exact (full-spectrum).
+- ✅ **#11/#13 disease-axis truth gaps** reconciled (adaptive-ℓ1 scope stated precisely; DIS-04b Laplacian-quadratic scoped; §5.1 canonical path documented).
+
+**Workstream D (dead code) — CORRECTION: the audit's dead-code list was unreliable.** Verification before deletion found **3 of its "clean deletes" are governed PANEL-01 KEEPs** with explicit `# do not reap (§1c)` banners — `she/sih_costs.py`, `she/cnes_capacity.py`, `sources/sidra/projection.py` — and its importer detection **missed the `from pkg import module` form** (`output/maternal_child_compile_attach.py` has a live contract test). Only `dashboard/hsic_readonly.py` (zero importers, no banner) + the empty `src/pegasus/studies/` dir were safely removed. The remaining candidates (maternal-child cluster, `output/sidra_denominator_anchor`, `workflows/construct/build_efg`, `workflows/acquire/ingest_sidra` [claimed-live], `pegasus.pirs` [pins the core inference-baseline guardrail]) are **tested** and require per-module domain judgment — **not** autonomous bulk deletion. Deferred deliberately.
+
+**Genuinely remaining:** STORE-02 lazy `scan_parquet` views (a data-plane refactor, orthogonal to the LDO); the tested dead-code candidates above (need confirmation); DIS-04b Laplacian-quadratic disease prior (scoped enhancement).
 
 ## Reframe (what verification established)
 

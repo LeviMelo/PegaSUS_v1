@@ -240,6 +240,14 @@ Phases gate strictly (`N` requires `N−1` green). Near-term phases (0–4) are 
 *Goal: the unified registry, the SpatialWeightGraph, the CommonPanel with per-cell provenance, and the orthogonal DataScope × ExecutionStage. These are the substrate the data plane and engine sit on.*
 
 #### `REG-07` — Unified `kind`-tagged registry + validator
+
+> **CORRECTION (2026-07-06, source-verified — supersedes the section below where they conflict; see `DOCS.md` + `PEGASUS_REFACTOR_MASTER_PLAN.md` §2).** This section was written against a codebase that no longer exists and its framing is wrong in load-bearing ways:
+> - **Count:** `registries/` holds **21** files, not 30. The dead alias wrappers this section lists (`composite_decoders, models, output, residuals, hsic, nulls, sidra.py`, `race_axis`, `manifest`, `icd`) were already **deleted** (refactor Phase A); do not "migrate" them.
+> - **"DEL the 30 registries" is wrong.** Most are legitimate domain accessors that **MOVE**, not die. **`callables.py` MUST be preserved verbatim** — it is already the §II.1 single resolver this ticket also mandates (do NOT rewrite/replace it; the "`registry/callables.py`" pseudocode below would delete the one file REG-07 needs). `source_fields.py` is the bespoke decode-critical loader — preserve verbatim.
+> - **Not "mechanical translation."** The two per-file loader stacks (`generic` RegistryEntry-typed, `semantic` dict-typed) had a **divergent status-admission rule** — `generic` filtered strict `== "active"`, `semantic` the graded-active union — so a naive merge to the strict form silently drops `bridge_grammars`' `active_artifact_required`/`active_warning` EFG operators. **No test caught it.** REG-07 is a *decode-validated contract merge*, gated on byte-identity, not a one-source-at-a-time codemod.
+> - **DONE so far** (commit `5beee74`): unified `is_active` shared by both stacks (the bug fix) + `RegistryEntry.get` shim + retired the orphan `loader.load_registries`/`RegistryBundle` (0 consumers) + `tests/contract/test_reg07_status_admission.py` (the executable admission + decode-authority gate).
+> - **REMAINING** (mechanical, gate-protected): merge `semantic.py` into `generic` (flip its 4 consumers via the `.get` shim), delete `semantic.py`; the `registries/`→`registry/` package rename is **optional** (the config-dir `config/registries`→`config/registry` rename is NOT worth it — hardcoded default arg in 40+ signatures, pure churn); the `kind`/axis-tuple schema tagging (the pseudocode below) is a **separate** semantic data-modeling project, disjoint from the loader merge.
+
 - **MSD-III:** §II.1, I.4. **Files:** NEW `registry/{schema,callables,validator,loader}.py`; `/config/registry/` catalog (migrate existing YAML). DEL (after migration) the 30 `registries/*.py`.
 - **Red:** `tests/contract/test_registry.py`:
   ```python

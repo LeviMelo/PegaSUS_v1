@@ -4,6 +4,19 @@ Whole-codebase audit vs PEGASUS_MSD_III.md (esp. Part V) + the operational plan.
 
 **Findings:** 21 total, 20 survived verification, 1 refuted.
 
+## Remediation progress (Workstream A — LDO core math integrity)
+
+Center of gravity is the LDO math core, not cleanup. Landed so far, each test-gated (full suite 352 green):
+
+- ✅ **CRITICAL — CPW S/L collapse** (06acb2f): incoherence gate (a latent factor must span ≥3 variables, else it is a direct edge) + S/L mutual exclusion. Clean planted-recovery across seeds; acceptance test `test_ldo_sparse_lowrank_recovery.py`. Also retired the lag-0 double-emit.
+- ✅ **HIGH — residual-scan precision misalignment** (95cbfa4): `S[:p,:p]` raw slice → aligned `lag0_precision` built through the kept-feature map; no more misattribution / silent scan-disable when low-coverage vars drop.
+- ✅ **HIGH — anticonservative iid HSIC null** (1847294): within-UF restricted-permutation structured null + descriptive-only gate when <5 spatial blocks; test proves it suppresses a spatially-confounded edge the iid null flags.
+- ✅ **MEDIUM — unconverged ADMM certified edges** (0f0c324): §V.6 convergence gate downgrades to descriptive.
+- ✅ **VAL-03 identifiability** (4cd7388): planted factor made identifiable (3-var); scorer no longer counts `latent_shared` as false-positive direct edges → perfect recovery.
+- ✅ **Chokepoints** (separate): SIDRA `facts_to_frame` schema crash (e8d13b3); SIM normalizer O(1) age-maps + lazy projection (e4550d8).
+
+**Not yet done (next, by leverage):** spatial GMRF whitening wire (HIGH — cheapest §V correctness win); causal LiNGAM wiring into investigate (HIGH); Kronecker separability (§V.2, XL) + randomized NLA (§V.3) — the deep scale adaptations; disease variable-grammar reconciliation; STORE-02 lazy views; dead-code de-engorgement (LOW).
+
 ## Reframe (what verification established)
 
 - The annexed Pylance dump is **stale/noise**: `pirs/ldo`, `she/reconstruction`, `sidra/population_cube` "zombie trees" are already deleted; the B-section type/None items are annotation noise, not runtime defects; `ldo/precision.py:101` is correct.

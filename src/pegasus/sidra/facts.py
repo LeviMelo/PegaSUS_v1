@@ -103,6 +103,31 @@ def normalize_flat_records_to_facts(
     return facts
 
 
+# The SIDRA fact schema is fixed by the SIDRAFactRow contract; declaring it
+# explicitly (rather than letting polars infer from the first `infer_schema_length`
+# rows) is mandatory — value_numeric is float|None and value_raw/unit are str|None,
+# so a chunk whose first 100 rows are blank/header (value_numeric all null → inferred
+# Null/Int) then hits a real float later raised
+# "could not append value: 148.0 of type f64 to the builder". An explicit schema is
+# both robust and the single source of truth.
+FACTS_FRAME_SCHEMA: dict[str, pl.DataType] = {
+    "table_id": pl.Utf8,
+    "variable_id": pl.Utf8,
+    "period": pl.Utf8,
+    "locality_level": pl.Utf8,
+    "locality_id": pl.Utf8,
+    "classification_tuple": pl.Utf8,
+    "category_tuple": pl.Utf8,
+    "value_raw": pl.Utf8,
+    "value_numeric": pl.Float64,
+    "value_status": pl.Utf8,
+    "unit": pl.Utf8,
+    "request_hash": pl.Utf8,
+    "metadata_hash": pl.Utf8,
+    "fetched_at": pl.Utf8,
+}
+
+
 def facts_to_frame(facts: list[SIDRAFactRow]) -> pl.DataFrame:
     rows = []
     for fact in facts:
@@ -111,26 +136,7 @@ def facts_to_frame(facts: list[SIDRAFactRow]) -> pl.DataFrame:
         row["category_tuple"] = json.dumps(row["category_tuple"], ensure_ascii=False)
         rows.append(row)
 
-    if not rows:
-        return pl.DataFrame(
-            schema={
-                "table_id": pl.Utf8,
-                "variable_id": pl.Utf8,
-                "period": pl.Utf8,
-                "locality_level": pl.Utf8,
-                "locality_id": pl.Utf8,
-                "classification_tuple": pl.Utf8,
-                "category_tuple": pl.Utf8,
-                "value_raw": pl.Utf8,
-                "value_numeric": pl.Float64,
-                "value_status": pl.Utf8,
-                "unit": pl.Utf8,
-                "request_hash": pl.Utf8,
-                "metadata_hash": pl.Utf8,
-                "fetched_at": pl.Utf8,
-            }
-        )
-    return pl.DataFrame(rows)
+    return pl.DataFrame(rows, schema=FACTS_FRAME_SCHEMA)
 
 
 def write_facts_parquet(

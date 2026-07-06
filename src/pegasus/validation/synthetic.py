@@ -96,7 +96,10 @@ def recovery_score(
     flagged ``latent_shared``.
     """
     def _keep(r) -> bool:
-        if r.edge_type == "mechanical_overlap":
+        # A latent_shared record is a *confounding* claim, not a direct-edge claim — the
+        # engine correctly declaring E,F,G share a driver must not be scored as three
+        # false-positive direct edges. It is scored separately as factor_attribution below.
+        if r.edge_type in ("mechanical_overlap", "latent_shared"):
             return False
         if selected_only and r.certification_status != "selected":
             return False

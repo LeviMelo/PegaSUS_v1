@@ -1,7 +1,7 @@
 {
   "budget": "standard",
-  "context_policy": ["actual_source_state_panel"],
-  "exclude_systems": ["SINASC"],
+  "context_policy": ["actual_source_state_panel", "include_cnes_sih"],
+  "exclude_systems": [],
   "execution_scale": "national",
   "execution_stage": "investigate",
   "force_selectors": [],
@@ -11,8 +11,8 @@
   "health_seeds": ["all_cause_mortality", "icd_chapter", "icd_block", "curated_cause", "curated_cause_by_age", "curated_cause_by_sex", "curated_cause_by_race"],
   "mandatory_fields": ["SIMDeathsAll", "CuratedCauseMortality"],
   "population_mode": "sim_informed_population_tensor",
-  "race_tensor_mode": "bridged",
+  "race_tensor_mode": "decoupled",
   "run_profile": "contextual",
-  "system_weights": { "SIDRA": 1.0, "SIM-DO": 1.0 },
-  "time": { "start_year": 1996, "end_year": 2023, "start_month": null, "end_month": null }
+  "system_weights": { "SIDRA": 1.0, "SIM-DO": 1.0, "SIH-RD": 1.0, "CNES-ST": 1.0, "SINASC": 1.0 },
+  "time": { "start_year": 2000, "end_year": 2024, "start_month": null, "end_month": null }
 }

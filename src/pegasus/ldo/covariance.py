@@ -100,4 +100,115 @@ def pairwise_correlation(
     )
 
 
-__all__ = ["PairwiseCovariance", "pairwise_correlation"]
+def _sqrt_matvec(Q_sparse, v: np.ndarray, *, m: int = 40) -> np.ndarray:
+    """``Q^{1/2} @ v`` for sparse SPD ``Q``, matrix-free via Lanczos (§V.4).
+
+    Builds an ``m``-step Krylov basis with ``m`` sparse matvecs, then evaluates the
+    matrix square root on the small ``m×m`` tridiagonal — never factorizes or densifies
+    ``Q``. Used only to center the whitened features (needs one vector, ``1``)."""
+    from scipy.linalg import eigh_tridiagonal
+
+    n = v.shape[0]
+    beta0 = float(np.linalg.norm(v))
+    if beta0 == 0.0:
+        return v.copy()
+    m = min(m, n)
+    V = np.zeros((n, m), dtype=np.float64)
+    alphas: list[float] = []
+    betas: list[float] = []
+    V[:, 0] = v / beta0
+    w = Q_sparse @ V[:, 0]
+    a = float(V[:, 0] @ w)
+    alphas.append(a)
+    w = w - a * V[:, 0]
+    j = 1
+    while j < m:
+        b = float(np.linalg.norm(w))
+        if b < 1e-12:
+            break
+        betas.append(b)
+        V[:, j] = w / b
+        w = Q_sparse @ V[:, j]
+        a = float(V[:, j] @ w)
+        alphas.append(a)
+        w = w - a * V[:, j] - b * V[:, j - 1]
+        j += 1
+    k = len(alphas)
+    evals, evecs = eigh_tridiagonal(np.array(alphas), np.array(betas)) if k > 1 else (np.array(alphas), np.array([[1.0]]))
+    fT_e1 = evecs @ (np.sqrt(np.clip(evals, 0.0, None)) * evecs[0, :])
+    return beta0 * (V[:, :k] @ fT_e1)
+
+
+def whitened_lagged_correlation(
+    Z: np.ndarray,
+    Q_sparse,
+    K: int,
+    *,
+    min_coverage: int = 30,
+) -> PairwiseCovariance:
+    """Spatially-whitened variable×lag correlation via the sparse metric ``Q`` (§V.2/§V.4).
+
+    The GMRF-whitened cross-covariance of two lag features equals ``featᵢᵀ Q featⱼ``
+    (for any whitener ``W`` with ``Wᵀ W = Q``, the correlation depends only on ``Q``),
+    so it is computed **matrix-free** by sparse matvecs ``Q @ featₜ`` accumulated over
+    time slices — never forming a dense ``S×S`` whitener or its ``O(S³)`` square root.
+    Result is identical (to numerical precision) to whitening ``Z`` by
+    ``Σ_space^{-1/2}=(κI+L_W)^{1/2}`` and then correlating; peak memory is ``O(F·S)``,
+    not ``O(S²)``. Missing cells are imputed with the Gaussian margin mean (0) — a dense
+    spatial operator cannot honour per-cell missingness (§III.4 whitened estimator).
+
+    ``Z`` is ``(p, S, T)``; feature ``f = lag·p + var``; returns the same
+    :class:`PairwiseCovariance` contract as :func:`pairwise_correlation`.
+    """
+    p, S, T = Z.shape
+    T_eff = T - K
+    if T_eff <= 0:
+        raise ValueError(f"need T>{K} time points for lag order K={K}; got T={T}")
+    Zc = np.where(np.isfinite(Z), Z, 0.0)
+    finite = np.isfinite(Z)
+    F = p * (K + 1)
+
+    # observed-cell count per feature (from the true mask, before impute)
+    obs = np.empty(F, dtype=np.int64)
+    for lag in range(K + 1):
+        obs[lag * p:(lag + 1) * p] = finite[:, :, K - lag: T - lag].sum(axis=(1, 2))
+
+    # Gram matrix G[f,g] = sum_cells whitened(feat_f)·whitened(feat_g) = sum_t feat_tᵀ Q feat_t
+    # accumulated slice-by-slice so only an (F,S) block is held, never (F,T·S) or (S,S) dense.
+    # R accumulates each feature's spatial sum-over-time, for mean-centering below.
+    G = np.zeros((F, F), dtype=np.float64)
+    R = np.zeros((F, S), dtype=np.float64)
+    Ft = np.empty((F, S), dtype=np.float64)
+    for t in range(K, T):
+        for lag in range(K + 1):
+            Ft[lag * p:(lag + 1) * p] = Zc[:, :, t - lag]
+        G += Ft @ (Q_sparse @ Ft.T)  # Q@Ft.T is a sparse (S×S)·(S×F) matvec
+        R += Ft
+
+    # Mean-center in the WHITENED space so this equals the Pearson correlation of
+    # Σ_space^{-1/2}·Z (not the uncentered second moment). The whitened-feature mean is
+    # (1/n)·hᵀ·rowsum with h = Q^{1/2}·1 (Lanczos, matrix-free); G_centered = G − H Hᵀ/n.
+    n_cells = S * T_eff
+    h = _sqrt_matvec(Q_sparse, np.ones(S, dtype=np.float64))
+    H = R @ h
+    G = G - np.outer(H, H) / n_cells
+
+    diag = np.clip(np.diag(G), 0.0, None)
+    kept = [f for f in range(F) if obs[f] >= min_coverage and diag[f] > 1e-9]
+    q = len(kept)
+    if q == 0:
+        return PairwiseCovariance(correlation=np.zeros((0, 0)), kept=(), min_overlap=0, coverage=np.zeros(0))
+    Gk = G[np.ix_(kept, kept)]
+    d = np.sqrt(np.clip(np.diag(Gk), 1e-12, None))
+    corr = Gk / np.outer(d, d)
+    np.fill_diagonal(corr, 1.0)
+    corr = 0.5 * (corr + corr.T)
+    return PairwiseCovariance(
+        correlation=_nearest_correlation(corr),
+        kept=tuple(kept),
+        min_overlap=0,
+        coverage=np.array([obs[f] for f in kept], dtype=np.int64),
+    )
+
+
+__all__ = ["PairwiseCovariance", "pairwise_correlation", "whitened_lagged_correlation"]

@@ -85,3 +85,37 @@ def test_spatial_whiten_is_wired_into_fit_lagged_links():
     raw_ab = abs(dict(((a, b), v) for a, b, v in fit_raw.contemporaneous).get(("A", "B"), 0.0))
     white_ab = abs(dict(((a, b), v) for a, b, v in fit_white.contemporaneous).get(("A", "B"), 0.0))
     assert white_ab <= raw_ab + 1e-9, f"whitening should not amplify the spatial-confounded edge (raw={raw_ab:.3f}, white={white_ab:.3f})"
+
+
+def test_sparse_metric_whitening_equals_dense_and_scales():
+    """The matrix-free sparse-metric whitened correlation (§V.2/§V.4) must equal the
+    dense Σ_space^{-1/2}-whitening to machine precision, and must NOT densify S×S — so
+    it scales to national S≈5570 where the dense O(S³) eigh is infeasible."""
+    import time
+    import numpy as np
+    import scipy.sparse as sp
+    from pegasus.ldo.covariance import pairwise_correlation, whitened_lagged_correlation
+    from pegasus.ldo.lags import _build_lagged_feature_matrix
+    from pegasus.ldo.precision import (
+        build_spatial_precision, build_spatial_precision_sparse, _matrix_sqrt_psd, _whiten_spatial,
+    )
+    sids = _REAL_CODES[:15]
+    S = len(sids)
+    for seed in range(3):
+        rng = np.random.default_rng(seed)
+        Z = rng.standard_normal((5, S, 30))
+        dense = pairwise_correlation(
+            _build_lagged_feature_matrix(_whiten_spatial(Z, _matrix_sqrt_psd(build_spatial_precision(sids, kappa=0.5))), 1),
+            min_coverage=5, min_overlap=5,
+        )
+        metric = whitened_lagged_correlation(Z, build_spatial_precision_sparse(sids, kappa=0.5), 1, min_coverage=5)
+        assert dense.kept == metric.kept
+        assert np.allclose(dense.correlation, metric.correlation, atol=1e-9), \
+            f"seed {seed}: metric whitening differs from dense by {np.abs(dense.correlation - metric.correlation).max():.2e}"
+    # national scale: 5570 munis must finish quickly and never form a dense S×S matrix
+    Qbig = sp.eye(5570, format="csr") * 0.5 + sp.random(5570, 5570, density=6 / 5570, format="csr", random_state=0)
+    Zbig = np.random.default_rng(0).standard_normal((6, 5570, 25))
+    t = time.time()
+    out = whitened_lagged_correlation(Zbig, Qbig, 1, min_coverage=5)
+    assert time.time() - t < 10.0, "national-scale metric whitening must be fast (matrix-free)"
+    assert out.correlation.shape[0] <= 12

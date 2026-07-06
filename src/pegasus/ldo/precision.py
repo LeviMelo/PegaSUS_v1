@@ -42,18 +42,40 @@ class PrecisionFit:
 
 
 def build_spatial_precision(space_ids: tuple[str, ...], *, kappa: float = 1.0) -> np.ndarray:
-    """GMRF spatial precision ``κ I + L_W`` (cod6) over the field's municipalities."""
+    """GMRF spatial precision ``κ I + L_W`` (cod6) over the field's municipalities (dense).
+
+    Reference/small-S form; prefer :func:`build_spatial_precision_sparse` at scale — a
+    dense ``S×S`` object is ``O(S²)`` memory and any factorization ``O(S³)`` (§V.1/§V.2:
+    the spatial GMRF is ~6 neighbours/row and MUST be stored sparse, never densified).
+    """
+    return build_spatial_precision_sparse(space_ids, kappa=kappa).toarray()
+
+
+def build_spatial_precision_sparse(space_ids: tuple[str, ...], *, kappa: float = 1.0):
+    """GMRF spatial precision ``κ I + L_W`` as ``scipy.sparse`` CSR (§V.2 sparsity).
+
+    ``L_W = D − A`` from the municipality structural adjacency (~6 nnz/row); ``0.3 MB``
+    sparse at national ``S≈5570`` vs ``0.2 GB`` dense. Never densified.
+    """
+    import scipy.sparse as sp
+
     adjacency = structural_cod6_adjacency()
     S = len(space_ids)
     idx = {s: i for i, s in enumerate(space_ids)}
-    L = np.zeros((S, S), dtype=np.float64)
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
     for s in space_ids:
         i = idx[s]
-        neighbours = [nb for nb in adjacency.get(s, ()) if nb in idx]
-        L[i, i] = float(len(neighbours))
-        for nb in neighbours:
-            L[i, idx[nb]] -= 1.0
-    return kappa * np.eye(S) + L
+        neighbours = [idx[nb] for nb in adjacency.get(s, ()) if nb in idx]
+        rows.append(i)
+        cols.append(i)
+        data.append(kappa + float(len(neighbours)))  # (κ + degree) diagonal
+        for j in neighbours:
+            rows.append(i)
+            cols.append(j)
+            data.append(-1.0)
+    return sp.csr_matrix((data, (rows, cols)), shape=(S, S), dtype=np.float64)
 
 
 def _matrix_sqrt_psd(A: np.ndarray) -> np.ndarray:

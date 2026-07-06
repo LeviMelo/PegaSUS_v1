@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from pegasus.ldo.covariance import pairwise_correlation
+from pegasus.ldo.covariance import pairwise_correlation, whitened_lagged_correlation
 from pegasus.ldo.disease_prior import tile_penalty_across_lags
 from pegasus.ldo.margins import GaussianField
 from pegasus.ldo.lowrank import SparseLowRankFit, fit_sparse_plus_lowrank
@@ -91,17 +91,15 @@ def fit_lagged_links(
     Laplacian term is empty and whitening reduces to a κ-scaling (a no-op at κ=1).
     """
     p = len(field.variables)
-    Z = field.Z
     if spatial_whiten and field.Z.shape[1] > 1:
-        from pegasus.ldo.precision import (
-            _matrix_sqrt_psd,
-            _whiten_spatial,
-            build_spatial_precision,
-        )
-        Q_space = build_spatial_precision(field.space_ids, kappa=kappa)
-        Z = _whiten_spatial(Z, _matrix_sqrt_psd(Q_space))
-    feat = _build_lagged_feature_matrix(Z, K)  # (p*(K+1), n)
-    pw = pairwise_correlation(feat, min_coverage=min_coverage, min_overlap=min_overlap)
+        # Spatial GMRF whitening via the sparse metric (§V.2/§V.4): matrix-free, O(F·S)
+        # memory, no dense S×S whitener or O(S³) sqrt — so it scales to national S≈5570.
+        from pegasus.ldo.precision import build_spatial_precision_sparse
+        Q_space = build_spatial_precision_sparse(field.space_ids, kappa=kappa)
+        pw = whitened_lagged_correlation(field.Z, Q_space, K, min_coverage=min_coverage)
+    else:
+        feat = _build_lagged_feature_matrix(field.Z, K)  # (p*(K+1), n)
+        pw = pairwise_correlation(feat, min_coverage=min_coverage, min_overlap=min_overlap)
     kept = pw.kept
     pos = {f: a for a, f in enumerate(kept)}  # feature index → matrix position
     penalty_matrix = None

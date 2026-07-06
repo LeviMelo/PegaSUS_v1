@@ -254,8 +254,10 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str, row_o
     )
 
     cap_val = {col: cx.nonneg_int(col) for col in capacity_cols}
-    fac_cnpj, fac_cnpj_state = cx.cnpj("CPF_CNPJ", "facility_cnpj")
-    man_cnpj, man_cnpj_state = cx.cnpj("CNPJ_MAN", "maintainer_cnpj")
+    # CNPJ digit strings materialized in the pre-pass below (not recomputed 30× inside the
+    # mod-11 check — polars CSE misses them across the per-digit slices).
+    fac_cnpj_digits = cx.cnpj_digits("CPF_CNPJ", "facility_cnpj")
+    man_cnpj_digits = cx.cnpj_digits("CNPJ_MAN", "maintainer_cnpj")
     clin_v, clin_s = cx.nonneg_int("QTLEITP1")
     surg_v, surg_s = cx.nonneg_int("QTLEITP2")
     obst_v, obst_s = cx.nonneg_int("QTLEITP3")
@@ -269,7 +271,15 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str, row_o
     facility = cx.clean("CNES", "facility_id")
     mun = cx.municipality("mun_facility", "CODUFMUN", "CODMUN", "MUNIC_RES", "facility_municipality", crosswalk=load_municipality_crosswalk())
 
-    out = lf.with_row_index("_i", offset=row_offset).with_columns(
+    # Pre-pass: row index + materialize CNPJ digit strings once (cheap mod-11 check below).
+    base = lf.with_row_index("_i", offset=row_offset).with_columns(
+        fac_cnpj_digits.alias("_fac_cnpj_digits"),
+        man_cnpj_digits.alias("_man_cnpj_digits"),
+    )
+    fac_cnpj, fac_cnpj_state = cx.cnpj_from_digits(pl.col("_fac_cnpj_digits"), "CPF_CNPJ", "facility_cnpj")
+    man_cnpj, man_cnpj_state = cx.cnpj_from_digits(pl.col("_man_cnpj_digits"), "CNPJ_MAN", "maintainer_cnpj")
+
+    out = base.with_columns(
         facility.alias("facility_id"),
         pl.lit("CNES-ST").alias("source_system"),
         year.alias("year"),

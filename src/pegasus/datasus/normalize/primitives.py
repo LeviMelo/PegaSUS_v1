@@ -375,21 +375,29 @@ class Cols:
         return value, state
 
     # -- CNPJ (the §2.4.0.5 linkage gate) ---------------------------------
-    def cnpj(self, *names: str) -> tuple[pl.Expr, pl.Expr]:
-        """Validate a 14-digit CNPJ *including mod-11 check digits* (matches
-        ``filter_cnpj``). Returns ``(value, state)`` with the full state vocabulary
-        {MissingCNPJ, UnparseableCNPJ, NullifiedZeroCNPJ, InvalidCNPJLength,
-        InvalidCNPJDigits, ValidCNPJ}."""
-        clean = self.clean(*names)
-        d = clean.str.replace_all(r"\D", "")
-        d = pl.when(d == "").then(None).otherwise(d)
+    def cnpj_digits(self, *names: str) -> pl.Expr:
+        """The cleaned all-digit CNPJ string (or null when blank/no-digits).
+
+        Materialize this ONCE as a column before :meth:`cnpj_from_digits` on large
+        panels: the mod-11 check references the digit string ~30× (14 per-digit slices
+        + the uniform guard + length), and polars CSE does not dedupe it across that
+        tree, so an inline digit sub-expression re-runs the ``clean`` + ``\\D`` regex
+        ~30× per CNPJ (measured 19.7 s → 1.2 s on a 300k SIH panel once materialized)."""
+        d = self.clean(*names).str.replace_all(r"\D", "")
+        return pl.when(d == "").then(None).otherwise(d)
+
+    def cnpj_from_digits(self, d: pl.Expr, *names: str) -> tuple[pl.Expr, pl.Expr]:
+        """``(value, state)`` from an already-cleaned CNPJ digit column ``d`` (see
+        :meth:`cnpj_digits`). ``names`` are the raw source columns, referenced once to
+        split ``MissingCNPJ`` (raw blank) from ``UnparseableCNPJ`` (raw present, no digits)."""
+        clean_null = self.clean(*names).is_null()
         is_zero = d.str.replace_all("0", "") == ""
         len14 = d.str.len_chars() == 14
         check_ok = _cnpj_check_ok(d)
         valid = len14 & check_ok
         value = pl.when(valid).then(d).otherwise(None)
         state = (
-            pl.when(clean.is_null()).then(pl.lit("MissingCNPJ"))
+            pl.when(clean_null).then(pl.lit("MissingCNPJ"))
             .when(d.is_null()).then(pl.lit("UnparseableCNPJ"))
             .when(is_zero).then(pl.lit("NullifiedZeroCNPJ"))
             .when(~len14).then(pl.lit("InvalidCNPJLength"))
@@ -397,6 +405,14 @@ class Cols:
             .otherwise(pl.lit("ValidCNPJ"))
         )
         return value, state
+
+    def cnpj(self, *names: str) -> tuple[pl.Expr, pl.Expr]:
+        """Validate a 14-digit CNPJ *including mod-11 check digits* (matches
+        ``filter_cnpj``). Returns ``(value, state)`` with the full state vocabulary
+        {MissingCNPJ, UnparseableCNPJ, NullifiedZeroCNPJ, InvalidCNPJLength,
+        InvalidCNPJDigits, ValidCNPJ}. Single-call form (record oracle / small inputs);
+        large-panel decoders materialize :meth:`cnpj_digits` then :meth:`cnpj_from_digits`."""
+        return self.cnpj_from_digits(self.cnpj_digits(*names), *names)
 
     # -- ICD --------------------------------------------------------------
     def icd_norm(self, *names: str) -> pl.Expr:

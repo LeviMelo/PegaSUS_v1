@@ -317,8 +317,10 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str, row_of
     type_cols = [c for c in SECONDARY_TYPE_COLUMNS if c in _names]
     death = clean("MORTE", "OBITO").str.to_lowercase()
 
-    hosp_cnpj, hosp_cnpj_state = cnpj("CGC_HOSP", "hospital_cnpj")
-    maint_cnpj, maint_cnpj_state = cnpj("CNPJ_MANT", "GESTOR_CPF", "maintainer_cnpj")
+    # CNPJ digit strings are materialized in the pre-pass below (not recomputed 30× inside
+    # the mod-11 check — polars CSE misses them; 19.7s→1.2s on a 300k panel).
+    hosp_cnpj_digits = cx.cnpj_digits("CGC_HOSP", "hospital_cnpj")
+    maint_cnpj_digits = cx.cnpj_digits("CNPJ_MANT", "GESTOR_CPF", "maintainer_cnpj")
     stay_v, stay_s = nonneg_int("DIAS_PERM", "QT_DIARIAS", "stay_length_days")
     icu_m_v, icu_m_s = nonneg_int("UTI_MES_TO")
     icu_h_v, icu_h_s = nonneg_int("UTI_INT_TO")
@@ -327,7 +329,16 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str, row_of
     principal_norm = icd_norm("DIAG_PRINC", "principal_icd")
     principal_state = icd_state("DIAG_PRINC", "principal_icd")
 
-    out = lf.with_row_index("_i", offset=row_offset).with_columns(
+    # Pre-pass: add the row index and materialize the CNPJ digit strings ONCE so the
+    # mod-11 check reads a column (cheap) instead of re-running clean+regex ~30× per CNPJ.
+    base = lf.with_row_index("_i", offset=row_offset).with_columns(
+        hosp_cnpj_digits.alias("_hosp_cnpj_digits"),
+        maint_cnpj_digits.alias("_maint_cnpj_digits"),
+    )
+    hosp_cnpj, hosp_cnpj_state = cx.cnpj_from_digits(pl.col("_hosp_cnpj_digits"), "CGC_HOSP", "hospital_cnpj")
+    maint_cnpj, maint_cnpj_state = cx.cnpj_from_digits(pl.col("_maint_cnpj_digits"), "CNPJ_MANT", "GESTOR_CPF", "maintainer_cnpj")
+
+    out = base.with_columns(
         pl.concat_str([pl.lit("SIH-"), pl.coalesce([clean("AIH", "N_AIH", "admission_id"),
                        pl.col("_i").cast(pl.Utf8) + pl.lit("_" + source_manifest_hash[:8])])]).alias("admission_id"),
         pl.lit("SIH-RD").alias("source_system"),

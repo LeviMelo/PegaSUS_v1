@@ -46,18 +46,16 @@ def variable_affinity(variables: tuple[str, ...], graph: "DiseaseGraph") -> np.n
         graph.as_prior()  # raises DiseaseGraphCircularityError
     code_pos = {c: i for i, c in enumerate(graph.codes)}
     dense = graph.adjacency().toarray()
-    node_of = {v: code_pos[v] for v in variables if v in code_pos}
-    for a in range(p):
-        na = node_of.get(variables[a])
-        if na is None:
-            continue
-        for b in range(a + 1, p):
-            nb = node_of.get(variables[b])
-            if nb is None:
-                continue
-            w = float(dense[na, nb])
-            if w > 0.0:
-                affinity[a, b] = affinity[b, a] = min(1.0, w)
+    # Gather the variables that map to a graph node; pull their pairwise affinity block
+    # in one ``np.ix_`` slice instead of an O(p²) Python double-loop over variable pairs.
+    mapped = [(a, code_pos[variables[a]]) for a in range(p) if variables[a] in code_pos]
+    if not mapped:
+        return affinity
+    var_idx = np.fromiter((a for a, _ in mapped), dtype=np.int64, count=len(mapped))
+    node_idx = np.fromiter((n for _, n in mapped), dtype=np.int64, count=len(mapped))
+    block = np.minimum(dense[np.ix_(node_idx, node_idx)], 1.0)  # affinity capped at 1
+    np.fill_diagonal(block, 0.0)                                 # no self-affinity (a<b only before)
+    affinity[np.ix_(var_idx, var_idx)] = block
     return affinity
 
 

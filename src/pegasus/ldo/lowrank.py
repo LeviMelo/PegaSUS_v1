@@ -49,10 +49,16 @@ def _prox_neg_logdet(M: np.ndarray, rho: float) -> np.ndarray:
 
 
 def _psd_project_shifted(M: np.ndarray, shift: float) -> np.ndarray:
-    """PSD projection of (M - shift*I): eigen-clip at 0."""
+    """PSD projection of (M - shift*I): eigen-clip at 0.
+
+    ``M - shift·I`` shares its eigenvectors with ``M`` and only shifts the eigenvalues
+    by ``-shift``, so the shift is applied to the eigenvalues after a single ``eigh(M)``
+    — identical result, without allocating/subtracting a ``shift·I`` matrix every ADMM
+    iteration (this runs twice per iteration for up to ``max_iter`` iterations).
+    """
     M = 0.5 * (M + M.T)
-    vals, vecs = np.linalg.eigh(M - shift * np.eye(M.shape[0]))
-    vals = np.clip(vals, 0.0, None)
+    vals, vecs = np.linalg.eigh(M)
+    vals = np.clip(vals - shift, 0.0, None)
     return (vecs * vals) @ vecs.T
 
 
@@ -124,6 +130,8 @@ def fit_sparse_plus_lowrank(
             raise ValueError(f"penalty_matrix must be {(p, p)}, got {penalty_matrix.shape}")
         penalty_matrix = np.clip(0.5 * (penalty_matrix + penalty_matrix.T), 0.0, None)
     tau1 = (penalty_matrix if penalty_matrix is not None else lambda1) / rho
+    C_over_rho = C / rho            # loop-invariant; was recomputed every ADMM iteration
+    l2_over_rho = lambda2 / rho     # loop-invariant shift for the L-step PSD projection
     S = np.eye(p)
     L = np.zeros((p, p))
     U = np.zeros((p, p))
@@ -132,11 +140,11 @@ def fit_sparse_plus_lowrank(
     it = 0
     for it in range(1, max_iter + 1):
         # R-step: prox of -logdet + linear term.
-        R = _prox_neg_logdet(S - L - U - C / rho, rho)
+        R = _prox_neg_logdet(S - L - U - C_over_rho, rho)
         # S-step: soft-threshold off-diagonal (scalar or disease-informed per-pair penalty).
         S = _soft_threshold_offdiag(R + L + U, tau1)
         # L-step: PSD projection with trace shrink.
-        L = _psd_project_shifted(S - R - U, lambda2 / rho)
+        L = _psd_project_shifted(S - R - U, l2_over_rho)
         # Dual update.
         primal = R - (S - L)
         U = U + primal

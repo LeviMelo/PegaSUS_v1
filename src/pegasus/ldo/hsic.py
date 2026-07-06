@@ -123,8 +123,17 @@ def _bandwidth(values: list[float], *, seed: int) -> float:
     pairs: list[float] = []
     maximum = min(2048, n * (n - 1) // 2)
     if maximum == n * (n - 1) // 2:
-        pairs = [abs(values[i] - values[j]) for i in range(n) for j in range(i + 1, n)]
+        # Full pairwise enumeration (order-independent median): vectorize the O(n^2)
+        # upper-triangle abs-differences in numpy instead of a Python double comprehension.
+        import numpy as _np
+
+        arr = _np.asarray(values, dtype=_np.float64)
+        diff = _np.abs(arr[:, None] - arr[None, :])
+        iu = _np.triu_indices(n, k=1)
+        pairs = diff[iu].tolist()
     else:
+        # Sampled branch: the median depends on the exact rng.sample sequence (reproducibility
+        # of HSIC statistics), so the draw order is preserved verbatim.
         for _ in range(maximum):
             i, j = rng.sample(range(n), 2)
             pairs.append(abs(values[i] - values[j]))
@@ -485,8 +494,13 @@ def run_hsic_scan(
             cuda_available_override=cuda_available,
         )
         torch, device, dtype = torch_runtime(plan)
-        x = torch.tensor(x_values, dtype=dtype, device=device)
-        y = torch.tensor(y_values, dtype=dtype, device=device)
+        import numpy as _np
+
+        # Build the value tensors through a single numpy buffer rather than element-wise
+        # from a Python list: for national n this avoids O(n) Python float boxing on each
+        # of the two host->device copies.
+        x = torch.as_tensor(_np.asarray(x_values, dtype=_np.float64), dtype=dtype, device=device)
+        y = torch.as_tensor(_np.asarray(y_values, dtype=_np.float64), dtype=dtype, device=device)
         bandwidth_x = _bandwidth(x_values, seed=seed)
         bandwidth_y = _bandwidth(y_values, seed=seed + 1)
         if mode == "exact":
@@ -516,7 +530,9 @@ def run_hsic_scan(
         null_statistics = []
         for _ in range(max(int(permutations), 1)):
             indices = generate_null_indices(strategy=null_strategy, n=n_eff, support=support_intersection, rng=rng)
-            tensor_indices = torch.tensor(indices, dtype=torch.long, device=device)
+            # Marshal the CPU-generated permutation through a numpy int64 buffer (one contiguous
+            # H2D copy) instead of a Python list (element-wise boxing) per permutation.
+            tensor_indices = torch.as_tensor(_np.asarray(indices, dtype=_np.int64), device=device)
             if representation_kind == "kernel":
                 null_statistics.append(_kernel_hsic(x_repr, y_repr[tensor_indices][:, tensor_indices]))
             else:

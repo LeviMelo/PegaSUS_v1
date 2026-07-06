@@ -104,18 +104,27 @@ def assemble_ldo_tensor(
     var_index = {v: i for i, v in enumerate(variables)}
     manifest = panel.manifest
     if manifest.height:
-        for row in manifest.select(["field_id", "municipality_cod6", time_col, "state"]).to_dicts():
-            fid = row["field_id"]
-            vi = var_index.get(fid)
-            s = row.get("municipality_cod6")
-            t = row.get(time_col)
-            if vi is None or s is None or t is None:
-                continue
-            si = s_index.get(str(s))
-            ti = t_index.get(int(t))
-            if si is None or ti is None:
-                continue
-            W[vi, si, ti] = _STATE_WEIGHT.get(str(row["state"]), 0.0)
+        # Vectorized scatter: map field/space/time/state to indices+weights in one polars
+        # pass, then a single numpy fancy-index assignment. The old row-by-row
+        # ``.to_dicts()`` loop was O(fields×cells) Python dict builds + per-row dict
+        # lookups — at national scale the manifest is p·S·T ≈ tens of millions of rows.
+        # ``default=-1``/``fill_null(-1)`` route missing field/space/time (and raw nulls,
+        # which map outside the index) to -1 so ``ok`` drops them — mirroring the old
+        # loop's ``is None``/``.get() is None`` skips. Null ``state`` → weight 0.0 (as
+        # ``str(None)`` missed the dict before).
+        m = manifest.select(["field_id", "municipality_cod6", time_col, "state"]).with_columns(
+            pl.col("field_id").replace_strict(var_index, default=-1).fill_null(-1).alias("_vi"),
+            pl.col("municipality_cod6").cast(pl.Utf8).replace_strict(s_index, default=-1).fill_null(-1).alias("_si"),
+            pl.col(time_col).cast(pl.Int64).replace_strict(t_index, default=-1).fill_null(-1).alias("_ti"),
+            pl.col("state").cast(pl.Utf8).replace_strict(_STATE_WEIGHT, default=0.0).fill_null(0.0).alias("_w"),
+        )
+        vi_arr = m["_vi"].to_numpy()
+        si_arr = m["_si"].to_numpy()
+        ti_arr = m["_ti"].to_numpy()
+        w_arr = m["_w"].to_numpy()
+        ok = (vi_arr >= 0) & (si_arr >= 0) & (ti_arr >= 0)
+        # Last-write-wins on any duplicate (field,cell) rows, matching the old loop.
+        W[vi_arr[ok], si_arr[ok], ti_arr[ok]] = w_arr[ok]
     else:
         W[~np.isnan(X)] = 1.0
 

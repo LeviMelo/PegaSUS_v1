@@ -46,15 +46,25 @@ class LaggedFit:
 
 
 def _build_lagged_feature_matrix(Z: np.ndarray, K: int) -> np.ndarray:
-    """(p,S,T) → (p*(K+1), n_samples) preserving NaN; feature f=lag*p+var."""
+    """(p,S,T) → (p*(K+1), n_samples) preserving NaN; feature f=lag*p+var.
+
+    Fully vectorized via strided slicing: sample column ``c = (t-K)*S + s`` holds
+    ``[Z(s,t), Z(s,t-1), …, Z(s,t-K)]`` (block ``lag`` is variables at ``t-lag``).
+    The old Python double-loop over ``(t, s)`` did ``S·(T-K)`` ``np.concatenate``
+    calls (~140K at national S≈5570, T=25); this builds each lag block as one
+    contiguous slice ``Z[:, :, K-lag : T-lag]`` reshaped to ``(p, n)`` — identical
+    layout, no per-cell Python.
+    """
     p, S, T = Z.shape
     if T <= K:
         raise ValueError(f"need T>{K} time points for lag order K={K}; got T={T}")
-    cols: list[np.ndarray] = []
-    for t in range(K, T):
-        for s in range(S):
-            cols.append(np.concatenate([Z[:, s, t - lag] for lag in range(K + 1)]))
-    return np.asarray(cols, dtype=np.float64).T  # (features, samples)
+    T_eff = T - K
+    out = np.empty((p * (K + 1), T_eff * S), dtype=np.float64)
+    for lag in range(K + 1):
+        # slice t in [K, T) → source t-lag in [K-lag, T-lag); axes (p, T_eff, S) → (p, n)
+        block = Z[:, :, K - lag: T - lag]                 # (p, S, T_eff)
+        out[lag * p:(lag + 1) * p] = np.swapaxes(block, 1, 2).reshape(p, T_eff * S)
+    return out
 
 
 def fit_lagged_links(
@@ -115,40 +125,53 @@ def fit_lagged_links(
     d = np.sqrt(np.clip(np.diag(S), 1e-12, None))
     partial = -S / np.outer(d, d)
 
-    def entry(feat_a: int, feat_b: int) -> float:
-        a, b = pos.get(feat_a), pos.get(feat_b)
-        return float(partial[a, b]) if a is not None and b is not None else 0.0
+    # Scatter the kept-feature partial correlations into the full F×F feature grid (0 for
+    # dropped features, exactly what the old ``entry()`` dict-lookup returned). Every
+    # readout below is then dense numpy slicing over this grid instead of an O(p²·K)
+    # Python loop of dict.get()+float() calls (the readout dominated the per-fit cost at
+    # context scale where p is large). ``F = p·(K+1)``.
+    F = p * (K + 1)
+    partial_full = np.zeros((F, F), dtype=np.float64)
+    kept_arr = np.asarray(kept, dtype=np.int64)
+    if kept_arr.size:
+        partial_full[np.ix_(kept_arr, kept_arr)] = partial
 
     # Directed lagged links: source i at lag k (>0) → target j at lag 0.
+    # curve[j, lag, i] = partial_full[feat(0,j)=j, feat(lag,i)=lag*p+i].
+    curve_tensor = partial_full[:p, :].reshape(p, K + 1, p)   # [j, lag, i]
+    curve_ji = np.transpose(curve_tensor, (0, 2, 1))          # [j, i, lag]
+    mags = np.abs(curve_ji)
+    # peak over lags 1..K (lag 0 excluded from the directed peak, as before)
+    off = np.eye(p, dtype=bool)                               # i==j mask
     lagged_links: list[LaggedLink] = []
-    for i in range(p):
-        for j in range(p):
-            if i == j:
-                continue
-            curve = [entry(j, lag * p + i) for lag in range(K + 1)]  # feat(0,j) vs feat(k,i)
-            lag_mags = [(k, abs(curve[k])) for k in range(1, K + 1)]
-            if not lag_mags:
-                continue
-            peak_lag, peak_mag = max(lag_mags, key=lambda kv: kv[1])
-            if peak_mag >= edge_threshold:
-                lagged_links.append(
-                    LaggedLink(
-                        source=field.variables[i],
-                        target=field.variables[j],
-                        peak_lag=peak_lag,
-                        peak_partial_correlation=curve[peak_lag],
-                        response_curve=curve,
-                    )
+    if K >= 1:
+        peak_lag_arr = 1 + np.argmax(mags[:, :, 1:], axis=2)  # [j, i] in 1..K
+        peak_mag_arr = np.take_along_axis(mags, peak_lag_arr[:, :, None], axis=2)[:, :, 0]
+        peak_mag_arr[off] = 0.0                               # skip i==j (never a self-link)
+        for j, i in zip(*np.where(peak_mag_arr >= edge_threshold)):
+            j = int(j); i = int(i)
+            peak_lag = int(peak_lag_arr[j, i])
+            curve = [float(v) for v in curve_ji[j, i]]
+            lagged_links.append(
+                LaggedLink(
+                    source=field.variables[i],
+                    target=field.variables[j],
+                    peak_lag=peak_lag,
+                    peak_partial_correlation=curve[peak_lag],
+                    response_curve=curve,
                 )
+            )
     lagged_links.sort(key=lambda e: abs(e.peak_partial_correlation), reverse=True)
 
-    # Contemporaneous (undirected) edges from the lag-0 × lag-0 block of S.
-    contemporaneous: list[tuple[str, str, float]] = []
-    for i in range(p):
-        for j in range(i + 1, p):
-            r = entry(i, j)  # feat(0,i) vs feat(0,j)
-            if abs(r) >= edge_threshold:
-                contemporaneous.append((field.variables[i], field.variables[j], r))
+    # Contemporaneous (undirected) edges from the lag-0 × lag-0 block.
+    lag0_block = partial_full[:p, :p]
+    iu, ju = np.triu_indices(p, k=1)
+    r_vals = lag0_block[iu, ju]
+    sel = np.abs(r_vals) >= edge_threshold
+    contemporaneous: list[tuple[str, str, float]] = [
+        (field.variables[int(a)], field.variables[int(b)], float(r))
+        for a, b, r in zip(iu[sel], ju[sel], r_vals[sel])
+    ]
     contemporaneous.sort(key=lambda e: abs(e[2]), reverse=True)
 
     # latent_shared over the lag-0 block: kept features that are lag-0 variables.
@@ -165,15 +188,14 @@ def fit_lagged_links(
     # residual scan requires a p×p block aligned to `variables`; slicing S[:p,:p] by raw
     # position misattributes edges when any lag-0 var is dropped and is undersized (q<p)
     # when many are, silently disabling the scan.
+    # Scatter S over the kept lag-0 base variables; dropped vars keep the identity row/col
+    # (diag 1, off-diag 0) so a dropped variable contributes no edge — same as the old
+    # per-cell loop, but as two array ops instead of a p² Python double-loop.
     lag0_precision = np.eye(p)
-    for i in range(p):
-        ai = pos.get(i)
-        if ai is None:
-            continue
-        for j in range(p):
-            aj = pos.get(j)
-            if aj is not None:
-                lag0_precision[i, j] = S[ai, aj]
+    base_kept = kept_arr[kept_arr < p] if kept_arr.size else np.empty(0, dtype=np.int64)
+    if base_kept.size:
+        base_pos = np.array([pos[int(f)] for f in base_kept], dtype=np.int64)
+        lag0_precision[np.ix_(base_kept, base_kept)] = S[np.ix_(base_pos, base_pos)]
 
     return LaggedFit(
         variables=field.variables, K=K, fit=fit,

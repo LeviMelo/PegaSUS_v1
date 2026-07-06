@@ -20,4 +20,16 @@ datasus:
     SIH-RD: "uf_year_or_month_by_size"
     CNES-ST: "uf_month_or_year_by_source"
 
+  # Earliest period each system exists in DATASUS. The planner does NOT emit chunk
+  # requests before this floor: no file is published there, so a fetch would only spin
+  # up a doomed R subprocess to 404. Floors are conservative (at/below the true first
+  # availability) so real data is never excluded. CNES establishment (ST) files begin
+  # 2005-08; SIM-DO CID-10 from 1996; SINASC nationally from 1994; SIH-RD (reduced AIH)
+  # from 1992. Only CNES-ST's floor bites any 2000+ study; the rest predate all requests.
+  availability:
+    SIM-DO:  {first_year: 1996}
+    SINASC:  {first_year: 1994}
+    SIH-RD:  {first_year: 1992}
+    CNES-ST: {first_year: 2005, first_month: 8}
+
   optional_ftp_discovery: false

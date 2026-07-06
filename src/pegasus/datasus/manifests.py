@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,50 @@ def period_label(
 def load_datasus_config(path: str | Path = "config/datasus.yaml") -> dict[str, Any]:
     data = load_yaml(path)
     return data.get("datasus", data)
+
+
+@lru_cache(maxsize=4)
+def _availability_windows(path: str = "config/datasus.yaml") -> dict[str, tuple[int, int]]:
+    """Per-system earliest ``(first_year, first_month)`` a system exists in DATASUS.
+
+    Read from ``config/datasus.yaml`` ``availability`` (see that file). Missing/malformed
+    entries yield no floor for that system (fetch everything requested). Cached because the
+    planner asks per (system, uf) across a whole national run.
+    """
+    try:
+        cfg = load_datasus_config(path)
+    except (OSError, ValueError, TypeError):
+        return {}
+    out: dict[str, tuple[int, int]] = {}
+    for system, window in (cfg.get("availability") or {}).items():
+        try:
+            key = normalize_system(system)
+        except ValueError:
+            continue
+        if isinstance(window, dict):
+            first_year = int(window.get("first_year", 0))
+            first_month = int(window.get("first_month", 1))
+        else:
+            first_year, first_month = int(window), 1
+        out[key] = (first_year, min(12, max(1, first_month)))
+    return out
+
+
+def _is_available(system: str, year: int, month: int | None) -> bool:
+    """True if DATASUS publishes ``system`` at ``(year, month)`` per the availability floor.
+
+    A chunk below the floor is not emitted — DATASUS has no file there, so fetching it only
+    spins up a doomed R subprocess. For annual systems (``month is None``) only the year floor
+    applies. Systems without a configured floor are always available (no filtering)."""
+    floor = _availability_windows().get(normalize_system(system))
+    if floor is None:
+        return True
+    first_year, first_month = floor
+    if year < first_year:
+        return False
+    if year == first_year and month is not None and month < first_month:
+        return False
+    return True
 
 
 def _request_identity(
@@ -222,6 +267,9 @@ def build_datasus_manifests(
                     month_start=1, month_end=12, config=config, data_root=data_root,
                 )
                 for year in parsed_years
+                # Keep any year that has ≥1 available month (partial availability years
+                # still fetch the whole year; microdatasus returns what exists).
+                if _is_available(system, year, 12)
             ]
         return [
             build_datasus_request_manifest(
@@ -230,6 +278,7 @@ def build_datasus_manifests(
             )
             for year in parsed_years
             for month in range(1, 13)
+            if _is_available(system, year, month)
         ]
 
     return [
@@ -244,6 +293,7 @@ def build_datasus_manifests(
             data_root=data_root,
         )
         for year in parsed_years
+        if _is_available(system, year, None)
     ]
 
 

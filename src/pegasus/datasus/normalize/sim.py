@@ -250,7 +250,6 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
 
     cx = Cols(df)
     crosswalk = _load_sim_crosswalk()
-    raw_cols = [c for c in df.columns]
 
     def preserve(col: str) -> pl.Expr:
         return cx.clean(col)
@@ -280,13 +279,16 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     code = pl.when(raw_age.str.contains(r"^\d+$")).then(raw_age.str.zfill(3).cast(pl.Int64, strict=False)).otherwise(None)
     unit = code // 100
     mag = code % 100
-    idade_years = pl.lit(None, dtype=pl.Float64)
-    idade_days = pl.lit(None, dtype=pl.Float64)
-    age_unit = pl.lit(None, dtype=pl.Utf8)
-    for u, (yf, dfac, yoff, label) in _SIM_AGE_UNITS.items():
-        idade_years = pl.when(unit == u).then(yoff + mag * yf).otherwise(idade_years)
-        idade_days = pl.when(unit == u).then(365.25 * yoff + mag * dfac).otherwise(idade_days)
-        age_unit = pl.when(unit == u).then(pl.lit(label)).otherwise(age_unit)
+    # Age unit → coefficients as O(1) maps (unit has ≤6 distinct values); replaces a
+    # per-unit when/then chain (9 units × 3 outputs = 27 nested branches) that
+    # dominated the decode at national scale. Unmapped/null unit → null coefficients
+    # → null age, identical to the chain's initial-None fall-through.
+    yf_c = unit.replace_strict({u: v[0] for u, v in _SIM_AGE_UNITS.items()}, default=None, return_dtype=pl.Float64)
+    dfac_c = unit.replace_strict({u: v[1] for u, v in _SIM_AGE_UNITS.items()}, default=None, return_dtype=pl.Float64)
+    yoff_c = unit.replace_strict({u: v[2] for u, v in _SIM_AGE_UNITS.items()}, default=None, return_dtype=pl.Float64)
+    idade_years = yoff_c + mag * yf_c
+    idade_days = 365.25 * yoff_c + mag * dfac_c
+    age_unit = unit.replace_strict({u: v[3] for u, v in _SIM_AGE_UNITS.items()}, default=None, return_dtype=pl.Utf8)
 
     diff_days = (death_dt - birth_dt).dt.total_days()
     has_diff = death_dt.is_not_null() & birth_dt.is_not_null() & (diff_days >= 0)
@@ -349,7 +351,12 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     # -- derived: year, reporting delay, content hashes -------------------
     year = death_iso.str.slice(0, 4).cast(pl.Int64, strict=False)
     reporting_delay = (cert_dt - death_dt).dt.total_days()
-    content = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("") for c in raw_cols], separator="").hash().cast(pl.Utf8)
+    # Deterministic per-record provenance surrogate (manifest + row index), matching
+    # the shared row_hash primitive and the SINASC normalizer. raw/processed_record_hash
+    # are opaque identifiers (zero_variance treats them as such); the record oracle sha256
+    # was never reproduced here, so materializing a 100+-column string per row to feed
+    # .hash() was pure waste (~1.8s/1M rows).
+    content = row_hash(source_manifest_hash, "_i")
 
     out = df.with_row_index("_i").with_columns(
         pl.concat_str([pl.lit("sim_"), pl.col("_i").cast(pl.Utf8), pl.lit("_" + source_manifest_hash[:8])]).alias("event_id"),

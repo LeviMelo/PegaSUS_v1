@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pegasus.registries.generic import is_active
 from pegasus.registries.loader import load_registry_file
 
 
@@ -17,13 +18,10 @@ def registry_entries(name: str, *, registry_root: str | Path = "config/registrie
 
 
 def active_entries(name: str, *, registry_root: str | Path = "config/registries") -> list[dict[str, Any]]:
+    # Uses the single §II.1 admission rule shared with registries.generic.is_active — do NOT
+    # re-inline a status test here (that divergence was the latent REG-07 gun).
     entries = registry_entries(name, registry_root=registry_root)
-    return [
-        entry
-        for entry in entries
-        if str(entry.get("status", "")).startswith("active")
-        or str(entry.get("status", "")) in {"stable", "planned_contract", "experimental"}
-    ]
+    return [entry for entry in entries if is_active(entry.get("status", ""))]
 
 
 def field_text(field: Any) -> str:

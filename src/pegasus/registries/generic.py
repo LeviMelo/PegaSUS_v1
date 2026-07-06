@@ -12,6 +12,24 @@ from pegasus.core.exceptions import RegistryValidationError
 from pegasus.core.hashing import sha256_file
 
 
+# The single §II.1 registry admission rule, shared by EVERY accessor stack. Previously
+# generic.active_entries used a strict ``status == "active"`` test while semantic.active_entries
+# used this graded-active union, so a naive loader unification to the strict form would silently
+# drop graded-active entries — e.g. bridge_grammars' ``active_artifact_required`` / ``active_warning``
+# EFG bridge-grammar operators. The two filters happen to agree on today's generic-fed data (all
+# bare "active"), so no test caught the divergence: a latent gun. ``active*`` covers the graded
+# variants (active_warning/active_reduced/active_observer/active_artifact_required/
+# active_approximation/active_sparse/active_small_scale/active_gpu/...); stable/planned_contract/
+# experimental are non-graded actives; deferred/legacy_identity/baseline/deprecated are NOT active.
+_ACTIVE_NON_PREFIX_STATUSES: frozenset[str] = frozenset({"stable", "planned_contract", "experimental"})
+
+
+def is_active(status: object) -> bool:
+    """Whether a registry-entry status counts as active for admission (the single §II.1 rule)."""
+    text = str(status or "")
+    return text.startswith("active") or text in _ACTIVE_NON_PREFIX_STATUSES
+
+
 @dataclass(frozen=True)
 class RegistryEntry:
     id: str
@@ -19,6 +37,11 @@ class RegistryEntry:
     description: str
     warnings: tuple[str, ...]
     payload: Mapping[str, Any]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """dict-compatible read over the entry payload — lets consumers that were written against
+        the semantic (``list[dict]``) contract treat a ``RegistryEntry`` uniformly (REG-07)."""
+        return self.payload.get(key, default)
 
     def as_manifest(self) -> dict[str, Any]:
         return {
@@ -102,7 +125,7 @@ def active_entries(
     root: str | Path = "config/registries",
     required: bool = True,
 ) -> tuple[RegistryEntry, ...]:
-    return tuple(entry for entry in load_entries(registry_file, root=root, required=required) if entry.status == "active")
+    return tuple(entry for entry in load_entries(registry_file, root=root, required=required) if is_active(entry.status))
 
 
 def get_entry(
@@ -137,6 +160,7 @@ def registry_manifest(
 
 __all__ = [
     "RegistryEntry",
+    "is_active",
     "active_entries",
     "get_entry",
     "load_entries",

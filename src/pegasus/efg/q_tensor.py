@@ -4,6 +4,8 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
+import numpy as np
+
 from pegasus.core.enums import FieldState
 from pegasus.core.schemas import FieldNode, QState, WarningRecord
 
@@ -78,31 +80,36 @@ def _numeric_values(tensor: Any) -> list[float]:
 def _cv(values: list[float]) -> float | None:
     if len(values) < 2:
         return None
-    mean = sum(values) / len(values)
+    arr = np.asarray(values, dtype=np.float64)
+    mean = float(arr.mean())
     if mean == 0:
         return None
-    var = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+    # Sample variance (ddof=1), matching the original Σ(x-x̄)²/(n-1).
+    var = float(arr.var(ddof=1))
     return float(math.sqrt(var) / abs(mean))
 
 
 def _temporal_roughness(values: list[float]) -> float | None:
     if len(values) < 2:
         return None
-    diffs = [values[i] - values[i - 1] for i in range(1, len(values))]
-    denom = abs(sum(values) / len(values)) or 1.0
-    return float(math.sqrt(sum(diff * diff for diff in diffs) / len(diffs)) / denom)
+    arr = np.asarray(values, dtype=np.float64)
+    diffs = np.diff(arr)
+    denom = abs(float(arr.mean())) or 1.0
+    return float(math.sqrt(float(np.mean(diffs * diffs))) / denom)
 
 
 def _spatial_entropy(values: list[float]) -> float | None:
     if not values:
         return None
-    nonnegative = [max(value, 0.0) for value in values]
-    total = sum(nonnegative)
+    nonnegative = np.maximum(np.asarray(values, dtype=np.float64), 0.0)
+    total = float(nonnegative.sum())
     if total <= 0:
         return 0.0
-    probs = [value / total for value in nonnegative if value > 0]
-    entropy = -sum(prob * math.log(prob) for prob in probs)
-    max_entropy = math.log(len(nonnegative)) if len(nonnegative) > 1 else 1.0
+    positive = nonnegative[nonnegative > 0]
+    probs = positive / total
+    entropy = float(-np.sum(probs * np.log(probs)))
+    n = nonnegative.shape[0]
+    max_entropy = math.log(n) if n > 1 else 1.0
     return float(entropy / max_entropy) if max_entropy > 0 else 0.0
 
 
@@ -123,17 +130,15 @@ def _moran_contiguity(values: list[float]) -> float | None:
     n = len(values)
     if n < 3:
         return None
-    mean = sum(values) / n
-    deviations = [v - mean for v in values]
-    denom = sum(d * d for d in deviations)
+    arr = np.asarray(values, dtype=np.float64)
+    deviations = arr - float(arr.mean())
+    denom = float(deviations @ deviations)
     if denom <= 0:
         return None
-    cross = 0.0
-    weight_total = 0.0
-    for i in range(n - 1):
-        # Symmetric chain contiguity contributes both (i, i+1) and (i+1, i).
-        cross += 2.0 * deviations[i] * deviations[i + 1]
-        weight_total += 2.0
+    # Symmetric chain contiguity: each adjacent pair (i,i+1) contributes twice
+    # (both (i,i+1) and (i+1,i)); W = 2*(n-1).
+    cross = 2.0 * float(deviations[:-1] @ deviations[1:])
+    weight_total = 2.0 * (n - 1)
     if weight_total <= 0:
         return None
     return float((n / weight_total) * (cross / denom))
@@ -147,12 +152,11 @@ def _kish_effective_n(weights: list[float]) -> float | None:
     numerator count for count variables and the denominator for rate/proportion
     variables (§3.12.3). Returns ``None`` when no positive weight exists.
     """
-    s1 = 0.0
-    s2 = 0.0
-    for weight in weights:
-        weight = abs(float(weight))
-        s1 += weight
-        s2 += weight * weight
+    if not weights:
+        return None
+    abs_w = np.abs(np.asarray(weights, dtype=np.float64))
+    s1 = float(abs_w.sum())
+    s2 = float(abs_w @ abs_w)
     if s2 <= 0:
         return None
     return (s1 * s1) / s2

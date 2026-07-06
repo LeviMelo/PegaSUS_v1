@@ -68,12 +68,34 @@ class CommonPanel:
         }
 
 
-def _load_field_tensor(row: dict[str, Any]) -> pl.DataFrame | None:
+def _tensor_path(row: dict[str, Any]) -> str | None:
     path = row.get("path")
     if not path or not os.path.exists(str(path)):
         return None
+    return str(path)
+
+
+def _tensor_columns(path: str) -> tuple[str, ...]:
+    """The parquet's column names, read from schema only (no data materialized)."""
     try:
-        return pl.read_parquet(str(path))
+        return tuple(pl.scan_parquet(path).collect_schema().names())
+    except Exception:
+        return ()
+
+
+def _load_field_tensor(row: dict[str, Any], columns: list[str] | None = None) -> pl.DataFrame | None:
+    """Read a field tensor, selecting only ``columns`` when given.
+
+    At national scale a tensor is muni×year×strata; reading only the cell keys + the value column
+    (the sole columns the panel consumes) avoids pulling every source column into RAM, and lets each
+    tensor be dropped between fields instead of the whole catalog being held at once (Finding 6)."""
+    path = _tensor_path(row)
+    if path is None:
+        return None
+    try:
+        if columns:
+            return pl.read_parquet(path, columns=columns)
+        return pl.read_parquet(path)
     except Exception:
         return None
 
@@ -82,23 +104,43 @@ def _support_keys(tensor: pl.DataFrame) -> tuple[str, ...]:
     return tuple(k for k in _CELL_KEYS if k in tensor.columns)
 
 
-def _build_index(tensors: dict[str, pl.DataFrame], resolution: Resolution, cell_keys: tuple[str, ...]) -> pl.DataFrame:
-    """Shared cell index = union of geo×time cells across the materialized fields."""
-    frames: list[pl.DataFrame] = []
-    for tensor in tensors.values():
-        keys = [k for k in cell_keys if k in tensor.columns]
-        if "municipality_cod6" in keys and "year" in keys:
-            frames.append(tensor.select(keys).unique())
+def _support_keys_from_columns(columns: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(k for k in _CELL_KEYS if k in columns)
+
+
+def _build_index_streaming(
+    paths_and_keys: list[tuple[str, tuple[str, ...]]],
+    resolution: Resolution,
+    cell_keys: tuple[str, ...],
+) -> pl.DataFrame:
+    """Shared cell index = union of geo×time cells across the materialized fields.
+
+    Streams the key columns per parquet (``scan_parquet`` → select keys → unique) rather than
+    holding every full field tensor in RAM: only the distinct (muni, year[, month]) tuples of each
+    field are materialized, so peak memory here is O(unique cells), not O(sum of tensor sizes)."""
+
+    def _scan_keys(want_full_geo_time: bool) -> list[pl.DataFrame]:
+        frames: list[pl.DataFrame] = []
+        for path, present_keys in paths_and_keys:
+            keys = [k for k in cell_keys if k in present_keys]
+            if want_full_geo_time and not ("municipality_cod6" in keys and "year" in keys):
+                continue
+            if not keys:
+                continue
+            try:
+                frames.append(pl.scan_parquet(path).select(keys).unique().collect())
+            except Exception:
+                continue
+        return frames
+
+    frames = _scan_keys(want_full_geo_time=True)
     if not frames:
         # No muni×year field — fall back to whatever geo/time cells exist.
-        for tensor in tensors.values():
-            present = [k for k in cell_keys if k in tensor.columns]
-            if present:
-                frames.append(tensor.select(present).unique())
+        frames = _scan_keys(want_full_geo_time=False)
     if not frames:
         return pl.DataFrame({k: [] for k in cell_keys})
     # Align to a common key set (fill missing keys as null so concat works).
-    index = pl.concat([f for f in frames], how="diagonal_relaxed").unique()
+    index = pl.concat(frames, how="diagonal_relaxed").unique()
     for k in cell_keys:
         if k not in index.columns:
             index = index.with_columns(pl.lit(None).alias(k))
@@ -167,18 +209,19 @@ def compile_common_panel(
 
     cell_keys: tuple[str, ...] = ("municipality_cod6", "year") if resolution == "year" else ("municipality_cod6", "year", "month")
 
-    tensors: dict[str, pl.DataFrame] = {}
-    meta: dict[str, dict[str, Any]] = {}
+    # Catalog metadata only — no tensors held. Each field's parquet columns are read from the
+    # schema (cheap), so the panel never holds all field tensors in RAM at once (Finding 6): each
+    # tensor is loaded, aligned, and dropped inside the per-field loop below.
+    catalog_rows: list[dict[str, Any]] = []
+    paths_and_keys: list[tuple[str, tuple[str, ...]]] = []
     for row in catalog.iter_rows(named=True):
-        fid = str(row["field_id"])
-        tensor = _load_field_tensor(row)
-        if tensor is None:
-            meta[fid] = {**row, "_tensor": None}
-            continue
-        tensors[fid] = tensor
-        meta[fid] = {**row, "_tensor": tensor}
+        path = _tensor_path(row)
+        columns = _tensor_columns(path) if path is not None else ()
+        catalog_rows.append({**row, "_path": path, "_columns": columns})
+        if path is not None and columns:
+            paths_and_keys.append((path, columns))
 
-    index = _build_index(tensors, resolution, cell_keys)
+    index = _build_index_streaming(paths_and_keys, resolution, cell_keys)
     if prefixes is not None and index.height:
         index = index.filter(
             pl.col("municipality_cod6").cast(pl.Utf8).str.slice(0, 2).is_in(list(prefixes))
@@ -195,11 +238,31 @@ def compile_common_panel(
     manifest_frames: list[pl.DataFrame] = []
     panel_fields: list[PanelField] = []
 
-    for fid, row in meta.items():
-        tensor = row["_tensor"]
+    for row in catalog_rows:
+        fid = str(row["field_id"])
         name = str(row.get("name") or fid)
         provenance = str(row.get("provenance") or "")
         state = str(row.get("state") or "")
+        columns: tuple[str, ...] = row["_columns"]
+        if row["_path"] is None or not columns:
+            panel_fields.append(PanelField(fid, name, provenance, state, ()))
+            value_frame = value_frame.with_columns(pl.lit(None).alias(fid))
+            manifest_frames.append(
+                index.select(
+                    *_key_cols,
+                    pl.lit(fid).alias("field_id"),
+                    pl.lit("unavailable_on_panel").alias("state"),
+                    pl.lit("field_not_materialized", dtype=pl.Utf8).alias("reason"),
+                )
+            )
+            continue
+
+        # Read only the cell keys + the value column this field contributes to the panel; the
+        # tensor is bound to a local and dropped at loop end so peak RAM is index + one tensor +
+        # the (growing) value_frame, not the whole materialized catalog (Finding 6).
+        support = _support_keys_from_columns(columns)
+        wanted = [*support, "value"] if "value" in columns else list(support)
+        tensor = _load_field_tensor(row, columns=wanted or None)
         if tensor is None:
             panel_fields.append(PanelField(fid, name, provenance, state, ()))
             value_frame = value_frame.with_columns(pl.lit(None).alias(fid))
@@ -213,9 +276,9 @@ def compile_common_panel(
             )
             continue
 
-        support = _support_keys(tensor)
         panel_fields.append(PanelField(fid, name, provenance, state, support))
         aligned, broadcast_state = _align_field(fid, tensor, index, cell_keys)
+        del tensor  # drop the field tensor before the next field is loaded
         value_frame = value_frame.join(aligned, on=_key_cols, how="left")
 
         # Per-cell provenance (vectorized): observed/broadcast where a value landed, else

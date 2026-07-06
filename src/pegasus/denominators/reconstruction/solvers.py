@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 
 from pegasus.registries.population import (
@@ -112,10 +115,18 @@ def solve_population_tensor_blocked(
     max_iterations: int = 5_000,
     tolerance: float = 1e-5,
     block_target_cells: int = _BLOCK_TARGET_CELLS,
+    max_workers: int | None = None,
 ) -> PopulationOptimizationResult:
     """Solve the population tensor in locality-blocks so peak memory is O(block), not O(national)
     (§V.1(b)). Exact when the problem is locality-separable; otherwise solves whole. Each block
-    re-selects its solver by its own (small) cell count, so blocks take the fast dense path."""
+    re-selects its solver by its own (small) cell count, so blocks take the fast dense path.
+
+    The blocks are provably independent (a locality slice is an exact self-contained sub-problem,
+    see ``_slice_localities`` / ``_locality_separable``), so they solve concurrently across a thread
+    pool. Each block's inner solve is the vectorized numpy projected-gradient path (GIL-releasing
+    BLAS/ufuncs), so threads give real parallelism; BLAS is pinned to one thread per worker so the
+    national run uses N cores across blocks rather than oversubscribing inside each block. The
+    reduction over blocks is order-preserving and identical to the sequential version."""
     s_count = problem.shape[0]
     per_locality = max(1, problem.n_cells // max(1, s_count))
     block_localities = max(1, block_target_cells // per_locality)
@@ -124,6 +135,41 @@ def solve_population_tensor_blocked(
             problem, solver_id=solver_id, max_iterations=max_iterations, tolerance=tolerance,
         )
 
+    block_ranges = [
+        (s0, min(s0 + block_localities, s_count))
+        for s0 in range(0, s_count, block_localities)
+    ]
+
+    def _solve_block(bounds: tuple[int, int]) -> PopulationOptimizationResult:
+        s0, s1 = bounds
+        sub = _slice_localities(problem, s0, s1)
+        # solver_id=None → each block re-selects by its own cell count (small → dense fast path).
+        return solve_population_tensor_problem(
+            sub, solver_id=None, max_iterations=max_iterations, tolerance=tolerance,
+        )
+
+    if max_workers is None:
+        # One worker per core (blocks are numpy-bound), capped by the block count.
+        max_workers = max(1, min(len(block_ranges), os.cpu_count() or 1))
+    if max_workers <= 1 or len(block_ranges) <= 1:
+        results = [_solve_block(bounds) for bounds in block_ranges]
+    else:
+        # Pin BLAS to one thread per worker so the N block solves use N cores rather than each
+        # LAPACK/BLAS call inside a block grabbing every core (oversubscription).
+        try:
+            from threadpoolctl import threadpool_limits
+
+            limiter = threadpool_limits(limits=1, user_api="blas")
+        except Exception:
+            limiter = None
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                # pool.map preserves input order → block concatenation stays locality-ordered.
+                results = list(pool.map(_solve_block, block_ranges))
+        finally:
+            if limiter is not None:
+                limiter.unregister()
+
     pops: list[np.ndarray] = []
     migs: list[np.ndarray] = []
     converged_all = True
@@ -131,13 +177,7 @@ def solve_population_tensor_blocked(
     final_objective = 0.0
     initial_objective = 0.0
     worst_grad = 0.0
-    for s0 in range(0, s_count, block_localities):
-        s1 = min(s0 + block_localities, s_count)
-        sub = _slice_localities(problem, s0, s1)
-        # solver_id=None → each block re-selects by its own cell count (small → dense fast path).
-        res = solve_population_tensor_problem(
-            sub, solver_id=None, max_iterations=max_iterations, tolerance=tolerance,
-        )
+    for res in results:
         pops.append(np.asarray(res.population, dtype=np.float64))
         migs.append(np.asarray(res.migration, dtype=np.float64))
         converged_all = converged_all and res.telemetry.converged

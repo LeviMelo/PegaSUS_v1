@@ -392,17 +392,27 @@ def _build_efg_base(
     if operator_mode != "raw_only":
         ratio_specs = clinical_ratio_specs(root=root)
         denominator_pool = [*denominators, *count_nodes]
+        # Index the denominator pool by (carrier, demographic-axis signature) once, so the RN
+        # pairing is O(numerators x specs x matching-denominators) instead of the former
+        # O(numerators x specs x |pool|) full rescan — at national scale |pool| ~= |count_nodes|
+        # (every ICD/demographic stratum is a count), which made the inner scan quadratic in the
+        # number of strata. Insertion order is preserved (dict + list append), so the fields/edges
+        # emitted are byte-identical to the full-scan order. Group specs by numerator carrier too.
+        denominators_by_key: dict[tuple[str, frozenset[str]], list[FieldNode]] = {}
+        for field in denominator_pool:
+            denominators_by_key.setdefault((field.carrier, _demographic_axes(field)), []).append(field)
+        specs_by_numerator_carrier: dict[str, list[Any]] = {}
+        for spec in ratio_specs:
+            specs_by_numerator_carrier.setdefault(spec.numerator_carrier, []).append(spec)
         for numerator in count_nodes:
-            for spec in ratio_specs:
-                if spec.numerator_carrier != numerator.carrier:
-                    continue
-                for denominator in denominator_pool:
-                    if denominator.id == numerator.id or denominator.carrier != spec.denominator_carrier:
-                        continue
-                    # Demographic alignment (§3.7.4): a numerator stratified on a demographic
-                    # axis must divide a denominator on the SAME axis, never a marginal total
-                    # (and crude/ICD numerators divide the total, not a stratified pop).
-                    if _demographic_axes(numerator) != _demographic_axes(denominator):
+            numerator_axes = _demographic_axes(numerator)
+            for spec in specs_by_numerator_carrier.get(numerator.carrier, ()):
+                # Demographic alignment (§3.7.4): a numerator stratified on a demographic axis must
+                # divide a denominator on the SAME axis, never a marginal total (and crude/ICD
+                # numerators divide the total, not a stratified pop) — enforced by keying on the
+                # numerator's own axis signature.
+                for denominator in denominators_by_key.get((spec.denominator_carrier, numerator_axes), ()):
+                    if denominator.id == numerator.id:
                         continue
                     operator = OperatorSpec(
                         name=EFGOperator.RN.value,

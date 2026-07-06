@@ -183,9 +183,8 @@ def _validate_telemetry(*, manifest: dict[str, Any], is_compile_run: bool, error
             errors.append(f"invalid telemetry stage duration: {stage}={duration}")
 
 
-def _validate_race_bridge_contract(*, root: Path, v, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
-    rows = v.to_pylist()
-    q_rows = {str(row.get("field_id")): row for row in q.to_pylist() if row.get("field_id") is not None}
+def _validate_race_bridge_contract(*, root: Path, v_rows, q_rows, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
+    rows = v_rows
     bridge_rows = [row for row in rows if str(row.get("field_id", "")).startswith("SIMRaceBridge") or str(row.get("field_id", "")).startswith("SIMRaceAdminRawCount_")]
     if not bridge_rows:
         return
@@ -246,9 +245,8 @@ POPULATION_TENSOR_AXIS_KEYS = {"geography_axis", "time_axis", "population_strata
 RUN_CONFIG_POPULATION_TENSOR_KEYS = {"schema_version", "source_systems", "attach_stage", "field_id", "tensor_id", "mode", "solver_id", "solver_backend", "denominator_feedback_warning", "independent_denominator_mode", "sim_feedback_warning", "source_hashes"}
 
 
-def _validate_cnes_sih_contract(*, root: Path, v, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
-    rows = v.to_pylist()
-    q_rows = {str(row.get("field_id")): row for row in q.to_pylist() if row.get("field_id") is not None}
+def _validate_cnes_sih_contract(*, root: Path, v_rows, q_rows, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
+    rows = v_rows
     cnes_capacity_rows = [row for row in rows if str(row.get("field_id", "")).startswith("cnes_capacity_")]
     sih_cost_rows = [row for row in rows if str(row.get("field_id", "")).startswith("sih_cost_")]
     cnes_sih_rows = cnes_capacity_rows + sih_cost_rows
@@ -317,9 +315,8 @@ def _validate_cnes_sih_contract(*, root: Path, v, q, run_config: dict[str, Any],
 
 
 
-def _validate_population_tensor_contract(*, root: Path, v, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
-    rows = v.to_pylist()
-    q_rows = {str(row.get("field_id")): row for row in q.to_pylist() if row.get("field_id") is not None}
+def _validate_population_tensor_contract(*, root: Path, v_rows, q_rows, q, run_config: dict[str, Any], manifest: dict[str, Any], errors: list[str]) -> None:
+    rows = v_rows
     population_rows = [row for row in rows if str(row.get("field_id", "")).startswith("population_tensor_")]
     if not population_rows and "population_tensor" not in run_config and "population_tensor" not in manifest:
         return
@@ -548,9 +545,15 @@ def _validate_parquet_contracts(*, root: Path, run_config: dict[str, Any], manif
             bad = _nonnull(_column_values(table, col)) - v_ids
             if bad:
                 errors.append(f"{table_name}.{col} contains IDs absent from V_fields: {sorted(bad)}")
-    _validate_cnes_sih_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
-    _validate_population_tensor_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
-    _validate_race_bridge_contract(root=root, v=v, q=q, run_config=run_config, manifest=manifest, errors=errors)
+    # Materialize V_fields/Q_tensor to Python rows ONCE and share across the three
+    # field-family contract validators. Each previously re-ran v.to_pylist()/q.to_pylist()
+    # and rebuilt the same q_rows index independently — a 3x full materialization of
+    # V_fields and Q_tensor at national scale.
+    v_rows = v.to_pylist()
+    q_rows = {str(row.get("field_id")): row for row in q.to_pylist() if row.get("field_id") is not None}
+    _validate_cnes_sih_contract(root=root, v_rows=v_rows, q_rows=q_rows, q=q, run_config=run_config, manifest=manifest, errors=errors)
+    _validate_population_tensor_contract(root=root, v_rows=v_rows, q_rows=q_rows, q=q, run_config=run_config, manifest=manifest, errors=errors)
+    _validate_race_bridge_contract(root=root, v_rows=v_rows, q_rows=q_rows, q=q, run_config=run_config, manifest=manifest, errors=errors)
     _validate_inference_invariants(hypotheses=hypotheses, model_assoc=model_assoc, residual_assoc=residual_assoc, budget=budget, errors=errors, warnings=warnings)
     _validate_materialized_external_semantics(
         root=root,

@@ -126,17 +126,35 @@ def standardize_grouped(
         .agg(pl.col(deaths_col).sum().alias("_d"), pl.col(pop_col).sum().alias("_n"))
         .sort(by + ["_grp"])
     )
+    n_groups = len(ref.weights)
     rows = []
-    strata = agg.select(by).unique().sort(by) if by else pl.DataFrame({"_all": [0]})
-    for s in (strata.iter_rows(named=True) if by else [{}]):
-        sub = agg
-        for k in by:
-            sub = sub.filter(pl.col(k) == s[k])
-        d = np.zeros(len(ref.weights)); n = np.zeros(len(ref.weights))
-        for g, dd, nn in zip(sub["_grp"].to_list(), sub["_d"].to_list(), sub["_n"].to_list()):
-            d[int(g)] += float(dd); n[int(g)] += float(nn or 0.0)
+    if by:
+        # Scatter the grouped (by, _grp) aggregate into a dense [n_strata, n_groups]
+        # deaths/person-years matrix with one numpy fancy-index assignment instead of a
+        # Python double loop per stratum. Each (by, _grp) key is unique post group_by, so
+        # a direct assignment (not +=) reproduces the previous accumulation exactly.
+        strata = agg.select(by).unique().sort(by)
+        stratum_index = {tuple(s.values()): i for i, s in enumerate(strata.iter_rows(named=True))}
+        n_strata = strata.height
+        d_mat = np.zeros((n_strata, n_groups))
+        n_mat = np.zeros((n_strata, n_groups))
+        key_rows = agg.select(by).iter_rows()
+        rid = np.fromiter((stratum_index[k] for k in key_rows), dtype=np.int64, count=agg.height)
+        gid = agg["_grp"].cast(pl.Int64).to_numpy()
+        d_mat[rid, gid] = agg["_d"].cast(pl.Float64).to_numpy()
+        n_mat[rid, gid] = agg["_n"].cast(pl.Float64, strict=False).fill_null(0.0).to_numpy()
+        for s, i in ((s, stratum_index[tuple(s.values())]) for s in strata.iter_rows(named=True)):
+            sr = directly_standardized_rate(d_mat[i], n_mat[i], ref, per=per, alpha=alpha)
+            rows.append({**s, "asr": sr.asr, "ci_low": sr.ci_low, "ci_high": sr.ci_high,
+                         "crude": sr.crude, "deaths": sr.deaths, "person_years": sr.person_years,
+                         "reference": sr.reference, "per": sr.per})
+    else:
+        d = np.zeros(n_groups); n = np.zeros(n_groups)
+        gid = agg["_grp"].cast(pl.Int64).to_numpy()
+        d[gid] = agg["_d"].cast(pl.Float64).to_numpy()
+        n[gid] = agg["_n"].cast(pl.Float64, strict=False).fill_null(0.0).to_numpy()
         sr = directly_standardized_rate(d, n, ref, per=per, alpha=alpha)
-        rows.append({**s, "asr": sr.asr, "ci_low": sr.ci_low, "ci_high": sr.ci_high,
+        rows.append({"asr": sr.asr, "ci_low": sr.ci_low, "ci_high": sr.ci_high,
                      "crude": sr.crude, "deaths": sr.deaths, "person_years": sr.person_years,
                      "reference": sr.reference, "per": sr.per})
     return pl.DataFrame(rows)

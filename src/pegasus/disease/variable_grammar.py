@@ -188,12 +188,23 @@ def assemble_disease_field(
     p, S, T = len(variables), len(space_ids), len(time_ids)
 
     X = np.full((p, S, T), np.nan, dtype=np.float64)
-    for row in counts.iter_rows(named=True):
-        vi = var_index.get(row["variable_id"])
-        si = s_index.get(str(row[geo_col]))
-        ti = t_index.get(int(row[time_col]))
-        if vi is not None and si is not None and ti is not None:
-            X[vi, si, ti] = float(row["count"])
+    if counts.height:
+        # Vectorized scatter: map each id column to its integer index with polars
+        # replace_strict (a hash join, not a Python per-row dict lookup), drop any
+        # unmapped rows, then do a single numpy fancy-index assignment. Previously this
+        # looped in Python over every observed cell — O(observed_cells) interpreter
+        # steps, the dominant cost of assembling a national disease field.
+        indexed = counts.select(
+            pl.col("variable_id").replace_strict(var_index, default=-1).alias("_vi"),
+            pl.col(geo_col).cast(pl.Utf8).replace_strict(s_index, default=-1).alias("_si"),
+            pl.col(time_col).cast(pl.Int64).replace_strict(t_index, default=-1).alias("_ti"),
+            pl.col("count").cast(pl.Float64).alias("_c"),
+        ).filter((pl.col("_vi") >= 0) & (pl.col("_si") >= 0) & (pl.col("_ti") >= 0))
+        if indexed.height:
+            vi = indexed["_vi"].to_numpy()
+            si = indexed["_si"].to_numpy()
+            ti = indexed["_ti"].to_numpy()
+            X[vi, si, ti] = indexed["_c"].to_numpy()
     W = np.where(np.isnan(X), 0.0, 1.0)
     return LDOField(variables=variables, space_ids=space_ids, time_ids=time_ids, X=X, W=W, resolution=resolution_label)
 

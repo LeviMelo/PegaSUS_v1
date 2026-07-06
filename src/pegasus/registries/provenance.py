@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,15 @@ class ProvenanceSpec:
 
 
 def load_provenance_registry(registry_root: str | Path = "config/registries") -> dict[str, ProvenanceSpec]:
+    # Cache built specs per (root, mtime): get_provenance runs once per provenance tag per
+    # source-field entry during registry validation; rebuild+re-hash on every call was repeated work.
+    path = Path(registry_root) / "ontology/provenance.yaml"
+    mtime = path.stat().st_mtime if path.exists() else 0.0
+    return _load_provenance_registry_cached(str(Path(registry_root)), mtime)
+
+
+@lru_cache(maxsize=16)
+def _load_provenance_registry_cached(registry_root: str, mtime: float) -> dict[str, ProvenanceSpec]:
     path = Path(registry_root) / "ontology/provenance.yaml"
     payload = load_yaml(path)
     raw = payload.get("provenance_tags", {})

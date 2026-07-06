@@ -185,7 +185,12 @@ class OutputBundleManager:
         return manager
 
     def _write_table_key(self, root: Path, key: str, rel: str) -> None:
-        rows = _normalize_rows(key, self.tables.get(key, []))
+        # Rows in self.tables are already normalized at ingest (set_table /
+        # append_table / collect_missing_from_run), and normalization is
+        # idempotent, so re-normalizing here would be an O(rows) Python rebuild
+        # of the whole table on every flush (and every table flushes twice:
+        # write_stage_workspace + flush_to_disk). Write the stored rows directly.
+        rows = self.tables.get(key, [])
         write_table(root / rel, rows, schema_policy="preserve")
 
     def _write_json_key(self, root: Path, key: str, rel: str) -> None:

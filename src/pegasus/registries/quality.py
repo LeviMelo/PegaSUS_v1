@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,15 @@ class QualityRoleSpec:
 
 
 def load_quality_registry(registry_root: str | Path = "config/registries") -> dict[str, QualityRoleSpec]:
+    # Cache built specs per (root, mtime): get_quality_role runs once per source-field entry
+    # during registry validation; the previous rebuild+re-hash on every call was repeated work.
+    path = Path(registry_root) / "ontology/quality.yaml"
+    mtime = path.stat().st_mtime if path.exists() else 0.0
+    return _load_quality_registry_cached(str(Path(registry_root)), mtime)
+
+
+@lru_cache(maxsize=16)
+def _load_quality_registry_cached(registry_root: str, mtime: float) -> dict[str, QualityRoleSpec]:
     path = Path(registry_root) / "ontology/quality.yaml"
     payload = load_yaml(path)
     raw = payload.get("quality_roles", {})

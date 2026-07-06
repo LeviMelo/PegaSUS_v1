@@ -33,13 +33,13 @@ class DiseaseGraphCircularityError(ValueError):
     variables and cannot be used as a same-data prior."""
 
 
-def _structural_weight(a: str, b: str) -> float:
-    """Structural closeness of two codes in the ICD/CID hierarchy, in [0,1].
+def _weight_from_info(ia: "icd_adapter.ICDCodeInfo", ib: "icd_adapter.ICDCodeInfo") -> float:
+    """Structural closeness of two already-resolved codes, in [0,1] (see ``_structural_weight``).
 
-    1.0 same 3-char category; 0.5 same block; 0.25 same chapter; 0 otherwise. Deterministic
-    and data-independent (§II.13.3 structural), so safe as a prior.
+    Kept separate so callers building an O(n^2) graph can resolve ``code_info`` once per code
+    (O(n)) and reuse the resolved view in the inner loop, rather than re-resolving both codes
+    on every pair.
     """
-    ia, ib = icd_adapter.code_info(a), icd_adapter.code_info(b)
     if ia.category and ia.category == ib.category:
         return 1.0
     if ia.block and ia.block == ib.block:
@@ -47,6 +47,15 @@ def _structural_weight(a: str, b: str) -> float:
     if ia.chapter and ia.chapter == ib.chapter:
         return 0.25
     return 0.0
+
+
+def _structural_weight(a: str, b: str) -> float:
+    """Structural closeness of two codes in the ICD/CID hierarchy, in [0,1].
+
+    1.0 same 3-char category; 0.5 same block; 0.25 same chapter; 0 otherwise. Deterministic
+    and data-independent (§II.13.3 structural), so safe as a prior.
+    """
+    return _weight_from_info(icd_adapter.code_info(a), icd_adapter.code_info(b))
 
 
 @dataclass(frozen=True)
@@ -66,15 +75,19 @@ class DiseaseGraph:
         variable set stays sparse exactly like the queen-contiguity spatial graph."""
         ordered = tuple(dict.fromkeys(str(c) for c in codes))  # de-dup, keep order
         n = len(ordered)
-        chapter = [icd_adapter.code_info(c).chapter for c in ordered]
+        # Resolve each code's hierarchy view ONCE (O(n)); the O(n^2) inner loop then
+        # reads the resolved struct instead of re-calling code_info per pair.
+        info = [icd_adapter.code_info(c) for c in ordered]
+        chapter = [ci.chapter for ci in info]
         rows, cols, data = [], [], []
         for i in range(n):
             if chapter[i] is None:
                 continue
+            info_i = info[i]
             for j in range(i + 1, n):
                 if chapter[j] != chapter[i]:
                     continue
-                w = _structural_weight(ordered[i], ordered[j])
+                w = _weight_from_info(info_i, info[j])
                 if w > 0.0:
                     rows += [i, j]
                     cols += [j, i]
@@ -103,16 +116,25 @@ class DiseaseGraph:
             for v in ordered
         }
         n = len(ordered)
+        # Resolve code_info ONCE per distinct member code (O(distinct_codes)), then reuse the
+        # resolved views in the O(variables^2 x codes_i x codes_j) closeness scan below. This
+        # avoids two code_info lookups per (a, b) code pair (previously the dominant cost when a
+        # variable spans many CID-10 subcodes at national resolution).
+        info_by_code = {
+            c: icd_adapter.code_info(c)
+            for c in {code for codes in members.values() for code in codes}
+        }
+        member_info = {v: tuple(info_by_code[c] for c in members[v]) for v in ordered}
         rows, cols, data = [], [], []
         for i in range(n):
-            ci = members[ordered[i]]
+            ci = member_info[ordered[i]]
             if not ci:
                 continue
             for j in range(i + 1, n):
-                cj = members[ordered[j]]
+                cj = member_info[ordered[j]]
                 if not cj:
                     continue
-                w = max((_structural_weight(a, b) for a in ci for b in cj), default=0.0)
+                w = max((_weight_from_info(a, b) for a in ci for b in cj), default=0.0)
                 if w > 0.0:
                     rows += [i, j]
                     cols += [j, i]

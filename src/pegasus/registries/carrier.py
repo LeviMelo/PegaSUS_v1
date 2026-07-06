@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,16 @@ class CarrierSpec:
 
 
 def load_carrier_registry(registry_root: str | Path = "config/registries") -> dict[str, CarrierSpec]:
+    # Cache the built spec dict (and its registry_hash) per (root, mtime): get_carrier is
+    # called once per source-field entry during registry validation, and previously each
+    # call rebuilt every CarrierSpec and re-hashed the whole payload. mtime keys invalidation.
+    path = Path(registry_root) / "ontology/carrier.yaml"
+    mtime = path.stat().st_mtime if path.exists() else 0.0
+    return _load_carrier_registry_cached(str(Path(registry_root)), mtime)
+
+
+@lru_cache(maxsize=16)
+def _load_carrier_registry_cached(registry_root: str, mtime: float) -> dict[str, CarrierSpec]:
     path = Path(registry_root) / "ontology/carrier.yaml"
     payload = load_yaml(path)
     raw = payload.get("carriers", {})

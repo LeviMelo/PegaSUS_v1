@@ -196,13 +196,25 @@ def _declared_axis_column(field: FieldNode | None, axis: str) -> str | None:
     return None
 
 
-def _with_year(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
+def _frame_columns(frame: "pl.DataFrame | pl.LazyFrame") -> list[str]:
+    """Column names for either an eager or lazy frame (schema-only for lazy)."""
+    if isinstance(frame, pl.LazyFrame):
+        return frame.collect_schema().names()
+    return frame.columns
+
+
+def _with_year_lazy(lf: pl.LazyFrame, field: FieldNode | None = None) -> pl.LazyFrame:
+    columns = _frame_columns(lf)
     source = _declared_axis_column(field, "time")
-    if source and source in df.columns:
-        return df.with_columns(pl.col(source).cast(pl.Int64, strict=False).alias("year"))
-    if "year" in df.columns:
-        return df.with_columns(pl.col("year").cast(pl.Int64, strict=False).alias("year"))
-    return df.with_columns(pl.lit(None, dtype=pl.Int64).alias("year"))
+    if source and source in columns:
+        return lf.with_columns(pl.col(source).cast(pl.Int64, strict=False).alias("year"))
+    if "year" in columns:
+        return lf.with_columns(pl.col("year").cast(pl.Int64, strict=False).alias("year"))
+    return lf.with_columns(pl.lit(None, dtype=pl.Int64).alias("year"))
+
+
+def _with_year(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
+    return _with_year_lazy(df.lazy(), field).collect()
 
 
 def _geography_aggregation_of(field: Any) -> str | None:
@@ -216,14 +228,15 @@ def _geography_aggregation_of(field: Any) -> str | None:
     return None
 
 
-def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
+def _with_geo_lazy(lf: pl.LazyFrame, field: FieldNode | None = None) -> pl.LazyFrame:
+    columns = _frame_columns(lf)
     source = _declared_axis_column(field, "geography")
-    if source and source in df.columns:
-        base = df.with_columns(pl.col(source).cast(pl.Utf8).str.extract(r"(\d{6})", 1).alias("municipality_cod6"))
-    elif "municipality_cod6" in df.columns:
-        base = df
+    if source and source in columns:
+        base = lf.with_columns(pl.col(source).cast(pl.Utf8).str.extract(r"(\d{6})", 1).alias("municipality_cod6"))
+    elif "municipality_cod6" in columns:
+        base = lf
     else:
-        return df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("municipality_cod6"))
+        return lf.with_columns(pl.lit(None, dtype=pl.Utf8).alias("municipality_cod6"))
     base = base.filter(~pl.col("municipality_cod6").cast(pl.Utf8).str.contains(r"^\d{2}0000$").fill_null(False))
     # Geography scope (fix: restrict to the intent's UF prefixes so out-of-scope
     # residence/occurrence municipalities of an e.g. AL-scoped run do not pollute
@@ -247,7 +260,7 @@ def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
         except Exception:
             mapping = {}
         if mapping:
-            map_df = pl.DataFrame(
+            map_df = pl.LazyFrame(
                 {"municipality_cod6": list(mapping.keys()), "__region_cell__": list(mapping.values())},
                 schema={"municipality_cod6": pl.Utf8, "__region_cell__": pl.Utf8},
             )
@@ -260,8 +273,22 @@ def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
     return base
 
 
+def _with_geo(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
+    return _with_geo_lazy(df.lazy(), field).collect()
+
+
+def _support_frame_lazy(lf: pl.LazyFrame, field: FieldNode | None = None) -> pl.LazyFrame:
+    return _with_geo_lazy(_with_year_lazy(lf, field), field)
+
+
 def _support_frame(df: pl.DataFrame, field: FieldNode | None = None) -> pl.DataFrame:
-    return _with_geo(_with_year(df, field), field)
+    return _support_frame_lazy(df.lazy(), field).collect()
+
+
+def _support_keys_from_columns(columns: Iterable[str]) -> list[str]:
+    """Candidate support keys present in a schema (year / municipality_cod6), in order."""
+    present = set(columns)
+    return [column for column in ("year", "municipality_cod6") if column in present]
 
 
 def _support_keys(df: pl.DataFrame) -> list[str]:
@@ -274,6 +301,24 @@ def _support_keys(df: pl.DataFrame) -> list[str]:
             except Exception:
                 pass
     return keys
+
+
+def _support_keys_lazy(lf: pl.LazyFrame) -> list[str]:
+    """Support keys for a lazy frame: drop a candidate key that is entirely null.
+
+    Mirrors the eager `_support_keys` all-null pruning (a key column present in the
+    schema but never populated is not a real support axis) with a single cheap
+    aggregation pass instead of per-column `.item()` collects."""
+    candidates = _support_keys_from_columns(_frame_columns(lf))
+    if not candidates:
+        return []
+    try:
+        any_non_null = lf.select(
+            [pl.col(column).is_not_null().any().alias(column) for column in candidates]
+        ).collect(engine="streaming")
+    except Exception:
+        return candidates
+    return [column for column in candidates if bool(any_non_null[column][0])]
 
 
 def _write(path: Path, df: pl.DataFrame) -> tuple[Path, int]:
@@ -324,6 +369,45 @@ def _scalar_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, int] | Non
     return None
 
 
+def _icd_stratum_map_df(codes: Iterable[str], icd_column: str, level: str, axis_name: str) -> pl.DataFrame:
+    """Build the distinct-code -> group-id crosswalk frame (bounded by the ICD codebook)."""
+    from pegasus.datasus.icd_groups import block_for_icd, chapter_for_icd, curated_group_for_icd
+
+    classify = {"chapter": chapter_for_icd, "block": block_for_icd, "curated": curated_group_for_icd}.get(level, chapter_for_icd)
+    mapping: dict[str, str] = {}
+    for code in codes:
+        group = classify(code)
+        mapping[str(code)] = group.id if group is not None else "UNCLASSIFIED"
+    return pl.DataFrame(
+        {icd_column: list(mapping.keys()), axis_name: list(mapping.values())},
+        schema={icd_column: pl.Utf8, axis_name: pl.Utf8},
+    )
+
+
+def _add_icd_stratum_lazy(lf: pl.LazyFrame, icd_column: str, level: str, axis_name: str) -> pl.LazyFrame:
+    """Lazy variant of `_add_icd_stratum`: map ICD codes to chapter/block ids.
+
+    Distinct codes are pulled via a bounded streaming pass (the codebook has ~14k
+    entries — this is not events-scale), then joined back lazily. Identical
+    UNCLASSIFIED fallback semantics."""
+    if icd_column not in _frame_columns(lf):
+        return lf.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
+    codes = (
+        lf.select(pl.col(icd_column).cast(pl.Utf8, strict=False).drop_nulls().unique())
+        .collect(engine="streaming")
+        .get_column(icd_column)
+        .to_list()
+    )
+    map_df = _icd_stratum_map_df(codes, icd_column, level, axis_name)
+    if map_df.height:
+        return (
+            lf.with_columns(pl.col(icd_column).cast(pl.Utf8, strict=False))
+            .join(map_df.lazy(), on=icd_column, how="left")
+            .with_columns(pl.col(axis_name).fill_null("UNCLASSIFIED"))
+        )
+    return lf.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
+
+
 def _add_icd_stratum(df: pl.DataFrame, icd_column: str, level: str, axis_name: str) -> pl.DataFrame:
     """Map each record's ICD code to its chapter/block id (MSD §3.11 σ_C restriction).
 
@@ -331,49 +415,37 @@ def _add_icd_stratum(df: pl.DataFrame, icd_column: str, level: str, axis_name: s
     routed to an explicit ``UNCLASSIFIED`` stratum rather than silently dropped, so the
     cause-specific counts partition the event population exactly.
     """
-    from pegasus.datasus.icd_groups import block_for_icd, chapter_for_icd, curated_group_for_icd
-
-    classify = {"chapter": chapter_for_icd, "block": block_for_icd, "curated": curated_group_for_icd}.get(level, chapter_for_icd)
     if icd_column not in df.columns:
         return df.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
     codes = df.get_column(icd_column).cast(pl.Utf8, strict=False).drop_nulls().unique().to_list()
-    mapping: dict[str, str] = {}
-    for code in codes:
-        group = classify(code)
-        mapping[str(code)] = group.id if group is not None else "UNCLASSIFIED"
-    if mapping:
-        map_df = pl.DataFrame(
-            {icd_column: list(mapping.keys()), axis_name: list(mapping.values())},
-            schema={icd_column: pl.Utf8, axis_name: pl.Utf8},
-        )
-        out = (
+    map_df = _icd_stratum_map_df(codes, icd_column, level, axis_name)
+    if map_df.height:
+        return (
             df.with_columns(pl.col(icd_column).cast(pl.Utf8, strict=False))
             .join(map_df, on=icd_column, how="left")
             .with_columns(pl.col(axis_name).fill_null("UNCLASSIFIED"))
         )
-    else:
-        out = df.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
-    return out
+    return df.with_columns(pl.lit("UNCLASSIFIED").alias(axis_name))
 
 
 _TRUTHY = ("true", "1", "t", "yes", "y", "sim")
 _FALSY = ("false", "0", "f", "no", "n", "nao", "não")
 
 
-def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.DataFrame:
-    """Apply a declarative AND-list predicate (MSD §2.6/§3.10.4 σ restriction).
+def _restrict_conditions_expr(conditions: list[dict], columns: Iterable[str]) -> pl.Expr | None | bool:
+    """Build the AND-list predicate expression (MSD §2.6/§3.10.4 σ restriction).
 
-    Conditions come from health/clinical_event_definitions.yaml; this interpreter is the only
-    place the predicate is realized, and it is fully general (no per-event/source code).
-    A referenced column that is absent means the predicate cannot be satisfied → empty.
-    """
+    Returns the combined `pl.Expr`, or ``False`` when a referenced column is absent
+    (the predicate cannot be satisfied → the caller must yield an empty frame), or
+    ``None`` when no condition contributed a term (no-op filter)."""
+    present = set(columns)
     expr: pl.Expr | None = None
     for cond in conditions:
         column = cond.get("column")
         op = str(cond.get("op") or "")
         value = cond.get("value")
-        if not column or str(column) not in df.columns:
-            return df.clear()
+        if not column or str(column) not in present:
+            return False
         col = pl.col(str(column))
         if op in {"lt", "le", "gt", "ge"}:
             numeric = col.cast(pl.Float64, strict=False)
@@ -405,9 +477,32 @@ def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.D
         else:
             continue
         expr = term if expr is None else (expr & term)
-    if expr is not None:
-        df = df.filter(expr.fill_null(False))
-    return df
+    return expr
+
+
+def _apply_restrict_conditions_lazy(lf: pl.LazyFrame, conditions: list[dict]) -> pl.LazyFrame:
+    """Lazy σ restriction: same predicate semantics as `_apply_restrict_conditions`."""
+    expr = _restrict_conditions_expr(conditions, _frame_columns(lf))
+    if expr is False:
+        return lf.clear()
+    if expr is None:
+        return lf
+    return lf.filter(expr.fill_null(False))
+
+
+def _apply_restrict_conditions(df: pl.DataFrame, conditions: list[dict]) -> pl.DataFrame:
+    """Apply a declarative AND-list predicate (MSD §2.6/§3.10.4 σ restriction).
+
+    Conditions come from health/clinical_event_definitions.yaml; this interpreter is the only
+    place the predicate is realized, and it is fully general (no per-event/source code).
+    A referenced column that is absent means the predicate cannot be satisfied → empty.
+    """
+    expr = _restrict_conditions_expr(conditions, df.columns)
+    if expr is False:
+        return df.clear()
+    if expr is None:
+        return df
+    return df.filter(expr.fill_null(False))
 
 
 __all__ = [
@@ -427,16 +522,26 @@ __all__ = [
     "_source_path",
     "_source_column",
     "_declared_axis_column",
+    "_frame_columns",
     "_with_year",
+    "_with_year_lazy",
     "_geography_aggregation_of",
     "_with_geo",
+    "_with_geo_lazy",
     "_support_frame",
+    "_support_frame_lazy",
     "_support_keys",
+    "_support_keys_from_columns",
+    "_support_keys_lazy",
     "_write",
     "_materialized",
     "_scalar_tensor",
     "_add_icd_stratum",
+    "_add_icd_stratum_lazy",
+    "_icd_stratum_map_df",
     "_TRUTHY",
     "_FALSY",
     "_apply_restrict_conditions",
+    "_apply_restrict_conditions_lazy",
+    "_restrict_conditions_expr",
 ]

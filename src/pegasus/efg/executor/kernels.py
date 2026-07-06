@@ -23,19 +23,69 @@ from pegasus.measurement.race import (
 from pegasus.efg.executor.support import *
 
 
-def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
-    df = _support_frame(pl.read_parquet(source), field)
-    base_keys = _support_keys(df)
+class SourceScanCache:
+    """Per-execution cache of ``scan_parquet`` query plans, keyed by resolved source path.
+
+    Finding 2 (read-source-once): N fields off the same events parquet reuse one lazy
+    scan plan instead of each opening the file and re-inferring schema. Kept LAZY — no
+    30M-row eager materialization; each field still terminates in its own streaming
+    aggregate, so RAM stays bounded by the aggregate state, not the event volume."""
+
+    def __init__(self) -> None:
+        self._plans: dict[str, pl.LazyFrame] = {}
+
+    def scan(self, source: Path) -> pl.LazyFrame:
+        key = str(Path(source).resolve())
+        plan = self._plans.get(key)
+        if plan is None:
+            plan = pl.scan_parquet(source)
+            self._plans[key] = plan
+        return plan
+
+
+def _scan_source(source: Path, cache: "SourceScanCache | None" = None) -> pl.LazyFrame:
+    if cache is not None:
+        return cache.scan(source)
+    return pl.scan_parquet(source)
+
+
+def _finalize_count(
+    lf: pl.LazyFrame, keys: list[str], field: FieldNode, *, operator_default: str = "count_measure"
+) -> pl.DataFrame:
+    """Terminal streaming aggregate for a count tensor: group_by → len, then tag columns.
+
+    Streaming keeps only the hash-aggregate state in memory (~one row per output cell),
+    never the full event frame."""
+    if keys:
+        out = (
+            lf.group_by(keys)
+            .agg(pl.len().cast(pl.Float64).alias(VALUE_COLUMN))
+            .sort(keys)
+            .collect(engine="streaming")
+        )
+    else:
+        n = lf.select(pl.len()).collect(engine="streaming").item()
+        out = pl.DataFrame({VALUE_COLUMN: [float(n)]})
+    return out.with_columns([
+        pl.lit(field.id).alias("field_id"),
+        pl.lit(field.name).alias("field_name"),
+        pl.lit(field.operator or operator_default).alias("operator"),
+    ])
+
+
+def _count_tensor(field: FieldNode, source: Path, cache: "SourceScanCache | None" = None) -> pl.DataFrame:
+    lf = _support_frame_lazy(_scan_source(source, cache), field)
+    base_keys = _support_keys_lazy(lf)
     support = _as_dict(field.support)
     conditions = support.get("restrict_conditions")
     if conditions:
-        df = _apply_restrict_conditions(df, list(conditions))
+        lf = _apply_restrict_conditions_lazy(lf, list(conditions))
     keys = list(base_keys)
     stratify_icd = support.get("stratify_icd")
     if stratify_icd:
         axis_name = str(support.get("icd_axis") or ("icd_chapter" if stratify_icd == "chapter" else "icd_block"))
         icd_column = str(support.get("icd_column") or "")
-        df = _add_icd_stratum(df, icd_column, str(stratify_icd), axis_name)
+        lf = _add_icd_stratum_lazy(lf, icd_column, str(stratify_icd), axis_name)
         keys = [*keys, axis_name]
     # General demographic stratification (MSD §3.7.4): group by a canonical axis derived
     # from a source column, mapping raw codes -> canonical categories so the count joins a
@@ -53,14 +103,15 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
         axis_name = str(support.get("stratify_axis") or stratify_column)
         source_system = str(support.get("stratify_source") or "")
         raw_column = str(stratify_column)
-        if raw_column in df.columns:
+        columns = _frame_columns(lf)
+        if raw_column in columns:
             tmp = "__canonical_stratum__"
             if axis_name == "age_group":
                 # Age is a direct arithmetic bucketing of the source's single-year age
                 # field (SIM/SINASC/SIH carry age_years / maternal_age_years), NOT a
                 # category-code crosswalk (MSD §3.7.4). Bucket to the canonical age_N
                 # basis so the count joins the single-year population denominator.
-                df = df.with_columns(
+                lf = lf.with_columns(
                     pl.col(raw_column)
                     .map_elements(age_group_for_years, return_dtype=pl.Utf8)
                     .alias(axis_name)
@@ -80,7 +131,13 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
                     )
 
                     prior = load_race_bridge_prior(str(prior_path))
-                    state_col = "race_missingness_state" if "race_missingness_state" in df.columns else None
+                    state_col = "race_missingness_state" if "race_missingness_state" in columns else None
+                    # Project only the columns the Python bridge loop needs (support keys +
+                    # admin race code + missingness state) before materializing — never the
+                    # full ~40-column event frame. Streaming collect keeps this bounded.
+                    project = [*base_keys, raw_column, *([state_col] if state_col else [])]
+                    df = lf.select(project).collect(engine="streaming")
+                    base_schema = df.schema
                     bridged_rows: list[dict[str, Any]] = []
                     for support_values, group in _fixedc_support_groups(df):
                         codes = group[raw_column].to_list()
@@ -95,7 +152,7 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
                                 axis_name: str(target),
                                 VALUE_COLUMN: float(posterior.posterior_counts[target]),
                             })
-                    schema = {**{k: df.schema[k] for k in base_keys}, axis_name: pl.Utf8, VALUE_COLUMN: pl.Float64}
+                    schema = {**{k: base_schema[k] for k in base_keys}, axis_name: pl.Utf8, VALUE_COLUMN: pl.Float64}
                     out = pl.DataFrame(bridged_rows, schema=schema) if bridged_rows else pl.DataFrame(schema=schema)
                     return out.with_columns([
                         pl.lit(field.id).alias("field_id"),
@@ -106,7 +163,7 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
                 # race -- a direct code->canonical crosswalk would be silent redistribution
                 # (§3.7.4). Keep the RAW admin code; align_fields gates the rate on
                 # race_bridge_required so this never divides a self-declared population.
-                df = df.with_columns(
+                lf = lf.with_columns(
                     pl.col(raw_column).cast(pl.Utf8, strict=False).alias(axis_name)
                 ).filter(pl.col(axis_name).is_not_null())
                 keys = [*keys, axis_name]
@@ -119,46 +176,42 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
                 code_map = source_category_map(axis_name, source_system)
                 mapping = {**{c: c for c in canonical_categories(axis_name)}, **code_map}
                 if mapping:
-                    map_df = pl.DataFrame(
+                    map_df = pl.LazyFrame(
                         {raw_column: list(mapping.keys()), tmp: list(mapping.values())},
                         schema={raw_column: pl.Utf8, tmp: pl.Utf8},
                     )
-                    df = (
-                        df.with_columns(pl.col(raw_column).cast(pl.Utf8, strict=False))
+                    lf = (
+                        lf.with_columns(pl.col(raw_column).cast(pl.Utf8, strict=False))
                         .join(map_df, on=raw_column, how="left")
                         .with_columns(pl.col(tmp).fill_null(UNKNOWN).alias(axis_name))
                         .filter(~pl.col(axis_name).is_in([TOTAL, UNKNOWN]))
                         .drop(tmp)
                     )
                     keys = [*keys, axis_name]
-    if keys:
-        out = df.group_by(keys).agg(pl.len().cast(pl.Float64).alias(VALUE_COLUMN)).sort(keys)
-    else:
-        out = pl.DataFrame({VALUE_COLUMN: [float(df.height)]})
-    out = out.with_columns([
-        pl.lit(field.id).alias("field_id"),
-        pl.lit(field.name).alias("field_name"),
-        pl.lit(field.operator or "count_measure").alias("operator"),
-    ])
-    return out
+    return _finalize_count(lf, keys, field)
 
 
-def _functional_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
+def _functional_tensor(field: FieldNode, source: Path, cache: "SourceScanCache | None" = None) -> pl.DataFrame:
     """Materialize a statistical functional (mean/median) of a per-record mark over each
     support cell (MSD §3.10.4-6 Ψ operators)."""
-    df = _support_frame(pl.read_parquet(source), field)
+    lf = _support_frame_lazy(_scan_source(source, cache), field)
     support = _as_dict(field.support)
     mark = str(support.get("mark_column") or "")
     functional = str(support.get("functional") or "mean")
-    if mark not in df.columns:
+    if mark not in _frame_columns(lf):
         raise ValueError(f"functional field {field.id} mark column {mark!r} absent from source")
-    df = df.with_columns(pl.col(mark).cast(pl.Float64, strict=False).alias("__mark__"))
+    lf = lf.with_columns(pl.col(mark).cast(pl.Float64, strict=False).alias("__mark__"))
     agg = pl.col("__mark__").median() if functional == "median" else pl.col("__mark__").mean()
-    keys = _support_keys(df)
+    keys = _support_keys_lazy(lf)
     if keys:
-        out = df.group_by(keys).agg(agg.cast(pl.Float64).alias(VALUE_COLUMN)).sort(keys)
+        out = (
+            lf.group_by(keys)
+            .agg(agg.cast(pl.Float64).alias(VALUE_COLUMN))
+            .sort(keys)
+            .collect(engine="streaming")
+        )
     else:
-        scalar = df.get_column("__mark__").median() if functional == "median" else df.get_column("__mark__").mean()
+        scalar = lf.select(agg.cast(pl.Float64).alias(VALUE_COLUMN)).collect(engine="streaming").item()
         out = pl.DataFrame({VALUE_COLUMN: [float(scalar) if scalar is not None else None]})
     out = out.with_columns([
         pl.lit(field.id).alias("field_id"),
@@ -168,14 +221,20 @@ def _functional_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
     return out
 
 
-def _sum_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
-    df = _support_frame(pl.read_parquet(source), field)
-    df = df.with_columns(pl.col(column).cast(pl.Float64, strict=False).fill_null(0.0).alias("__value__"))
-    keys = _support_keys(df)
+def _sum_tensor(field: FieldNode, source: Path, column: str, cache: "SourceScanCache | None" = None) -> pl.DataFrame:
+    lf = _support_frame_lazy(_scan_source(source, cache), field)
+    lf = lf.with_columns(pl.col(column).cast(pl.Float64, strict=False).fill_null(0.0).alias("__value__"))
+    keys = _support_keys_lazy(lf)
     if keys:
-        out = df.group_by(keys).agg(pl.col("__value__").sum().cast(pl.Float64).alias(VALUE_COLUMN)).sort(keys)
+        out = (
+            lf.group_by(keys)
+            .agg(pl.col("__value__").sum().cast(pl.Float64).alias(VALUE_COLUMN))
+            .sort(keys)
+            .collect(engine="streaming")
+        )
     else:
-        out = pl.DataFrame({VALUE_COLUMN: [float(df["__value__"].sum() or 0.0)]})
+        total = lf.select(pl.col("__value__").sum()).collect(engine="streaming").item()
+        out = pl.DataFrame({VALUE_COLUMN: [float(total or 0.0)]})
     out = out.with_columns([
         pl.lit(field.id).alias("field_id"),
         pl.lit(field.name).alias("field_name"),
@@ -184,17 +243,21 @@ def _sum_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
     return out
 
 
-def _source_field_tensor(field: FieldNode, source: Path, column: str) -> pl.DataFrame:
-    df = _support_frame(pl.read_parquet(source), field)
-    keys = _support_keys(df)
-    out = df.select([
-        *(pl.col(key) for key in keys),
-        pl.col(column).alias(VALUE_COLUMN),
-    ]).with_columns([
-        pl.lit(field.id).alias("field_id"),
-        pl.lit(field.name).alias("field_name"),
-        pl.lit(field.operator or "source_field").alias("operator"),
-    ])
+def _source_field_tensor(field: FieldNode, source: Path, column: str, cache: "SourceScanCache | None" = None) -> pl.DataFrame:
+    lf = _support_frame_lazy(_scan_source(source, cache), field)
+    keys = _support_keys_lazy(lf)
+    out = (
+        lf.select([
+            *(pl.col(key) for key in keys),
+            pl.col(column).alias(VALUE_COLUMN),
+        ])
+        .with_columns([
+            pl.lit(field.id).alias("field_id"),
+            pl.lit(field.name).alias("field_name"),
+            pl.lit(field.operator or "source_field").alias("operator"),
+        ])
+        .collect(engine="streaming")
+    )
     return out
 
 
@@ -364,14 +427,15 @@ def _is_race_bridge(field: FieldNode) -> bool:
     )
 
 
-def _race_column(field: FieldNode, parent: FieldNode, df: pl.DataFrame) -> str:
+def _race_column(field: FieldNode, parent: FieldNode, columns: "pl.DataFrame | Iterable[str]") -> str:
+    present = set(columns.columns if isinstance(columns, pl.DataFrame) else columns)
     support = _as_dict(parent.support)
     candidates = [
         support.get("column"),
         support.get("source_column"),
     ]
     for candidate in candidates:
-        if candidate is not None and str(candidate) in df.columns:
+        if candidate is not None and str(candidate) in present:
             return str(candidate)
     raise ValueError(
         f"Bridge_R field {field.id} parent {parent.id} lacks a registry-declared "
@@ -380,18 +444,24 @@ def _race_column(field: FieldNode, parent: FieldNode, df: pl.DataFrame) -> str:
 
 
 def _fixedc_support_groups(df: pl.DataFrame) -> list[tuple[dict[str, Any], pl.DataFrame]]:
+    """Partition `df` into (support-key values dict, sub-frame) groups.
+
+    Finding 3: a single O(n) ``partition_by`` hash-partition replaces the former
+    per-cell ``df.filter(...)`` scan loop (which was O(cells x rows) — quadratic and
+    unusable at national scale). Null keys are grouped natively. Group order is the
+    original's sorted-by-key order so downstream row emission is unchanged."""
     keys = _support_keys(df)
     if not keys:
         return [({}, df)]
-    rows = df.select(keys).unique().sort(keys).iter_rows(named=True)
+    # Ordered key tuples exactly as the original (unique, sorted by keys).
+    ordered = df.select(keys).unique().sort(keys)
+    partitions = df.partition_by(keys, as_dict=True, maintain_order=True)
     groups: list[tuple[dict[str, Any], pl.DataFrame]] = []
-    for values in rows:
-        sub = df
-        for key, value in values.items():
-            if value is None:
-                sub = sub.filter(pl.col(key).is_null())
-            else:
-                sub = sub.filter(pl.col(key) == value)
+    for values in ordered.iter_rows(named=True):
+        key_tuple = tuple(values[k] for k in keys)
+        sub = partitions.get(key_tuple)
+        if sub is None:
+            continue
         groups.append((dict(values), sub))
     return groups
 
@@ -410,9 +480,15 @@ def _compute_race_bridge_tensor(
     source = _source_path(parent)
     if source is None:
         raise ValueError(f"Bridge_R parent {parent.id} has no source artifact path")
-    df = _support_frame(pl.read_parquet(source), parent)
-    race_column = _race_column(field, parent, df)
-    state_col = "race_missingness_state" if "race_missingness_state" in df.columns else None
+    # Lazy scan + support transform; resolve the race/state columns from the schema, then
+    # materialize ONLY (support keys + race code + missingness state) — never the full
+    # ~40-column event frame. Streaming keeps the projected read bounded.
+    lf = _support_frame_lazy(pl.scan_parquet(source), parent)
+    schema_cols = _frame_columns(lf)
+    race_column = _race_column(field, parent, schema_cols)
+    state_col = "race_missingness_state" if "race_missingness_state" in schema_cols else None
+    project = [*_support_keys_from_columns(schema_cols), race_column, *([state_col] if state_col else [])]
+    df = lf.select(project).collect(engine="streaming")
 
     rows: list[dict[str, Any]] = []
     summary_missing = 0
@@ -622,22 +698,50 @@ def _sidra_demographic_population_tensor(field: FieldNode, output_dir: Path) -> 
         raise ValueError("demographic population field has no facts path")
     df = pl.read_parquet(facts_path)
     value_col = "value_numeric" if "value_numeric" in df.columns else VALUE_COLUMN
-    rows: list[dict[str, Any]] = []
-    for record in df.iter_rows(named=True):
-        code = _category_code_for_classification(record.get("category_tuple"), classification_id)
-        canonical = map_category(axis, "SIDRA", code) if code is not None else UNKNOWN
-        if canonical in {TOTAL, UNKNOWN}:
-            continue  # marginal/unknown is not a stratum of the disaggregated tensor
-        locality = str(record.get("locality_id") or "")
-        period = str(record.get("period") or "")
-        value = record.get(value_col)
-        rows.append({
-            "year": int(period[:4]) if period[:4].isdigit() else None,
-            "municipality_cod6": locality[:6],
-            axis: canonical,
-            VALUE_COLUMN: float(value) if value is not None else None,
-        })
-    out = pl.DataFrame(rows) if rows else pl.DataFrame({VALUE_COLUMN: []}, schema={VALUE_COLUMN: pl.Float64})
+    empty = pl.DataFrame({VALUE_COLUMN: []}, schema={VALUE_COLUMN: pl.Float64})
+    if df.height == 0 or "category_tuple" not in df.columns:
+        out = empty
+    else:
+        # Finding 3: vectorize the former per-row iter_rows loop. category_tuple has few
+        # DISTINCT values (a small strata table), so JSON-parse + registry canonicalize each
+        # distinct tuple ONCE, then join the canonical stratum back — no per-row Python work.
+        distinct_tuples = df.get_column("category_tuple").unique().to_list()
+        canon_map: dict[Any, str] = {}
+        for raw in distinct_tuples:
+            code = _category_code_for_classification(raw, classification_id)
+            canonical = map_category(axis, "SIDRA", code) if code is not None else UNKNOWN
+            try:
+                canon_map[raw] = canonical
+            except TypeError:
+                pass  # unhashable (list) key: fall through to per-element classify below
+
+        def _canonical(raw: Any) -> str:
+            try:
+                if raw in canon_map:
+                    return canon_map[raw]
+            except TypeError:
+                pass
+            code = _category_code_for_classification(raw, classification_id)
+            return map_category(axis, "SIDRA", code) if code is not None else UNKNOWN
+
+        # Map each row's category_tuple -> canonical stratum, drop marginal/unknown, then
+        # derive year/municipality/value with expressions.
+        canonical_expr = (
+            pl.col("category_tuple")
+            .map_elements(_canonical, return_dtype=pl.Utf8)
+            .alias(axis)
+        )
+        projected = (
+            df.with_columns(canonical_expr)
+            .filter(~pl.col(axis).is_in([TOTAL, UNKNOWN]))
+            .with_columns(
+                pl.col("period").cast(pl.Utf8).str.slice(0, 4).cast(pl.Int64, strict=False).alias("year"),
+                pl.col("locality_id").cast(pl.Utf8).str.slice(0, 6).alias("municipality_cod6"),
+                pl.col(value_col).cast(pl.Float64, strict=False).alias(VALUE_COLUMN),
+            )
+            .select(["year", "municipality_cod6", axis, VALUE_COLUMN])
+        )
+        out = projected if projected.height else empty
     out = out.with_columns([
         pl.lit(field.id).alias("field_id"),
         pl.lit(field.name).alias("field_name"),
@@ -685,6 +789,9 @@ def _population_solver_tensor(field: FieldNode, output_dir: Path) -> tuple[Path,
 
 
 __all__ = [
+    "SourceScanCache",
+    "_scan_source",
+    "_finalize_count",
     "_count_tensor",
     "_functional_tensor",
     "_sum_tensor",

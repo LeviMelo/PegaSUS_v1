@@ -18,7 +18,9 @@ from pegasus.efg.executor.support import *
 from pegasus.efg.executor.kernels import *
 
 
-def _execute_non_rn(field: FieldNode, output_dir: Path, intent: Any = None) -> tuple[Path, int]:
+def _execute_non_rn(
+    field: FieldNode, output_dir: Path, intent: Any = None, cache: "SourceScanCache | None" = None
+) -> tuple[Path, int]:
     op = str(field.operator or "").lower()
     source = _source_path(field)
 
@@ -35,17 +37,19 @@ def _execute_non_rn(field: FieldNode, output_dir: Path, intent: Any = None) -> t
 
     if source is None:
         raise ValueError("no source parquet path and no scalar support value")
-    head = pl.read_parquet(source, n_rows=25)
+    # Column resolution needs the source SCHEMA, not its data: take a 0-row head off the
+    # cached lazy scan instead of re-reading 25 rows from disk per field.
+    head = _scan_source(source, cache).limit(0).collect()
     column = _source_column(field, head)
 
     if op in {"count_measure", "count", "event_count"} or field.unit in {"counts", "count"}:
-        out = _count_tensor(field, source)
+        out = _count_tensor(field, source, cache)
     elif column is not None and field.aggregation in {"additive", "statistical_functional", "weighted_mean"}:
-        out = _sum_tensor(field, source, column)
+        out = _sum_tensor(field, source, column, cache)
     elif column is not None:
-        out = _source_field_tensor(field, source, column)
+        out = _source_field_tensor(field, source, column, cache)
     else:
-        out = _count_tensor(field, source)
+        out = _count_tensor(field, source, cache)
 
     geo_mode = "native"
     if intent is not None:
@@ -94,6 +98,11 @@ def _execute_efg_result_impl(
     fields_by_id: dict[str, FieldNode] = {field.id: field for field in efg.fields}
     executed: list[ExecutedField] = []
 
+    # Finding 2: one lazy-scan cache per execution so N fields off the same events
+    # parquet reuse a single scan plan instead of each re-opening the file. Stays lazy;
+    # each field still terminates in its own streaming aggregate (bounded RAM).
+    scan_cache = SourceScanCache()
+
     # Fixed-point execution: source/scalar fields first, then RN and bridges.
     pending = set(fields_by_id)
     last_error: dict[str, str] = {}
@@ -118,7 +127,7 @@ def _execute_efg_result_impl(
                     functional_source = _source_path(field)
                     if functional_source is None:
                         raise ValueError(f"functional field {field.id} has no source artifact")
-                    path, rows = _write(out_dir / f"{field.id}.parquet", _functional_tensor(field, functional_source))
+                    path, rows = _write(out_dir / f"{field.id}.parquet", _functional_tensor(field, functional_source, scan_cache))
                     support_update = None
                 elif op == "population_tensor_solver":
                     path, rows = _population_solver_tensor(field, out_dir)
@@ -126,7 +135,7 @@ def _execute_efg_result_impl(
                 elif op.startswith("Bridge") or "bridge" in op.lower() or field.kind in {"bridge_module", "bridge_divergence"}:
                     path, rows, support_update = _compute_bridge_tensor(field, fields_by_id, out_dir)
                 else:
-                    path, rows = _execute_non_rn(field, out_dir, intent)
+                    path, rows = _execute_non_rn(field, out_dir, intent, scan_cache)
                     support_update = None
                 if support_update:
                     field = field.model_copy(update={

@@ -24,7 +24,7 @@ from dataclasses import replace
 import numpy as np
 from scipy.stats import normaltest
 
-from pegasus.pirs.ldo.records import LinkRecord
+from pegasus.ldo.records import LinkRecord
 
 _EPS = 1e-9
 

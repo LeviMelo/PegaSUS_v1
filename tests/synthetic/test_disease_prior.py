@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.pirs.ldo.assemble import LDOField
-from pegasus.pirs.ldo.disease_prior import disease_penalty_matrix, penalty_from_affinity
-from pegasus.pirs.ldo.lowrank import fit_sparse_plus_lowrank
-from pegasus.pirs.ldo.orchestrator import run_ldo
+from pegasus.ldo.assemble import LDOField
+from pegasus.ldo.disease_prior import disease_penalty_matrix, penalty_from_affinity
+from pegasus.ldo.lowrank import fit_sparse_plus_lowrank
+from pegasus.ldo.orchestrator import run_ldo
 
 
 def _partial(fit) -> np.ndarray:

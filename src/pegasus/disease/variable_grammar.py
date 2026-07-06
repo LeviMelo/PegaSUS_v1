@@ -164,7 +164,7 @@ def assemble_disease_field(
     Every observed cell carries full weight; unobserved cells are NaN/zero-weight (the
     latent-field convention — sparse disease variables inform only where seen).
     """
-    from pegasus.pirs.ldo.assemble import LDOField  # lazy: keep disease/ import-light of the LDO
+    from pegasus.ldo.assemble import LDOField  # lazy: keep disease/ import-light of the LDO
     import numpy as np
 
     counts = strat.counts

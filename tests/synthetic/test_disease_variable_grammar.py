@@ -10,7 +10,7 @@ import numpy as np
 import polars as pl
 
 from pegasus.disease.variable_grammar import assemble_disease_field, stratify_events
-from pegasus.pirs.ldo.orchestrator import run_ldo
+from pegasus.ldo.orchestrator import run_ldo
 
 
 def test_stratify_by_chapter_generates_typed_variables() -> None:

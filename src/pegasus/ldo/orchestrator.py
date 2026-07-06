@@ -19,19 +19,19 @@ from typing import Any
 
 import numpy as np
 
-from pegasus.pirs.ldo.assemble import LDOField, assemble_ldo_tensor
-from pegasus.pirs.ldo.certify import LDOCertificationPolicy, certify_links
-from pegasus.pirs.ldo.envelope import assert_within_envelope
-from pegasus.pirs.ldo.edges import (
+from pegasus.ldo.assemble import LDOField, assemble_ldo_tensor
+from pegasus.ldo.certify import LDOCertificationPolicy, certify_links
+from pegasus.ldo.envelope import assert_within_envelope
+from pegasus.ldo.edges import (
     annotate_disease_provenance,
     stability_select,
     to_link_records,
     type_mechanical_overlap,
 )
-from pegasus.pirs.ldo.lags import fit_lagged_links
-from pegasus.pirs.ldo.margins import GaussianField, gaussianize_field
-from pegasus.pirs.ldo.records import LinkRecord
-from pegasus.pirs.ldo.residual_scan import scan_residual_nonlinear_edges
+from pegasus.ldo.lags import fit_lagged_links
+from pegasus.ldo.margins import GaussianField, gaussianize_field
+from pegasus.ldo.records import LinkRecord
+from pegasus.ldo.residual_scan import scan_residual_nonlinear_edges
 from pegasus.she.panel import CommonPanel
 
 
@@ -122,7 +122,7 @@ def run_ldo(
 
     disease_penalty = None
     if disease_graph is not None:
-        from pegasus.pirs.ldo.disease_prior import disease_penalty_matrix
+        from pegasus.ldo.disease_prior import disease_penalty_matrix
         disease_penalty = disease_penalty_matrix(gf.variables, disease_graph, lambda1=lambda1)
 
     fit_kwargs = dict(

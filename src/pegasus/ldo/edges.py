@@ -16,9 +16,9 @@ from dataclasses import replace
 
 import numpy as np
 
-from pegasus.pirs.ldo.lags import LaggedFit, fit_lagged_links
-from pegasus.pirs.ldo.margins import GaussianField
-from pegasus.pirs.ldo.records import LinkRecord
+from pegasus.ldo.lags import LaggedFit, fit_lagged_links
+from pegasus.ldo.margins import GaussianField
+from pegasus.ldo.records import LinkRecord
 
 _MIN_N_EFF = 100
 

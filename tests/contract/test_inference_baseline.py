@@ -23,7 +23,7 @@ from pegasus.output.schemas import (
     required_nonempty_keys,
 )
 from pegasus.pirs.families import family_for_outcome
-from pegasus.pirs.hsic import select_hsic_mode
+from pegasus.ldo.hsic import select_hsic_mode
 from pegasus.pirs.schemas import FieldCandidate
 from pegasus.pirs.spatial import select_spatial_effect_mode
 

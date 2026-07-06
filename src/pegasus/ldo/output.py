@@ -12,7 +12,7 @@ from pathlib import Path
 
 import polars as pl
 
-from pegasus.pirs.ldo.records import LINK_RECORD_COLUMNS, LinkRecord
+from pegasus.ldo.records import LINK_RECORD_COLUMNS, LinkRecord
 
 _LIST_FIELDS = {"confounding_factor_refs", "warnings"}
 

@@ -178,7 +178,7 @@ def test_overlap_guard_is_live_through_run_investigate_and_absent_when_suppresse
     # Detailed corroboration on the re-typed record itself (Dengue codes ⊂ Arbovirus codes):
     # the overlap is demoted to descriptive, carries the Jaccard + shared-code warning, and
     # is stamped with the CID-10 code system by the provenance step.
-    from pegasus.pirs.ldo.orchestrator import run_ldo
+    from pegasus.ldo.orchestrator import run_ldo
     from pegasus.she.panel import compile_common_panel
 
     panel = compile_common_panel(run, resolution="year")
@@ -208,7 +208,7 @@ def test_disease_graph_gives_the_precision_solve_a_discounted_penalty(tmp_path: 
     graph = _disease_graph_from_meta(meta)
     assert graph is not None
 
-    from pegasus.pirs.ldo.disease_prior import disease_penalty_matrix
+    from pegasus.ldo.disease_prior import disease_penalty_matrix
 
     lam = 0.1
     penalty = disease_penalty_matrix(graph.codes, graph, lambda1=lam)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from pegasus.causal.orient import is_collider, orient_edge
-from pegasus.pirs.ldo.records import LinkRecord
+from pegasus.ldo.records import LinkRecord
 
 
 def _non_gaussian_cause_effect(seed: int, n: int = 800):

@@ -19,9 +19,9 @@ from typing import Any
 
 import numpy as np
 
-from pegasus.pirs.ldo.margins import GaussianField
-from pegasus.pirs.ldo.orchestrator import LDORun, run_ldo
-from pegasus.pirs.ldo.records import LinkRecord
+from pegasus.ldo.margins import GaussianField
+from pegasus.ldo.orchestrator import LDORun, run_ldo
+from pegasus.ldo.records import LinkRecord
 
 
 @dataclass

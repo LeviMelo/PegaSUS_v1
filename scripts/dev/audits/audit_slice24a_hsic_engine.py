@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from pegasus.pirs.hsic import run_hsic_scan
+from pegasus.ldo.hsic import run_hsic_scan
 
 
 def main() -> int:

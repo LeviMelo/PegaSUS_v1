@@ -25,8 +25,8 @@ import numpy as np
 from sklearn.covariance import graphical_lasso
 
 from pegasus.geo.spatial_graph import structural_cod6_adjacency
-from pegasus.pirs.ldo.covariance import pairwise_correlation
-from pegasus.pirs.ldo.margins import GaussianField
+from pegasus.ldo.covariance import pairwise_correlation
+from pegasus.ldo.margins import GaussianField
 
 
 @dataclass

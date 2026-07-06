@@ -33,7 +33,7 @@ GUARDED_STORAGE_FILES = {
 }
 
 GUARDED_COMPUTE_FILES = {
-    "src/pegasus/pirs/hsic.py",
+    "src/pegasus/ldo/hsic.py",
 }
 
 MAX_REPORTED_ERRORS = 20

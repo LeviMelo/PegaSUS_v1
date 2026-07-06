@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from pegasus.pirs.hsic import select_hsic_mode, residual_mode_for_hsic, validate_residual_mode_for_hsic, linear_hsic_statistic, run_hsic_scan
-from pegasus.pirs.nulls import (
+from pegasus.ldo.hsic import select_hsic_mode, residual_mode_for_hsic, validate_residual_mode_for_hsic, linear_hsic_statistic, run_hsic_scan
+from pegasus.ldo.nulls import (
     assert_monthly_null_preserves_season,
     descriptive_only_when_insufficient_blocks,
     generate_null_indices,
     select_null_regime,
 )
-from pegasus.pirs.fdr import correct_p_values
+from pegasus.ldo.fdr import correct_p_values
 from pegasus.pirs.nystrom import nystrom_diagnostics
 from pegasus.pirs.rff import rff_diagnostics
 

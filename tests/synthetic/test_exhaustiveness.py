@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.pirs.ldo.exhaustiveness import (
+from pegasus.ldo.exhaustiveness import (
     CoverageManifest,
     should_drill_down,
 )

@@ -20,7 +20,7 @@ import numpy as np
 from scipy.special import ndtri
 from scipy.stats import poisson
 
-from pegasus.pirs.ldo.assemble import LDOField
+from pegasus.ldo.assemble import LDOField
 
 _EPS = 1e-6
 

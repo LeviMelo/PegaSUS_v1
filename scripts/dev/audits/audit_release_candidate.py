@@ -15,7 +15,7 @@ from pegasus.datasus.cache import DatasusCache
 from pegasus.datasus.manifests import build_datasus_request_manifest
 from pegasus.datasus.subprocess import DatasusConfig, fetch_datasus_chunk
 from pegasus.output.validate import validate_output_bundle
-from pegasus.pirs.hsic import run_hsic_scan
+from pegasus.ldo.hsic import run_hsic_scan
 from pegasus.registries.validators import validate_registry_tree
 from pegasus.workflows.compile import run_compile
 

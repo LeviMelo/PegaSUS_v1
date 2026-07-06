@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.pirs.ldo.assemble import LDOField
-from pegasus.pirs.ldo.edges import type_mechanical_overlap
-from pegasus.pirs.ldo.orchestrator import run_ldo
-from pegasus.pirs.ldo.records import LinkRecord
+from pegasus.ldo.assemble import LDOField
+from pegasus.ldo.edges import type_mechanical_overlap
+from pegasus.ldo.orchestrator import run_ldo
+from pegasus.ldo.records import LinkRecord
 
 
 def test_high_overlap_edge_typed_mechanical() -> None:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from pegasus.pirs.ldo.records import LinkRecord
+from pegasus.ldo.records import LinkRecord
 
 
 class LDOCertificationError(ValueError):

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.pirs.ldo.margins import count_exposure_gaussianize, randomized_pit_gaussianize
+from pegasus.ldo.margins import count_exposure_gaussianize, randomized_pit_gaussianize
 
 
 def _abscorr(a: np.ndarray, b: np.ndarray) -> float:

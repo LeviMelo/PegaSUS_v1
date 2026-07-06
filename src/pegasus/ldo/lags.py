@@ -19,10 +19,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from pegasus.pirs.ldo.covariance import pairwise_correlation
-from pegasus.pirs.ldo.disease_prior import tile_penalty_across_lags
-from pegasus.pirs.ldo.margins import GaussianField
-from pegasus.pirs.ldo.lowrank import SparseLowRankFit, fit_sparse_plus_lowrank
+from pegasus.ldo.covariance import pairwise_correlation
+from pegasus.ldo.disease_prior import tile_penalty_across_lags
+from pegasus.ldo.margins import GaussianField
+from pegasus.ldo.lowrank import SparseLowRankFit, fit_sparse_plus_lowrank
 
 
 @dataclass

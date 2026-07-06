@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from pegasus.pirs.ldo.assemble import LDOField
+from pegasus.ldo.assemble import LDOField
 
 
 @dataclass(frozen=True)

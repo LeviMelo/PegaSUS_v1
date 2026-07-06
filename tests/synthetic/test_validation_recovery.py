@@ -9,7 +9,7 @@ test of separability adequacy that argument cannot settle.
 
 from __future__ import annotations
 
-from pegasus.pirs.ldo.orchestrator import run_ldo
+from pegasus.ldo.orchestrator import run_ldo
 from pegasus.validation.synthetic import (
     PlantedEdge,
     PlantedTruth,

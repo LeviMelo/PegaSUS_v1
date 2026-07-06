@@ -12,7 +12,7 @@ def test_slice28zc_slice28x_audit_is_scoped_to_closed_boundary_modules() -> None
     assert "GUARDED_STORAGE_FILES" in text
     assert "GUARDED_COMPUTE_FILES" in text
     assert "src/pegasus/output/sidra_denominator_anchor.py" in text
-    assert "src/pegasus/pirs/hsic.py" in text
+    assert "src/pegasus/ldo/hsic.py" in text
     assert "src/pegasus/output/table_io.py" not in text
     assert "src/pegasus/she/maternal_child_linkage.py" not in text
     assert "src/pegasus/she/population/sidra_anchor.py" not in text

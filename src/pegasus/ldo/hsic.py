@@ -8,7 +8,7 @@ import random
 from statistics import median
 from typing import Any, Literal
 
-from pegasus.pirs.nulls import generate_null_indices
+from pegasus.ldo.nulls import generate_null_indices
 from pegasus.compute.devices import resolve_torch_device
 from pegasus.compute.kernels import tensor_nbytes
 from pegasus.compute.torch_backend import torch_runtime

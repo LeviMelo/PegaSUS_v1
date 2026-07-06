@@ -23,7 +23,7 @@ def main() -> int:
         "src/pegasus/she/population/state_space.py",
         "src/pegasus/geo/geodata.py",
         "src/pegasus/she/stdfm/pipeline.py",
-        "src/pegasus/pirs/hsic.py",
+        "src/pegasus/ldo/hsic.py",
         "src/pegasus/datasus/client_microdatasus.py",
         "src/pegasus/workflows/ingest_datasus.py",
         "src/pegasus/workflows/ingest_sidra.py",

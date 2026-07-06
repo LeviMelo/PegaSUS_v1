@@ -17,10 +17,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pegasus.pirs.fdr import correct_p_values
-from pegasus.pirs.hsic import numpy_kernel_hsic_permutation_test
-from pegasus.pirs.ldo.margins import GaussianField
-from pegasus.pirs.ldo.records import LinkRecord
+from pegasus.ldo.fdr import correct_p_values
+from pegasus.ldo.hsic import numpy_kernel_hsic_permutation_test
+from pegasus.ldo.margins import GaussianField
+from pegasus.ldo.records import LinkRecord
 
 _MIN_N_EFF = 100
 

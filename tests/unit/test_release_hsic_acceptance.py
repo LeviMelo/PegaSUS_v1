@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 
-from pegasus.pirs.hsic import run_hsic_scan
+from pegasus.ldo.hsic import run_hsic_scan
 
 
 def test_release_hsic_signal_ranks_above_deterministic_null() -> None:

@@ -15,9 +15,9 @@ from typing import Any
 
 import polars as pl
 
-from pegasus.pirs.ldo.field_selection import analytical_variable_ids
-from pegasus.pirs.ldo.orchestrator import run_ldo
-from pegasus.pirs.ldo.output import write_hypotheses
+from pegasus.ldo.field_selection import analytical_variable_ids
+from pegasus.ldo.orchestrator import run_ldo
+from pegasus.ldo.output import write_hypotheses
 from pegasus.she.panel import Resolution, compile_common_panel
 
 # support.restrict_conditions ops whose ``value`` enumerates the codes a σ_C count

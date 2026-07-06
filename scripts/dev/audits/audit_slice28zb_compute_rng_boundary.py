@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-HSIC_PATH = ROOT / "src" / "pegasus" / "pirs" / "hsic.py"
+HSIC_PATH = ROOT / "src" / "pegasus" / "ldo" / "hsic.py"
 COMPUTE_RANDOM_PATH = ROOT / "src" / "pegasus" / "compute" / "random.py"
 
 FORBIDDEN_GLOBAL_TOKENS = (
@@ -26,9 +26,9 @@ def main() -> int:
     else:
         hsic_text = HSIC_PATH.read_text(encoding="utf-8")
         if "from pegasus.compute.random import torch_generator" not in hsic_text:
-            errors.append("pirs/hsic.py must import torch_generator from the compute boundary")
+            errors.append("ldo/hsic.py must import torch_generator from the compute boundary")
         if "torch_generator(torch, seed=seed, device=values.device)" not in hsic_text:
-            errors.append("pirs/hsic.py must route HSIC random-feature generators through torch_generator")
+            errors.append("ldo/hsic.py must route HSIC random-feature generators through torch_generator")
 
     if not COMPUTE_RANDOM_PATH.exists():
         errors.append(f"missing target: {_rel(COMPUTE_RANDOM_PATH)}")

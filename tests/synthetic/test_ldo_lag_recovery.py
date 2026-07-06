@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.pirs.ldo.assemble import LDOField
-from pegasus.pirs.ldo.orchestrator import run_ldo
+from pegasus.ldo.assemble import LDOField
+from pegasus.ldo.orchestrator import run_ldo
 
 
 def _planted_lag_field(

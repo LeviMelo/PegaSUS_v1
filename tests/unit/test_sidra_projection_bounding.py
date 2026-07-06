@@ -1,5 +1,5 @@
-from pegasus.sidra.category_maps import bounded_pushforward_scaffold
-from pegasus.sidra.projection import project_classification_to_axis
+from pegasus.sources.sidra.category_maps import bounded_pushforward_scaffold
+from pegasus.sources.sidra.projection import project_classification_to_axis
 from pegasus.denominators.reconstruction.schema import blocked_missing_population_contract, official_sidra_anchor_contract
 
 

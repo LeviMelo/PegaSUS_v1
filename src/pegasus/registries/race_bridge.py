@@ -8,7 +8,7 @@ import yaml
 
 from pegasus.core.hashing import sha256_file
 from pegasus.core.schemas import UserIntent
-from pegasus.efg.race_bridge import RaceBridgePrior, load_race_bridge_prior
+from pegasus.measurement.race import RaceBridgePrior, load_race_bridge_prior
 from pegasus.geo.uf import uf_from_datasus_cod6
 
 

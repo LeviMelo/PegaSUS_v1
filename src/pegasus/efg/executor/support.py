@@ -57,7 +57,7 @@ def _scope_prefixes_from_intent(intent: Any) -> "frozenset[str] | None":
 from pegasus.core.enums import MaterializationState
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.dag import EFGResult
-from pegasus.efg.race_bridge import (
+from pegasus.measurement.race import (
     bridge_admin_race_group_counts,
     load_race_bridge_prior,
 )

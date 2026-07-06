@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pegasus.efg.race_bridge import (
+from pegasus.measurement.race import (
     RaceBridgeCounts,
     RaceBridgeValidationError,
     fixedc_dynamic_weight_bridge,

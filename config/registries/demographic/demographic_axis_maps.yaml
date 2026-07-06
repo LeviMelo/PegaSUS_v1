@@ -41,7 +41,7 @@ axes:
     # declaration-process semantics are NOT compatible with IBGE self-declared
     # census race (MSD §3.7.4) -- a direct code->category crosswalk here would be
     # silent redistribution. DATASUS admin race must instead go through
-    # pegasus.efg.race_bridge (Bridge_R), never through map_category().
+    # pegasus.measurement.race (Bridge_R), never through map_category().
     source_columns:
       SIM-DO: race_color_admin
       SINASC: newborn_race_admin

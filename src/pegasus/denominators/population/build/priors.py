@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from pegasus.efg.race_bridge import RaceBridgePrior, bridge_admin_race_group_counts
+from pegasus.measurement.race import RaceBridgePrior, bridge_admin_race_group_counts
 from pegasus.registries.demographic_axis import TOTAL, age_group_for_years
 
 from pegasus.denominators.population.build.indexing import *  # noqa: F401,F403 (intra-package base layer)

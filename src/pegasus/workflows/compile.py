@@ -19,7 +19,7 @@ from pegasus.output.reproducibility import RunTelemetry, write_reproducibility_m
 from pegasus.output.bundle_manager import OutputBundleManager
 from pegasus.output.validate import validate_output_bundle
 from pegasus.registries.race_bridge import RaceBridgePlan, RaceBridgeRegistryError, resolve_race_bridge_plan
-from pegasus.efg.race_bridge import load_race_bridge_prior
+from pegasus.measurement.race import load_race_bridge_prior
 from pegasus.she.substrate import SourceArtifactRef, build_substrate_bundle, load_source_artifacts_from_manifest
 
 

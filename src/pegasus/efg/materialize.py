@@ -350,7 +350,7 @@ def _sidra_population_anchor_field(bundle: SubstrateBundle) -> SubstrateMaterial
 def _sidra_context_materialized_fields(bundle: SubstrateBundle) -> list[SubstrateMaterializedField]:
     """Admit SIDRA context facts (curated socioeconomic compendium) as context_gradient
     fields (MSD §3.10.7 V_X), regime-classified at the §2.9 boundary."""
-    from pegasus.she.sidra_context import build_sidra_context_fields
+    from pegasus.sources.sidra.sidra_context import build_sidra_context_fields
 
     out: list[SubstrateMaterializedField] = []
     for artifact in bundle.source_artifacts:

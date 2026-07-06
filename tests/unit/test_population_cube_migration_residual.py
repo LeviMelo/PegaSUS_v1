@@ -121,7 +121,7 @@ def test_maternal_race_fills_in_for_missing_newborn_race(tmp_path: Path):
     must still be race-placeable via the maternal fallback (MSD §2.8.5 r_n|r_m),
     not dropped as unbridgeable."""
     from pegasus.denominators.population.build import _sinasc_birth_priors
-    from pegasus.efg.race_bridge import load_race_bridge_prior
+    from pegasus.measurement.race import load_race_bridge_prior
 
     prior = load_race_bridge_prior("config/priors/race_bridge/fixedC_sim_admin_to_ibge_selfdeclared_v1.json")
     sinasc = pl.DataFrame({

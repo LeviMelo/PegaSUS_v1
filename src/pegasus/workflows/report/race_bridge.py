@@ -7,7 +7,7 @@ from typing import Any
 from pegasus.output.table_io import append_replace_rows, write_rows
 from pegasus.output.validate import validate_output_bundle
 from pegasus.core.schemas import UserIntent
-from pegasus.efg.race_bridge import (
+from pegasus.measurement.race import (
     fixedc_dynamic_weight_bridge,
     load_race_bridge_prior,
     summarize_sim_admin_race_counts,

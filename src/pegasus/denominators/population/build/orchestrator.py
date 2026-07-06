@@ -17,7 +17,7 @@ import numpy as np
 import polars as pl
 
 from pegasus.core.hashing import content_hash, sha256_file
-from pegasus.efg.race_bridge import RaceBridgePrior, bridge_admin_race_group_counts, load_race_bridge_prior
+from pegasus.measurement.race import RaceBridgePrior, bridge_admin_race_group_counts, load_race_bridge_prior
 from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, age_group_for_years, age_group_sort_key, map_category
 from pegasus.registries.population import assert_dense_population_tensor_allowed, select_population_solver
 from pegasus.denominators.reconstruction.diagnostics import population_tensor_diagnostics
@@ -76,7 +76,7 @@ SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE = "343"
 # MSD §2.8.5/§2.8.6: administrative race/color (SIM race_color_admin, SINASC
 # newborn_race_admin) is declaration-process incompatible with this tensor's
 # self-declared IBGE race axis (§3.7.4) -- it may only enter a race-stratified
-# cell through pegasus.efg.race_bridge, never a direct category crosswalk.
+# cell through pegasus.measurement.race, never a direct category crosswalk.
 # When the race axis is real (not the degenerate TOTAL-only case) and no bridge
 # prior was supplied, DATASUS-origin priors are left out of that axis entirely
 # rather than silently collapsed onto an unmodeled TOTAL cell.

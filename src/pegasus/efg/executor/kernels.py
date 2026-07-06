@@ -15,7 +15,7 @@ import polars as pl
 from pegasus.core.enums import MaterializationState
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.dag import EFGResult
-from pegasus.efg.race_bridge import (
+from pegasus.measurement.race import (
     bridge_admin_race_group_counts,
     load_race_bridge_prior,
 )
@@ -74,7 +74,7 @@ def _count_tensor(field: FieldNode, source: Path) -> pl.DataFrame:
                     # group, so the SELF-DECLARED race count divides the self-declared
                     # population. Posterior counts are a bridge estimate, NOT a raw
                     # observation -- the field carries the bridge's epistemic warnings.
-                    from pegasus.efg.race_bridge import (
+                    from pegasus.measurement.race import (
                         bridge_admin_race_group_counts,
                         load_race_bridge_prior,
                     )

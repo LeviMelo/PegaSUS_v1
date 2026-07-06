@@ -22,8 +22,8 @@ import polars as pl
 from pegasus.core.schemas import FieldNode
 from pegasus.efg.lineage import lineage_hash, make_lineage
 from pegasus.efg.node import make_field_node
-from pegasus.sidra.regime import classify_sidra_context_regime
-from pegasus.she.sidra_projection import project_and_bound_context_facts
+from pegasus.sources.sidra.regime import classify_sidra_context_regime
+from pegasus.sources.sidra.sidra_projection import project_and_bound_context_facts
 from pegasus.she.stdfm.pipeline import run_stdfm_pipeline
 from pegasus.she.stdfm.schema import STDFMProblem, build_stdfm_input_schema
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pegasus.sidra.category_maps import bounded_pushforward_scaffold
+from pegasus.sources.sidra.category_maps import bounded_pushforward_scaffold
 
 if TYPE_CHECKING:
     import polars as pl
@@ -96,7 +96,7 @@ def execute_bounded_pushforward(
     require_bounded_pushforward(bound)
     if bound.status == "not_required":
         return frame
-    from pegasus.sidra.pushforward import (
+    from pegasus.sources.sidra.pushforward import (
         execute_additive_pushforward,
         execute_rate_pushforward,
     )

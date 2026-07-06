@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from pegasus.efg.race_bridge import (
+from pegasus.measurement.race import (
     RaceBridgeCounts,
     fixedc_dynamic_weight_bridge,
     load_race_bridge_prior,

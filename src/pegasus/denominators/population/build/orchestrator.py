@@ -467,11 +467,23 @@ def solve_population_tensor_from_sidra_strata(
     else:
         from pegasus.denominators.reconstruction.projected_gradient import (
             PopulationOptimizationResult,
+            _fast_projection_supported,
+            _np_project_population,
             _project_population,
         )
-        projected = _project_population(problem, list(prior_mean))
+        # §V.1: the data-poor Layer-1 optimum is just the closure-simplex projection of the
+        # prior mean. Do it vectorized on the numpy array — never `list(prior_mean)` (a ~4GB
+        # Python-object list at national scale) fed to the per-cell pure-Python projector
+        # (minutes). Byte-identical (both Duchi simplex); the Python path is the fallback for
+        # the rare hard-anchor/migration-equality case the fast path doesn't cover.
+        prior_np = np.asarray(prior_mean, dtype=np.float64)
+        projected = (
+            _np_project_population(problem, prior_np)
+            if _fast_projection_supported(problem)
+            else np.asarray(_project_population(problem, prior_np.tolist()), dtype=np.float64)
+        )
         optimized = PopulationOptimizationResult(
-            population=np.asarray(projected, dtype=np.float64),
+            population=projected,
             migration=np.zeros(n_cells, dtype=np.float64),
             telemetry=PopulationSolverTelemetry(
                 converged=True, iterations=0,

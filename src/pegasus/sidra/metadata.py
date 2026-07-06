@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -332,21 +333,35 @@ def write_normalized_metadata_tables(
     return outputs
 
 
-def read_normalized_metadata_tables(input_dir: str | Path) -> SIDRAMetadata:
-    input_dir = Path(input_dir)
+_METADATA_TABLE_FILES = (
+    "sidra_tables.parquet",
+    "sidra_variables.parquet",
+    "sidra_classifications.parquet",
+    "sidra_categories.parquet",
+    "sidra_periods.parquet",
+    "sidra_localities.parquet",
+)
 
-    required = [
-        "sidra_tables.parquet",
-        "sidra_variables.parquet",
-        "sidra_classifications.parquet",
-        "sidra_categories.parquet",
-        "sidra_periods.parquet",
-        "sidra_localities.parquet",
-    ]
-    missing = [name for name in required if not (input_dir / name).exists()]
+
+def read_normalized_metadata_tables(input_dir: str | Path) -> SIDRAMetadata:
+    """Parse the normalized SIDRA metadata tables into a :class:`SIDRAMetadata`.
+
+    Memoized by directory + mtime: a national run calls this ~135× (per UF × per
+    acquirer) on identical inputs, and each call re-read 6 parquets and rebuilt every
+    ``SIDRATableMetadata`` — a live stack showed the acquire stalled here. The mtime key
+    auto-invalidates after ``write_normalized_metadata_tables``. Treat the result as
+    read-only (it is shared)."""
+    input_dir = Path(input_dir)
+    missing = [name for name in _METADATA_TABLE_FILES if not (input_dir / name).exists()]
     if missing:
         raise FileNotFoundError(f"Missing normalized SIDRA metadata tables: {missing}")
+    mtime_ns = max((input_dir / name).stat().st_mtime_ns for name in _METADATA_TABLE_FILES)
+    return _read_normalized_metadata_cached(str(input_dir), mtime_ns)
 
+
+@lru_cache(maxsize=8)
+def _read_normalized_metadata_cached(input_dir_str: str, _mtime_ns: int) -> SIDRAMetadata:
+    input_dir = Path(input_dir_str)
     tables_df = pl.read_parquet(input_dir / "sidra_tables.parquet")
     vars_df = pl.read_parquet(input_dir / "sidra_variables.parquet")
     cls_df = pl.read_parquet(input_dir / "sidra_classifications.parquet")

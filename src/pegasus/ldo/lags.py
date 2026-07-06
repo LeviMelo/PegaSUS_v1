@@ -68,6 +68,7 @@ def fit_lagged_links(
     min_coverage: int = 30,
     min_overlap: int = 20,
     disease_penalty: np.ndarray | None = None,
+    spatial_whiten: bool = True,
 ) -> LaggedFit:
     """Fit the time-extended precision (missing-aware) and read off directed lagged links.
 
@@ -78,9 +79,28 @@ def fit_lagged_links(
     ``disease_penalty`` (``p×p``, over the base variables) supplies the disease-axis
     prior (§II.6/§5.2): it is tiled across the lag blocks and subset to the kept
     features so related-disease links (at any lag) get a lower ℓ1 penalty.
+
+    ``spatial_whiten`` (§III.4(3/5), §V.2) removes spatial autocorrelation before the
+    precision estimate by GMRF-whitening each variable/time slice across space by
+    ``Σ_space^{-1/2} = (κI + L_W)^{1/2}`` (the SpatialWeightGraph Laplacian). Without
+    it, ``Ω_var`` is estimated from correlations that still carry spatial
+    autocorrelation — the dominant municipal-scale confounder, so two variables that
+    merely co-cluster in space read as a spurious direct link. Whitening imputes the
+    Gaussian margin mean (0) at missing cells (a dense op cannot honour per-cell
+    missingness); where the field's municipalities are absent from the adjacency the
+    Laplacian term is empty and whitening reduces to a κ-scaling (a no-op at κ=1).
     """
     p = len(field.variables)
-    feat = _build_lagged_feature_matrix(field.Z, K)  # (p*(K+1), n)
+    Z = field.Z
+    if spatial_whiten and field.Z.shape[1] > 1:
+        from pegasus.ldo.precision import (
+            _matrix_sqrt_psd,
+            _whiten_spatial,
+            build_spatial_precision,
+        )
+        Q_space = build_spatial_precision(field.space_ids, kappa=kappa)
+        Z = _whiten_spatial(Z, _matrix_sqrt_psd(Q_space))
+    feat = _build_lagged_feature_matrix(Z, K)  # (p*(K+1), n)
     pw = pairwise_correlation(feat, min_coverage=min_coverage, min_overlap=min_overlap)
     kept = pw.kept
     pos = {f: a for a, f in enumerate(kept)}  # feature index → matrix position

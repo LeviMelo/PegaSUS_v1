@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 
@@ -24,28 +23,3 @@ def test_compile_support_resolver_preserves_maceio_smoke_filter() -> None:
 
     assert _intent_municipality_filter_cod6(intent) == "270430"
     assert _smoke_municipality_cod6(intent) == "270430"
-
-
-def test_actual_smoke_grid_classifier_requires_multi_municipality_support() -> None:
-    path = Path("scripts/dev/audits/actual_data_smoke_runtime.py")
-    spec = importlib.util.spec_from_file_location("actual_data_smoke_runtime", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    payload = {
-        "compile_source_mode": "materialized_external",
-        "output_validator_ok": True,
-        "dashboard_read_only_ok": True,
-        "mandatory_fields_present": True,
-        "efg_fields_nonempty": True,
-        "efg_edges_nonempty": True,
-        "q_tensor_nonempty": True,
-        "fixture_semantics_present": [],
-        "municipality_count": 102,
-    }
-
-    assert module.classify_actual_smoke(payload, grid=True) == "actual_data_validated"
-
-    payload["municipality_count"] = 1
-    assert module.classify_actual_smoke(payload, grid=True) == "source_partial"

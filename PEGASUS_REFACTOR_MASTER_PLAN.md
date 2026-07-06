@@ -25,6 +25,36 @@ that changes an MSD-III contract or public API happens without a test gate.
 
 ---
 
+## EXECUTION STATUS (executed 2026-07-05; baseline 377 → 345 tests passing, green at every step)
+
+Executed test-gated, incrementally committed (`5abdcb0..HEAD`), each step independently re-verified
+(git state + import smoke + full suite) before commit. Net **−4,881 LOC** in `src/`.
+
+- **§1 Dead code — DONE.** Phase A (`49a58f1`): 14 modules, 471 LOC. Phase B: PIRS slice-zoo
+  (`881141c`, 15 modules ~4,577 LOC) + EFG promotion half (`cd98941`, ~680 LOC). **Deviations
+  (evidence-driven, safer than plan):** KEPT `families/spatial/schemas/nystrom/rff` (live via T0-4
+  contract + test_hsic_foundation — plan said delete); KEPT `materialization_manifest` (build_efg
+  imports it live — plan's "delete" was WRONG). §1b stragglers HELD (task #27).
+- **§2 Megazords — ALL 5 DONE.** executor (`8a02112`), build (`ff75a03`), pipeline 1322→521
+  (`5f3807b`), compile god-fn→44 LOC (`20940c1`), dag (`60971db`). Behavior-preserving; STORE-02,
+  `_cell_index` centralization, the redundant-bridge-pass removal, and constant-dedup all deferred
+  (behavior-changing, not code motion). `validate.py` correctly untouched.
+- **§3 Tree reorg — §3c DONE, REG-07 flagged.** LDO-06 `pirs/ldo`→`ldo/` (`ff8bbf4`); data plane
+  →`denominators/` (`b985a9f`); `sources/` + `measurement/` planes (`791c678`). **REG-07 deliberately
+  NOT rushed:** the registries/ "two loader stacks" are actually 3 distinct decode-path loader
+  CONTRACTS (generic/semantic/loader) + 15 legitimate payload accessors; unifying them is a
+  return-type-contract rewrite with silent-corruption risk, not code motion → task #28 (dedicated,
+  decode-validated).
+- **§4 Arch gaps — the two conformance fixes DONE.** §4.1 run_investigate disease wiring
+  (`5224b69`, revert-proof test — DIS-04 prior + §III.8 overlap guard now LIVE; caught two plan traps:
+  variable_grammar is orphaned/real vars are σ_C counts, and a code-keyed graph is a silent no-op →
+  added `DiseaseGraph.from_variable_code_sets`). §4.2 Q-tensor Kish n_eff (`bd6aead`, pinned). The
+  greenfield builds (§4.3 Zika, §4.4 MR-01, §4.5 GPU, §4.6 randnla, §4.7 APC/STORE-02, §4.8 causal,
+  §4.9 RACE-01, §4.1 exposure) DEFERRED per user decision (task #29) — new numerical/feature work
+  needing real validation, not an autonomous refactor tail.
+
+---
+
 ## 0. TL;DR — the four things that matter
 
 1. **~1,340 LOC of dead code deletes today with zero breakage** (registry wrappers, dead

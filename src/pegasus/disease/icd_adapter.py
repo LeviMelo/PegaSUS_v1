@@ -47,6 +47,29 @@ def cid10_chapter(code: str) -> str | None:
     return None
 
 
+# CID-10 blocks for categories the WHO ICD-10 (2019 edition, backing ``simple-icd-10``) dropped
+# but Brazilian CID-10 (the DATASUS authority, §II.13.2) retains. WHO-2019 restructured the
+# arbovirus block: A90/A91 (dengue, dengue haemorrhagic — Brazil's highest-burden arbovirus)
+# were folded into A97, and U06 (the 2016 Zika emergency code) was retired. ``simple-icd-10``
+# therefore returns ``block=None`` for these codes, silently collapsing DiseaseGraph's same-block
+# (0.5) structural tier to same-chapter (0.25) for the arbovirus cluster. This declared gap table
+# restores the honest CID-10 block WITHOUT coercing the code to a WHO subcode (the code stays
+# ``source_system_specific``). NOTE: WHO labels the same arbovirus block ``A92-A99`` (it dropped
+# the first two categories), so a dengue(A90)↔chikungunya(A92) pair is same-chapter, not same-block,
+# under honest labels — an acceptable, documented consequence (see docs/ICD_LIBRARY_REVIEW.md).
+# Extend this table as further WHO-absent CID-10 categories surface.
+_CID10_ABSENT_BLOCKS: dict[str, str] = {
+    "A90": "A90-A99",  # dengue fever [classical dengue]
+    "A91": "A90-A99",  # dengue haemorrhagic fever
+    "U06": "U00-U49",  # Zika virus disease (2016 WHO emergency-use code)
+}
+
+
+def cid10_block(code: str) -> str | None:
+    """CID-10 block of a WHO-absent code from the declared gap table (None if not a known gap)."""
+    return _CID10_ABSENT_BLOCKS.get(_clean(code).replace(".", "")[:3])
+
+
 @dataclass(frozen=True)
 class ICDCodeInfo:
     """Provenance-typed view of a single code against the WHO ICD-10 hierarchy."""
@@ -185,7 +208,8 @@ def code_info(code: str) -> ICDCodeInfo:
         status: CodeSystemStatus = "source_system_specific" if looks_icd else "malformed"
         return ICDCodeInfo(raw=code, normalized=(add_dot(cleaned) if looks_icd else None),
                            status=status, is_leaf=False,
-                           chapter=(cid10_chapter(cleaned) if looks_icd else None), block=None,
+                           chapter=(cid10_chapter(cleaned) if looks_icd else None),
+                           block=(cid10_block(cleaned) if looks_icd else None),
                            category=(cleaned[:3] if looks_icd else None))
     normalized = add_dot(cleaned)
     chain = ancestors(cleaned)
@@ -199,6 +223,8 @@ def code_info(code: str) -> ICDCodeInfo:
 __all__ = [
     "ICDCodeInfo",
     "CodeSystemStatus",
+    "cid10_chapter",
+    "cid10_block",
     "add_dot",
     "remove_dot",
     "is_valid_who",

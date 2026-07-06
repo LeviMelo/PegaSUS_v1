@@ -1,0 +1,41 @@
+schema_version: "1.0"
+registry_id: reference_populations
+description: >-
+  Standard reference populations for direct age-standardization of mortality/incidence
+  rates (MSD-III §II.9 measurement). Weights are per-100,000 over 5-year age groups
+  (0-4 ... 85+). Direct-standardized rate ASR = sum_g (r_g * w_g) / sum_g w_g, where r_g
+  is the age-group-specific rate and w_g the reference weight.
+registry_version: "2026-07-06"
+provenance:
+  who_world_2000_2025: "WHO World Standard Population (Ahmad et al. 2001, GPE Discussion Paper 31) — the international comparability standard."
+  segi_world: "Segi (1960) world standard, as revised by Doll — legacy international standard, retained for older-literature comparability."
+  brazil_2010_census: "Brazil 2010 Census age structure (IBGE) — national reference for internal Brazilian comparisons."
+
+age_group_bounds:   # [lo, hi] inclusive single-year age; last is open-ended 85+
+  - {group: "0-4",   lo: 0,  hi: 4}
+  - {group: "5-9",   lo: 5,  hi: 9}
+  - {group: "10-14", lo: 10, hi: 14}
+  - {group: "15-19", lo: 15, hi: 19}
+  - {group: "20-24", lo: 20, hi: 24}
+  - {group: "25-29", lo: 25, hi: 29}
+  - {group: "30-34", lo: 30, hi: 34}
+  - {group: "35-39", lo: 35, hi: 39}
+  - {group: "40-44", lo: 40, hi: 44}
+  - {group: "45-49", lo: 45, hi: 49}
+  - {group: "50-54", lo: 50, hi: 54}
+  - {group: "55-59", lo: 55, hi: 59}
+  - {group: "60-64", lo: 60, hi: 64}
+  - {group: "65-69", lo: 65, hi: 69}
+  - {group: "70-74", lo: 70, hi: 74}
+  - {group: "75-79", lo: 75, hi: 79}
+  - {group: "80-84", lo: 80, hi: 84}
+  - {group: "85+",   lo: 85, hi: 200}
+
+references:
+  who_world_2000_2025:
+    weights: [8860, 8690, 8600, 8470, 8220, 7930, 7610, 7150, 6590, 6040, 5370, 4550, 3720, 2960, 2210, 1520, 910, 635]
+  segi_world:
+    weights: [12000, 10000, 9000, 9000, 8000, 8000, 6000, 6000, 6000, 6000, 5000, 4000, 4000, 3000, 2000, 1000, 500, 500]
+  brazil_2010_census:
+    # IBGE 2010 census resident population by 5-year age group, in thousands (both sexes).
+    weights: [14017, 14969, 17167, 16990, 17245, 15734, 13902, 13123, 11669, 10171, 8667, 6976, 5333, 4157, 3239, 2325, 1550, 1146]

@@ -131,6 +131,26 @@ def _acquire_sidra_for_uf(
     return arts, len(ctx)
 
 
+def _national_datasus_cached(systems: list[str], data_root: Path) -> list[SourceArtifact] | None:
+    """Inspected national DATASUS artifacts iff EVERY requested system already has its
+    combined national ``processed_events`` file (§V.7(3): don't re-materialize a cached
+    layer). Lets a national re-run skip the per-UF re-acquire+normalize+combine entirely —
+    the dominant cost of a warm run (per-UF SIM re-normalize was ~20min / ~19GB). Returns
+    ``None`` (do the full per-UF acquire) if any system's national artifact is missing."""
+    arts: list[SourceArtifact] = []
+    for system in systems:
+        out = data_root / "normalized" / "national" / f"{system}__processed_events.parquet"
+        if not out.exists():
+            return None
+        arts.append(
+            inspect_source_artifact(
+                path=out, source_system=system, artifact_role="processed_events",
+                provenance_mode="materialized_external", source_manifest_hash=sha256_file(out),
+            )
+        )
+    return arts
+
+
 def _acquire_national(
     *, intent: UserIntent, ufs: list[str], systems: list[str], years: str,
     data_root: Path, sidra_metadata_dir: Path,
@@ -138,7 +158,10 @@ def _acquire_national(
 ) -> tuple[list[SourceArtifact], list[SourceArtifact], dict[str, Any]]:
     """National acquisition (SCALE-01): acquire every UF, then combine into national
     per-(system,role) artifacts. DATASUS runs per UF (R subprocess, internally parallel); SIDRA is
-    fetched for all UFs CONCURRENTLY (no rate limit -- only the cell cap) and concatenated."""
+    fetched for all UFs CONCURRENTLY (no rate limit -- only the cell cap) and concatenated.
+
+    Warm-run fast path: if the national DATASUS artifacts already exist they are inspected
+    directly (the per-UF re-acquire+normalize+combine is skipped)."""
     from concurrent.futures import ThreadPoolExecutor
 
     from pegasus.workflows.pipeline import _acquire_datasus
@@ -147,10 +170,12 @@ def _acquire_national(
     per_uf_sidra: list[SourceArtifact] = []
     compendium_summary: dict[str, Any] = {"status": "national_per_uf_combined", "artifact_count": 0}
 
-    for uf in ufs:
-        per_uf_datasus.extend(
-            _acquire_datasus(systems=systems, uf=uf, years=years, data_root=data_root, client=datasus_client)
-        )
+    datasus_cached = _national_datasus_cached(systems, data_root) if systems else []
+    if datasus_cached is None:
+        for uf in ufs:
+            per_uf_datasus.extend(
+                _acquire_datasus(systems=systems, uf=uf, years=years, data_root=data_root, client=datasus_client)
+            )
 
     # Warm the SIDRA metadata cache ONCE (single-threaded) so the parallel UF fetches only READ it --
     # otherwise 6 workers could race to fetch+write the same table metadata.
@@ -174,7 +199,9 @@ def _acquire_national(
         per_uf_sidra.extend(arts)
         compendium_summary["artifact_count"] += ctx_count
 
-    datasus_national = _combine_national_artifacts(per_uf_datasus, data_root=data_root)
+    datasus_national = datasus_cached if datasus_cached else _combine_national_artifacts(per_uf_datasus, data_root=data_root)
+    if datasus_cached:
+        compendium_summary["datasus"] = "national_artifacts_cache_hit"
     sidra_national = _combine_national_artifacts(per_uf_sidra, data_root=data_root)
     return datasus_national, sidra_national, compendium_summary
 

@@ -184,38 +184,31 @@ def _sim_death_priors(
     if grouped is None:
         return None, [warning] if warning else []
 
-    values: list[float | None] = [None] * (shape[0] * shape[1] * shape[2] * shape[3] * shape[4])
-    for row in grouped.iter_rows(named=True):
-        locality = str(row["municipality_cod6"])
-        period = str(row["year"])
-        sex = str(row["__sex__"])
-        age_group = str(row["__age_group__"])
-        race = str(row["__race__"])
-        if (
-            locality not in locality_index
-            or period not in period_index
-            or sex not in sex_index
-            or age_group not in age_index
-            or race not in race_index
-        ):
-            continue
-        idx = _cell_index(
-            locality=locality,
-            period=period,
-            age_group=age_group,
-            sex=sex,
-            race=race,
-            locality_index=locality_index,
-            period_index=period_index,
-            age_index=age_index,
-            sex_index=sex_index,
-            race_index=race_index,
-            shape=shape,
-        )
-        values[idx] = (values[idx] or 0.0) + float(row["__count__"])
-    if not any(value is not None for value in values):
+    # Vectorized scatter (§V.1): the flat cell index is computed for all grouped rows at once and
+    # scatter-added, so the O(n_cells) death prior is a single float64 array (NaN = absent, was None)
+    # instead of a ~1 GB Python None-list filled by per-row _cell_index calls. The flat-index
+    # arithmetic ((((s*T)+t)*A+a)*X+x)*R+r reproduces _cell_index's (s,t,a,x,r) layout exactly; the
+    # zero-init + np.add.at accumulation matches the old ``(values[idx] or 0.0) + count``; unset cells
+    # become NaN, the absent sentinel every consumer already treats identically to the old None.
+    s_count, t_count, a_count, x_count, r_count = shape
+    n_cells = s_count * t_count * a_count * x_count * r_count
+    n_rows = grouped.height
+    li = np.fromiter((locality_index.get(str(v), -1) for v in grouped["municipality_cod6"]), dtype=np.int64, count=n_rows)
+    pi = np.fromiter((period_index.get(str(v), -1) for v in grouped["year"]), dtype=np.int64, count=n_rows)
+    ai = np.fromiter((age_index.get(str(v), -1) for v in grouped["__age_group__"]), dtype=np.int64, count=n_rows)
+    xi = np.fromiter((sex_index.get(str(v), -1) for v in grouped["__sex__"]), dtype=np.int64, count=n_rows)
+    ri = np.fromiter((race_index.get(str(v), -1) for v in grouped["__race__"]), dtype=np.int64, count=n_rows)
+    counts = np.fromiter((float(v) for v in grouped["__count__"]), dtype=np.float64, count=n_rows)
+    valid = (li >= 0) & (pi >= 0) & (ai >= 0) & (xi >= 0) & (ri >= 0)
+    flat_idx = (((li * t_count + pi) * a_count + ai) * x_count + xi) * r_count + ri
+    values = np.zeros(n_cells, dtype=np.float64)
+    np.add.at(values, flat_idx[valid], counts[valid])
+    touched = np.zeros(n_cells, dtype=bool)
+    touched[flat_idx[valid]] = True
+    if not touched.any():
         return None, []
-    return tuple(values), []
+    values[~touched] = np.nan  # NaN = no death prior for that cell (was None)
+    return values, []
 
 
 def _sinasc_birth_priors(
@@ -268,32 +261,28 @@ def _sinasc_birth_priors(
     if grouped is None:
         return None, [warning] if warning else []
 
-    n = len(locality_index) * t_count * x_count * r_count
-    values: list[float | None] = [None] * n
-    for row in grouped.iter_rows(named=True):
-        locality = str(row["municipality_cod6"])
-        period = str(row["year"])
-        sex = str(row["__sex__"])
-        race = str(row["__race__"])
-        if locality not in locality_index or period not in period_index or sex not in sex_index or race not in race_index:
-            continue
-        idx = _birth_cell_index(
-            locality=locality,
-            period=period,
-            sex=sex,
-            race=race,
-            locality_index=locality_index,
-            period_index=period_index,
-            sex_index=sex_index,
-            race_index=race_index,
-            t_count=t_count,
-            x_count=x_count,
-            r_count=r_count,
-        )
-        values[idx] = (values[idx] or 0.0) + float(row["__count__"])
-    if not any(value is not None for value in values):
+    # Vectorized scatter (§V.1): the birth support has no age axis, so the flat index is
+    # ((s*T+t)*X+x)*R+r -- _birth_cell_index's (s,t,x,r) layout, computed for all grouped rows at
+    # once and scatter-added into one float64 array (NaN = absent, was None). Same zero-init +
+    # np.add.at accumulation as the old ``(values[idx] or 0.0) + count``.
+    s_count = len(locality_index)
+    n = s_count * t_count * x_count * r_count
+    n_rows = grouped.height
+    li = np.fromiter((locality_index.get(str(v), -1) for v in grouped["municipality_cod6"]), dtype=np.int64, count=n_rows)
+    pi = np.fromiter((period_index.get(str(v), -1) for v in grouped["year"]), dtype=np.int64, count=n_rows)
+    xi = np.fromiter((sex_index.get(str(v), -1) for v in grouped["__sex__"]), dtype=np.int64, count=n_rows)
+    ri = np.fromiter((race_index.get(str(v), -1) for v in grouped["__race__"]), dtype=np.int64, count=n_rows)
+    counts = np.fromiter((float(v) for v in grouped["__count__"]), dtype=np.float64, count=n_rows)
+    valid = (li >= 0) & (pi >= 0) & (xi >= 0) & (ri >= 0)
+    flat_idx = ((li * t_count + pi) * x_count + xi) * r_count + ri
+    values = np.zeros(n, dtype=np.float64)
+    np.add.at(values, flat_idx[valid], counts[valid])
+    touched = np.zeros(n, dtype=bool)
+    touched[flat_idx[valid]] = True
+    if not touched.any():
         return None, []
-    return tuple(values), []
+    values[~touched] = np.nan  # NaN = no birth prior for that cell (was None)
+    return values, []
 
 
 def _census_race_composition_prior(

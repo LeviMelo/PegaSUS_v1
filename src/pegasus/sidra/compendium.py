@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -88,7 +89,10 @@ class BlockedCompendiumTable:
         return {"table_id": self.table_id, "reason": self.reason}
 
 
+@lru_cache(maxsize=4)
 def load_sidra_compendium(path: str | Path = "config/registries/sidra/sidra_compendium.json") -> tuple[CompendiumTable, ...]:
+    # Cached by path: the compendium JSON is static within a run and loaded repeatedly (per UF, per
+    # metadata ensure). Returns an immutable tuple of frozen dataclasses — safe to share read-only.
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     tables = payload.get("tables") or {}
     order = payload.get("table_order") or sorted(tables)

@@ -82,12 +82,15 @@ def _combine_national_artifacts(
     (source_system, artifact_role) feeds the national source manifest.
     """
     from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor
 
     groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
     for art in per_uf_artifacts:
         groups[(art.source_system, art.artifact_role)].append(Path(art.path))
-    national: list[SourceArtifact] = []
-    for (system, role), paths in sorted(groups.items()):
+    ordered_groups = sorted(groups.items())
+
+    def _combine_one(item: tuple[tuple[str, str], list[Path]]) -> SourceArtifact:
+        (system, role), paths = item
         out = data_root / "normalized" / "national" / f"{system}__{role}.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -95,13 +98,18 @@ def _combine_national_artifacts(
         except Exception:
             # sink not available for this frame shape → eager concat fallback
             pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed").write_parquet(out, compression="zstd")
-        national.append(
-            inspect_source_artifact(
-                path=out, source_system=system, artifact_role=role,
-                provenance_mode="materialized_external", source_manifest_hash=sha256_file(out),
-            )
+        return inspect_source_artifact(
+            path=out, source_system=system, artifact_role=role,
+            provenance_mode="materialized_external", source_manifest_hash=sha256_file(out),
         )
-    return national
+
+    # Each (system, role) group is an independent streaming sink to a distinct output path;
+    # overlap them (polars releases the GIL during scan/sink, per-group RAM stays bounded).
+    # ``pool.map`` preserves the sorted group order in the returned artifact list.
+    if len(ordered_groups) <= 1:
+        return [_combine_one(item) for item in ordered_groups]
+    with ThreadPoolExecutor(max_workers=len(ordered_groups), thread_name_prefix="datasus-national-combine") as pool:
+        return list(pool.map(_combine_one, ordered_groups))
 
 
 # How many UFs to fetch SIDRA for CONCURRENTLY. SIDRA has no request-rate limit (only a per-request

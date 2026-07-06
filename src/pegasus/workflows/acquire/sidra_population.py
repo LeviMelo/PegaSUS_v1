@@ -88,6 +88,18 @@ _SIDRA_CHUNK_CONCURRENCY = 16
 _SIDRA_MAX_CELLS_PER_REQUEST = 49_900
 
 
+def _combine_facts_parquet(parts: list[Path], out_path: Path) -> Path:
+    """Concatenate per-chunk fact parquets into one, STREAMING (§V.1): lazy scan -> sink so a
+    large UF's chunks never all materialize in RAM at once (mirrors ``sidra_national._combine_
+    national_artifacts``). Falls back to an eager concat for frame shapes ``sink_parquet`` rejects.
+    Byte-identical output either way (same rows, same order, ``vertical_relaxed`` schema union)."""
+    try:
+        pl.concat([pl.scan_parquet(p) for p in parts], how="vertical_relaxed").sink_parquet(out_path, compression="zstd")
+    except Exception:
+        pl.concat([pl.read_parquet(p) for p in parts], how="vertical_relaxed").write_parquet(out_path, compression="zstd")
+    return out_path
+
+
 def _population_tensor_requested(intent: UserIntent) -> bool:
     return intent.population_mode in {"independent_population_tensor", "sim_informed_population_tensor"}
 
@@ -288,9 +300,7 @@ def _acquire_sidra_population_table(
     facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
     if not facts_paths:
         raise LivePipelineError(f"SIDRA {table_id} extraction produced no facts")
-    combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
-    combined_path = work_dir / "facts.parquet"
-    combined.write_parquet(combined_path)
+    combined_path = _combine_facts_parquet(facts_paths, work_dir / "facts.parquet")
     return combined_path
 
 
@@ -324,9 +334,7 @@ def _acquire_sidra_population(
         metadata=metadata, uf=uf, data_root=data_root, client=client, work_dir_label="population_totals",
     )
     parts = [p for p in (census_path, intercensal_path) if p is not None]
-    combined = pl.concat([pl.read_parquet(p) for p in parts], how="vertical_relaxed")
-    combined_path = work_dir / "population_facts.parquet"
-    combined.write_parquet(combined_path)
+    combined_path = _combine_facts_parquet(parts, work_dir / "population_facts.parquet")
     metadata_hash = content_hash({
         SIDRA_POPULATION_TABLE: metadata.tables[SIDRA_POPULATION_TABLE].model_dump(mode="json") if SIDRA_POPULATION_TABLE in metadata.tables else None,
         SIDRA_INTERCENSAL_POPULATION_TABLE: metadata.tables[SIDRA_INTERCENSAL_POPULATION_TABLE].model_dump(mode="json") if SIDRA_INTERCENSAL_POPULATION_TABLE in metadata.tables else None,
@@ -447,9 +455,7 @@ def _acquire_sidra_population_strata(
     facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
     if not facts_paths:
         raise LivePipelineError("SIDRA population_strata extraction produced no facts")
-    combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
-    combined_path = work_dir / "population_strata_facts.parquet"
-    combined.write_parquet(combined_path)
+    combined_path = _combine_facts_parquet(facts_paths, work_dir / "population_strata_facts.parquet")
     return inspect_source_artifact(
         path=combined_path,
         source_system="SIDRA",
@@ -527,9 +533,7 @@ def _acquire_sidra_census_2000_strata(
     facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
     if not facts_paths:
         return None
-    combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
-    combined_path = work_dir / "census_2000_strata_facts.parquet"
-    combined.write_parquet(combined_path, compression="zstd")
+    combined_path = _combine_facts_parquet(facts_paths, work_dir / "census_2000_strata_facts.parquet")
     return inspect_source_artifact(
         path=combined_path,
         source_system="SIDRA",
@@ -558,6 +562,7 @@ __all__ = [
     "SIDRA_CIVIL_REGISTRY_DEATHS_VARIABLE",
     "_SIDRA_CHUNK_CONCURRENCY",
     "_SIDRA_MAX_CELLS_PER_REQUEST",
+    "_combine_facts_parquet",
     "_population_tensor_requested",
     "_sidra_population_demographic_strata_classifications",
     "_sidra_population_localities",

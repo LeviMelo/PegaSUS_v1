@@ -212,12 +212,15 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
     (single source of truth, XCUT-02) instead of a per-row Python loop. Only the
     CNES-specific COMPETEN period split lives here.
     """
-    cx = Cols(df)
-    capacity_cols = _capacity_columns(list(df.columns))
-    registry_flag_cols = _registry_flag_columns(list(df.columns))
-    legacy_flag_cols = _legacy_flag_columns(list(df.columns))
+    is_lazy = isinstance(df, pl.LazyFrame)
+    lf = df if is_lazy else df.lazy()
+    cx = Cols(lf)
+    _names = list(lf.collect_schema().names())  # resolve schema once (no data scan)
+    capacity_cols = _capacity_columns(_names)
+    registry_flag_cols = _registry_flag_columns(_names)
+    legacy_flag_cols = _legacy_flag_columns(_names)
     flag_cols = [*registry_flag_cols, *legacy_flag_cols]
-    attribute_cols = _attribute_columns(list(df.columns))
+    attribute_cols = _attribute_columns(_names)
 
     def flag_exprs(col: str) -> tuple[pl.Expr, pl.Expr]:
         """Vectorized twin of ``_cnes_flag_decode``: registry-covered columns use
@@ -266,7 +269,7 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
     facility = cx.clean("CNES", "facility_id")
     mun = cx.municipality("mun_facility", "CODUFMUN", "CODMUN", "MUNIC_RES", "facility_municipality", crosswalk=load_municipality_crosswalk())
 
-    out = df.with_row_index("_i").with_columns(
+    out = lf.with_row_index("_i").with_columns(
         facility.alias("facility_id"),
         pl.lit("CNES-ST").alias("source_system"),
         year.alias("year"),
@@ -304,7 +307,8 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
         "invalid_flag_count", "flag_count", "attribute_vector_json", "attribute_state_json",
         "record_state", "source_manifest_hash", "row_hash", "raw_json",
     ]
-    return out.rename({"mun_facility_state": "municipality_code_state"}).select(ordered)
+    result = out.rename({"mun_facility_state": "municipality_code_state"}).select(ordered)
+    return result if is_lazy else result.collect()
 
 
 def normalize_cnes_st_events(
@@ -319,25 +323,36 @@ def normalize_cnes_st_events(
     linkage gate. ``normalize_cnes_st_record`` is retained as the record-level
     correctness oracle the equivalence stress-check pins against.
     """
-    df = _read_table(input_path)
-    missing = check_raw_completeness(df, "CNES-ST")
-    frame = _cnes_vectorized_frame(df, source_manifest_hash=source_manifest_hash)
+    from pegasus.datasus.normalize.primitives import scan_raw_table
+
+    lf = scan_raw_table(input_path)  # stream scan → transform → sink; never hold the frame in RAM
+    missing = check_raw_completeness(lf, "CNES-ST")  # schema-only
+    out_lf = _cnes_vectorized_frame(lf, source_manifest_hash=source_manifest_hash)
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.write_parquet(out_path)
+    out_lf.sink_parquet(out_path, compression="zstd")
+    written = pl.scan_parquet(out_path)
+    stats = written.select(
+        pl.len().alias("row_count"),
+        (pl.col("facility_cnpj_state") == "NullifiedZeroCNPJ").sum().alias("zero_cnpj"),
+        (pl.col("invalid_flag_count") > 0).sum().alias("invalid_flag"),
+    ).collect().row(0, named=True)
     capacity_components: set[str] = set()
-    if frame.height:
+    if stats["row_count"]:
         try:
-            capacity_components.update(json.loads(frame["capacity_vector_json"][0]).keys())
+            first = written.select("capacity_vector_json").head(1).collect()
+            if first.height:
+                capacity_components.update(json.loads(first.item()).keys())
         except (ValueError, TypeError):
             pass
+    cols = out_lf.collect_schema().names()
     return {
-        "row_count": frame.height,
+        "row_count": int(stats["row_count"]),
         "output_path": str(out_path),
-        "column_count": len(frame.columns),
-        "columns": frame.columns,
-        "zero_facility_cnpj_rows": int((frame["facility_cnpj_state"] == "NullifiedZeroCNPJ").sum()),
-        "invalid_flag_rows": int((frame["invalid_flag_count"] > 0).sum()),
+        "column_count": len(cols),
+        "columns": list(cols),
+        "zero_facility_cnpj_rows": int(stats["zero_cnpj"] or 0),
+        "invalid_flag_rows": int(stats["invalid_flag"] or 0),
         "capacity_components": sorted(capacity_components),
         "missing_required_columns": missing,
     }

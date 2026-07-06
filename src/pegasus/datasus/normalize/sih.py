@@ -278,7 +278,9 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     per-row Python loop. Only the SIH-specific age and death-flag rules live here.
     """
     crosswalk = load_municipality_crosswalk()
-    cx = Cols(df)
+    is_lazy = isinstance(df, pl.LazyFrame)
+    lf = df if is_lazy else df.lazy()
+    cx = Cols(lf)
     clean = cx.clean
     digits = cx.digits
     parse_date = cx.date
@@ -310,8 +312,9 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
                  .when(cod.is_in(list(_SIH_AGE_UNITS))).then(pl.lit("valid"))
                  .otherwise(pl.lit("UnknownAgeUnit")))
 
-    sec_cols = [c for c in SECONDARY_DIAG_COLUMNS if c in df.columns]
-    type_cols = [c for c in SECONDARY_TYPE_COLUMNS if c in df.columns]
+    _names = set(lf.collect_schema().names())  # resolve schema once (no data scan)
+    sec_cols = [c for c in SECONDARY_DIAG_COLUMNS if c in _names]
+    type_cols = [c for c in SECONDARY_TYPE_COLUMNS if c in _names]
     death = clean("MORTE", "OBITO").str.to_lowercase()
 
     hosp_cnpj, hosp_cnpj_state = cnpj("CGC_HOSP", "hospital_cnpj")
@@ -324,7 +327,7 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     principal_norm = icd_norm("DIAG_PRINC", "principal_icd")
     principal_state = icd_state("DIAG_PRINC", "principal_icd")
 
-    out = df.with_row_index("_i").with_columns(
+    out = lf.with_row_index("_i").with_columns(
         pl.concat_str([pl.lit("SIH-"), pl.coalesce([clean("AIH", "N_AIH", "admission_id"),
                        pl.col("_i").cast(pl.Utf8) + pl.lit("_" + source_manifest_hash[:8])])]).alias("admission_id"),
         pl.lit("SIH-RD").alias("source_system"),
@@ -400,7 +403,11 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
         *_SIH_CATEGORICAL.keys(),
         "record_state", "source_manifest_hash", "row_hash", "raw_json",
     ]
-    return out.rename({"mun_residence_state": "municipality_code_state"} if "mun_residence_state" in out.columns else {}).select(ordered)
+    cols = out.collect_schema().names()  # schema-only, no data scan
+    result = out.rename(
+        {"mun_residence_state": "municipality_code_state"} if "mun_residence_state" in cols else {}
+    ).select(ordered)
+    return result if is_lazy else result.collect()
 
 
 def normalize_sih_rd_events(
@@ -413,20 +420,33 @@ def normalize_sih_rd_events(
     the record-level authority (``normalize_sih_rd_record``) for single-record use
     and as the correctness oracle the equivalence test pins.
     """
-    df = _read_table(input_path)
-    missing = check_raw_completeness(df, "SIH-RD")
-    frame = _sih_vectorized_frame(df, source_manifest_hash=source_manifest_hash)
+    from pegasus.datasus.normalize.primitives import scan_raw_table
+
+    lf = scan_raw_table(input_path)  # stream scan → transform → sink; never hold the frame in RAM
+    missing = check_raw_completeness(lf, "SIH-RD")  # schema-only
+    out_lf = _sih_vectorized_frame(lf, source_manifest_hash=source_manifest_hash)
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.write_parquet(out_path)
+    out_lf.sink_parquet(out_path, compression="zstd")
+    # Manifest stats in one streaming aggregate over the written artifact (footer + one scan).
+    stats = (
+        pl.scan_parquet(out_path)
+        .select(
+            pl.len().alias("row_count"),
+            (pl.col("record_state") == "valid").sum().alias("valid_rows"),
+            pl.col("death_flag").cast(pl.Int64, strict=False).fill_null(0).sum().alias("deaths"),
+        )
+        .collect()
+        .row(0, named=True)
+    )
     return {
         "input_path": str(input_path),
         "output_path": str(out_path),
-        "row_count": frame.height,
-        "column_count": len(frame.columns),
-        "columns": frame.columns,
-        "valid_rows": int((frame["record_state"] == "valid").sum()),
-        "deaths": int(frame["death_flag"].cast(pl.Int64, strict=False).fill_null(0).sum()),
+        "row_count": int(stats["row_count"]),
+        "column_count": len(out_lf.collect_schema().names()),
+        "columns": list(out_lf.collect_schema().names()),
+        "valid_rows": int(stats["valid_rows"] or 0),
+        "deaths": int(stats["deaths"] or 0),
         "cost_components": list(COST_COMPONENTS),
         "missing_required_columns": missing,
     }

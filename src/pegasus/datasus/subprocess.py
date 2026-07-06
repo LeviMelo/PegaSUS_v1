@@ -37,6 +37,37 @@ def _prune_success_ancillary(request: DATASUSRequestManifest) -> None:
             pass
 
 
+def _sha256_sidecar_path(processed_path: Path) -> Path:
+    """The digest sidecar co-located with a chunk's processed.parquet."""
+    return processed_path.with_name(processed_path.name + ".sha256")
+
+
+def _write_processed_sha256_sidecar(processed_path: Path) -> str:
+    """Hash ``processed_path`` once (it is hot in cache right after being written) and
+    persist the digest to a sidecar so warm cache hits can skip the re-read. Returns the
+    digest; sidecar write failures are non-fatal (the digest is still returned)."""
+    digest = sha256_file(processed_path)
+    try:
+        _sha256_sidecar_path(processed_path).write_text(digest, encoding="utf-8")
+    except OSError:
+        pass
+    return digest
+
+
+def _cached_processed_sha256(processed_path: Path) -> str:
+    """Return the processed.parquet digest for a warm cache hit without re-reading the
+    (GB-scale) parquet: prefer the sidecar; fall back to a one-time hash + sidecar write
+    for legacy chunks that predate the sidecar."""
+    sidecar = _sha256_sidecar_path(processed_path)
+    try:
+        cached = sidecar.read_text(encoding="utf-8").strip()
+        if cached:
+            return cached
+    except OSError:
+        pass
+    return _write_processed_sha256_sidecar(processed_path)
+
+
 def datasus_dependency_unavailable(*, dependency: str, detail: str) -> str:
     """Return the stable actionable diagnostic for unavailable live DATASUS."""
     return json.dumps(
@@ -190,7 +221,10 @@ def fetch_datasus_chunk(
                 error_message=None,
                 updates={
                     "raw_sha256": sha256_file(raw_path) if raw_path.exists() else "",
-                    "processed_sha256": sha256_file(processed_path),
+                    # Warm cache hit: read the processed_sha256 from the sidecar written on the
+                    # original materialization instead of re-reading the (GB-scale) processed.parquet
+                    # end-to-end on every hit. Legacy chunks (pre-sidecar) hash once, then persist it.
+                    "processed_sha256": _cached_processed_sha256(processed_path),
                     "row_counts": cached_payload.get("row_counts", {}),
                     "column_lists": cached_payload.get("column_lists", {}),
                     "r_version": cached_payload.get("r_version"),
@@ -297,7 +331,9 @@ def fetch_datasus_chunk(
                 "raw_path": str(actual_raw_path) if actual_raw_path is not None else request.raw_path,
                 "processed_path": str(actual_processed_path),
                 "raw_sha256": sha256_file(actual_raw_path) if actual_raw_path is not None and actual_raw_path.exists() else "",
-                "processed_sha256": sha256_file(actual_processed_path),
+                # Fresh materialization: hash the just-written (hot) parquet once and persist the
+                # digest to a sidecar so subsequent warm cache hits never re-read the file.
+                "processed_sha256": _write_processed_sha256_sidecar(actual_processed_path),
                 "row_counts": payload.get("row_counts", {}),
                 "column_lists": payload.get("column_lists", {}),
                 "r_version": payload.get("r_version"),

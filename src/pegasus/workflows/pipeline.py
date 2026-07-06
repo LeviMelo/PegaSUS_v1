@@ -175,7 +175,7 @@ def _combine_processed_datasus_chunks(*, system: str, requests: list[Any], out_p
         return out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not requests:
-        pl.DataFrame().write_parquet(out_path)
+        pl.DataFrame().write_parquet(out_path, compression="zstd")
         return out_path
     # Stream the per-chunk scans into one combined artifact via a lazy concat + streaming
     # sink — never materialize all chunks in RAM (§V.1/§V.7(3): no O(national) in-memory
@@ -195,10 +195,10 @@ def _acquire_datasus(
     client: MicrodatasusClient | None,
 ) -> list[dict[str, Any]]:
     client = client or MicrodatasusClient(data_root=str(data_root), manifest_root=data_root / "manifests" / "datasus")
-    artifacts: list[dict[str, Any]] = []
     # Fetch all systems in one global worker pool (parallel across systems AND
     # years) instead of one system at a time.
     batches = client.fetch_systems(systems=systems, uf=uf, years=years)
+    # Fail fast (serially) on any unsuccessful fetch before spawning combine/normalize work.
     for system in systems:
         batch = batches[system]
         if not batch.ok:
@@ -211,6 +211,13 @@ def _acquire_datasus(
             else:
                 reason = f"datasus fetch not ok for {system}"
             raise LivePipelineError(f"DATASUS acquisition failed for {system} {uf} {years}: {reason}")
+
+    def _combine_normalize_one(system: str) -> dict[str, Any]:
+        """Combine chunks → normalize → inspect for one system. Self-contained: writes
+        to system-keyed paths, reads only its own already-completed batch, and calls the
+        pure ``inspect_source_artifact`` — no shared mutable state, so systems run in
+        parallel. The normalizers stream (scan→sink) so per-thread RAM stays bounded."""
+        batch = batches[system]
         request_hashes = [sha256_file(Path(path)) for path in batch.manifest_paths]
         combined_hash = sha256_text(json.dumps({
             "system": system,
@@ -233,17 +240,23 @@ def _acquire_datasus(
             out_path=canonical_path,
             source_manifest_hash=combined_hash,
         )
-        artifacts.append(
-            inspect_source_artifact(
-                path=canonical_path,
-                source_system=system,
-                artifact_role="processed_events",
-                provenance_mode="materialized_external",
-                source_manifest_hash=combined_hash,
-                manifest_path=batch.manifest_paths[0] if batch.manifest_paths else None,
-            )
+        return inspect_source_artifact(
+            path=canonical_path,
+            source_system=system,
+            artifact_role="processed_events",
+            provenance_mode="materialized_external",
+            source_manifest_hash=combined_hash,
+            manifest_path=batch.manifest_paths[0] if batch.manifest_paths else None,
         )
-    return artifacts
+
+    # Overlap the CPU/I-O-heavy combine+normalize across systems (polars releases the
+    # GIL during scan/sink). ``pool.map`` preserves ``systems`` order in the result.
+    if len(systems) <= 1:
+        return [_combine_normalize_one(system) for system in systems]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=len(systems), thread_name_prefix="datasus-normalize") as pool:
+        return list(pool.map(_combine_normalize_one, systems))
 
 
 _RACE_BRIDGE_PRIOR_REQUIRED_MODES = frozenset({

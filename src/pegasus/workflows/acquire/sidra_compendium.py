@@ -8,6 +8,7 @@ shared error/constants from :mod:`sidra_population`.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from pegasus.workflows.acquire.sidra_population import (
     SIDRA_POPULATION_TABLE,
     _SIDRA_MAX_CELLS_PER_REQUEST,
     LivePipelineError,
+    _combine_facts_parquet,
     _ensure_sidra_metadata_tables,
 )
 
@@ -43,7 +45,11 @@ def _compendium_enabled(intent: UserIntent) -> bool:
     return intent.run_profile in {"contextual", "full"}
 
 
+@lru_cache(maxsize=1)
 def _selected_compendium_tables() -> tuple[Any, ...]:
+    # UF-invariant: the compendium YAML load + table selection is identical for every UF, so cache
+    # it once instead of re-parsing per UF (was ~27x the YAML load + selection in a national run).
+    # Result is an immutable tuple of frozen dataclasses (read-only); safe to share.
     return select_compendium_tables(load_sidra_compendium())
 
 
@@ -132,9 +138,7 @@ def _acquire_one_compendium_table(
         facts_paths = [Path(r.facts_path) for r in results if r.facts_path]
         if not facts_paths:
             return None, None, BlockedCompendiumTable(table_id=plan.table_id, reason="extraction produced no facts")
-        combined = pl.concat([pl.read_parquet(p) for p in facts_paths], how="vertical_relaxed")
-        combined_path = work_dir / "context_facts.parquet"
-        combined.write_parquet(combined_path)
+        combined_path = _combine_facts_parquet(facts_paths, work_dir / "context_facts.parquet")
         artifact = inspect_source_artifact(
             path=combined_path,
             source_system="SIDRA",

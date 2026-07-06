@@ -359,6 +359,16 @@ def read_normalized_metadata_tables(input_dir: str | Path) -> SIDRAMetadata:
     return _read_normalized_metadata_cached(str(input_dir), mtime_ns)
 
 
+def _group_rows_by(df: pl.DataFrame, key: str) -> dict[str, list[dict[str, Any]]]:
+    """One pass: partition ``df`` rows by ``str(key)``, preserving original row order within each
+    group. Replaces a per-table ``.filter(pl.col(key) == tid)`` (which rescans the whole frame per
+    table -> O(tables x rows)); here each frame is scanned once -> O(rows)."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in df.iter_rows(named=True):
+        out.setdefault(str(r[key]), []).append(r)
+    return out
+
+
 @lru_cache(maxsize=8)
 def _read_normalized_metadata_cached(input_dir_str: str, _mtime_ns: int) -> SIDRAMetadata:
     input_dir = Path(input_dir_str)
@@ -369,35 +379,40 @@ def _read_normalized_metadata_cached(input_dir_str: str, _mtime_ns: int) -> SIDR
     periods_df = pl.read_parquet(input_dir / "sidra_periods.parquet")
     locs_df = pl.read_parquet(input_dir / "sidra_localities.parquet")
 
+    # Pre-group each frame by table_id once (O(rows)) instead of re-filtering per table (was
+    # O(tables x rows) full-frame scans, hundreds of passes for a ~94-table compendium). Categories
+    # are keyed by (table_id, classification_id). Row order within each group is preserved, so the
+    # assembled SIDRATableMetadata is byte-identical to the old per-table .filter() version.
+    vars_by_table = _group_rows_by(vars_df, "table_id")
+    periods_by_table = _group_rows_by(periods_df, "table_id")
+    locs_by_table = _group_rows_by(locs_df, "table_id")
+    cls_by_table = _group_rows_by(cls_df, "table_id")
+    cats_by_table_cls: dict[tuple[str, str], list[str]] = {}
+    for r in cat_df.iter_rows(named=True):
+        cats_by_table_cls.setdefault((str(r["table_id"]), str(r["classification_id"])), []).append(str(r["category_id"]))
+
     tables: dict[str, SIDRATableMetadata] = {}
 
     for row in tables_df.to_dicts():
         tid = str(row["table_id"])
-        table_vars = vars_df.filter(pl.col("table_id") == tid).to_dicts()
-        table_periods = periods_df.filter(pl.col("table_id") == tid)["period"].cast(pl.Utf8).to_list()
-        table_locs = locs_df.filter(pl.col("table_id") == tid).to_dicts()
+        table_vars = vars_by_table.get(tid, [])
+        table_periods = [str(x["period"]) for x in periods_by_table.get(tid, [])]
+        table_locs = locs_by_table.get(tid, [])
 
         levels: dict[str, list[str]] = {}
         for loc in table_locs:
             levels.setdefault(str(loc["locality_level"]), []).append(str(loc["locality_id"]))
 
         classifications: dict[str, list[str]] = {}
-        for cls_row in cls_df.filter(pl.col("table_id") == tid).to_dicts():
+        for cls_row in cls_by_table.get(tid, []):
             cid = str(cls_row["classification_id"])
-            cats = (
-                cat_df
-                .filter((pl.col("table_id") == tid) & (pl.col("classification_id") == cid))
-                ["category_id"]
-                .cast(pl.Utf8)
-                .to_list()
-            )
-            classifications[cid] = cats
+            classifications[cid] = cats_by_table_cls.get((tid, cid), [])
 
         tables[tid] = SIDRATableMetadata(
             table_id=tid,
             name=str(row["name"]),
             variables=[str(x["variable_id"]) for x in table_vars],
-            periods=[str(x) for x in table_periods],
+            periods=table_periods,
             locality_levels=sorted(levels),
             localities_by_level={k: sorted(v) for k, v in levels.items()},
             classifications=classifications,

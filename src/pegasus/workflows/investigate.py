@@ -8,14 +8,21 @@ scan chain with one in-memory orchestrator call.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import polars as pl
 
 from pegasus.pirs.ldo.field_selection import analytical_variable_ids
 from pegasus.pirs.ldo.orchestrator import run_ldo
 from pegasus.pirs.ldo.output import write_hypotheses
 from pegasus.she.panel import Resolution, compile_common_panel
+
+# support.restrict_conditions ops whose ``value`` enumerates the codes a σ_C count
+# variable is built on (a shared-code overlap between two such variables is mechanical).
+_ICD_ENUM_OPS: frozenset[str] = frozenset({"starts_with_any", "is_in", "in", "eq", "equals"})
 
 
 @dataclass
@@ -33,6 +40,98 @@ def _geography_prefixes(intent: Any) -> frozenset[str] | None:
     from pegasus.efg.executor import _scope_prefixes_from_intent
 
     return _scope_prefixes_from_intent(intent)
+
+
+def _loads(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value))
+    except Exception:
+        return None
+
+
+def _icd_code_set(support: dict[str, Any]) -> frozenset[str] | None:
+    """The ICD codes a σ_C restriction count is built on (from ``restrict_conditions``).
+
+    A cause-specific count field carries a predicate like
+    ``{"column": "principal_icd_norm", "op": "starts_with_any", "value": ["A90", "A91"]}``;
+    the enumerated ``value`` IS the variable's code set (§5.3). Returns None for fields
+    that carry no ICD-enumerating predicate (non-disease variables — left untouched).
+    """
+    conds = support.get("restrict_conditions")
+    if not isinstance(conds, list):
+        return None
+    codes: set[str] = set()
+    for cond in conds:
+        if not isinstance(cond, dict):
+            continue
+        column = str(cond.get("column") or "").lower()
+        if "icd" not in column and "cid" not in column:
+            continue
+        if str(cond.get("op") or "") not in _ICD_ENUM_OPS:
+            continue
+        raw = cond.get("value")
+        values = raw if isinstance(raw, (list, tuple)) else [raw]
+        codes.update(str(v).strip().upper() for v in values if v is not None and str(v).strip())
+    return frozenset(codes) or None
+
+
+def disease_variable_meta(
+    run_dir: str | Path, keep_variables: set[str] | frozenset[str] | None = None
+) -> dict[str, dict]:
+    """Build ``run_ldo(variable_meta=...)`` for a compiled run from its ``V_fields`` metadata.
+
+    The disease-coded LDO variables are the EFG's σ_C restriction counts, whose ICD code
+    set is persisted per field in ``support.restrict_conditions`` and whose SIM topology
+    role is persisted in ``axes.icd_topology_role``. This reads those directly — no
+    regeneration through the disease variable grammar — so only fields that genuinely carry
+    codes appear in the map. Non-disease runs yield an empty map (LDO behaviour unchanged).
+    """
+    path = Path(run_dir) / "V_fields.parquet"
+    if not path.exists():
+        return {}
+    vf = pl.read_parquet(path)
+    if "field_id" not in vf.columns:
+        return {}
+    cols = [c for c in ("field_id", "support_json", "axes_json") if c in vf.columns]
+    meta: dict[str, dict] = {}
+    for row in vf.select(cols).iter_rows(named=True):
+        fid = str(row["field_id"])
+        if keep_variables is not None and fid not in keep_variables:
+            continue
+        support = _loads(row.get("support_json")) or {}
+        axes = _loads(row.get("axes_json")) or {}
+        code_set = _icd_code_set(support) if isinstance(support, dict) else None
+        topology = axes.get("icd_topology_role") or axes.get("diagnostic_role") if isinstance(axes, dict) else None
+        if code_set is None and topology is None:
+            continue
+        entry: dict[str, Any] = {"code_system": "CID-10"}
+        if code_set is not None:
+            entry["code_set"] = code_set
+        if topology is not None:
+            entry["topology_role"] = str(topology)
+        meta[fid] = entry
+    return meta
+
+
+def _disease_graph_from_meta(variable_meta: dict[str, dict]):
+    """A variable-keyed structural DiseaseGraph over the code-bearing variables, or None.
+
+    Keyed by variable id (not bare ICD codes) so it actually intersects the LDO variable
+    set inside ``disease_penalty_matrix`` — a code-keyed graph would be a silent no-op.
+    """
+    code_sets = {
+        v: m["code_set"] for v, m in variable_meta.items() if m.get("code_set")
+    }
+    if len(code_sets) < 2:
+        return None
+    from pegasus.disease.graph import DiseaseGraph
+
+    graph = DiseaseGraph.from_variable_code_sets(code_sets)
+    # Only worth threading if it carries at least one structural coupling; an all-zero
+    # graph would leave the penalty at the scalar baseline anyway.
+    return graph if graph.weights.nnz > 0 else None
 
 
 def run_investigate(
@@ -64,7 +163,30 @@ def run_investigate(
     if keep_variables is None:
         keep_variables = analytical_variable_ids(run_dir)
 
-    ldo_run = run_ldo(panel, K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables, **ldo_kwargs)
+    # Disease-axis wiring (refactor §4.1): construct the variable_meta (code_set +
+    # SIM topology role, from V_fields) and the structural DiseaseGraph (over the union
+    # of variable code sets) so the DIS-04 L_D prior, the §III.8 mechanical-overlap guard,
+    # and disease provenance annotation are LIVE on real runs — not inert as before, when
+    # run_ldo was called with these left None. A run with no disease-coded variables yields
+    # an empty meta / None graph, so non-disease runs are unaffected (no regression).
+    variable_meta = ldo_kwargs.pop("variable_meta", None)
+    if variable_meta is None:
+        variable_meta = disease_variable_meta(run_dir, keep_variables) or None
+    disease_graph = ldo_kwargs.pop("disease_graph", None)
+    if disease_graph is None and variable_meta is not None:
+        disease_graph = _disease_graph_from_meta(variable_meta)
+
+    ldo_run = run_ldo(
+        panel, K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables,
+        variable_meta=variable_meta, disease_graph=disease_graph, **ldo_kwargs,
+    )
+
+    # Record the disease-axis wiring so a run's diagnostics show whether the L_D prior /
+    # overlap guard were live (rather than the wiring being silently inert as before).
+    ldo_run.diagnostics["disease_variables"] = 0 if not variable_meta else sum(
+        1 for m in variable_meta.values() if m.get("code_set")
+    )
+    ldo_run.diagnostics["disease_graph_applied"] = disease_graph is not None
 
     hypotheses_path = run_dir / "Hypotheses.parquet"
     if write:
@@ -81,4 +203,4 @@ def run_investigate(
     )
 
 
-__all__ = ["InvestigateResult", "run_investigate"]
+__all__ = ["InvestigateResult", "run_investigate", "disease_variable_meta"]

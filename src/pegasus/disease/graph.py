@@ -16,7 +16,7 @@ Legality class (reuses §II.4.1's circularity guard):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Mapping
 
 import numpy as np
 import scipy.sparse as sp
@@ -82,6 +82,44 @@ class DiseaseGraph:
         weights = sp.csr_matrix((data, (rows, cols)), shape=(n, n)) if data else sp.csr_matrix((n, n))
         return cls(codes=ordered, weights=weights, legality_class="structural",
                    provenance=("cid10_hierarchy", "who_icd10"))
+
+    @classmethod
+    def from_variable_code_sets(
+        cls, code_sets: Mapping[str, Iterable[str]]
+    ) -> "DiseaseGraph":
+        """Build a structural graph keyed by *variable id* from each variable's code set.
+
+        The LDO's variables are field ids (``σ_C`` restriction counts like
+        ``DengueHospitalAdmissions``), not bare ICD codes, so the plain code-keyed
+        ``hierarchy`` graph never intersects ``gf.variables`` and the disease penalty would
+        be a silent no-op. This graph's nodes ARE the variable ids; the edge weight between
+        two variables is the *strongest* CID-10 structural closeness across the cross-product
+        of their member codes (1.0 same 3-char category, 0.5 same block, 0.25 same chapter).
+        Still data-independent (``structural``), so admissible as an LDO prior.
+        """
+        ordered = tuple(dict.fromkeys(str(v) for v in code_sets))
+        members = {
+            v: tuple(str(c) for c in (code_sets[v] or ()))
+            for v in ordered
+        }
+        n = len(ordered)
+        rows, cols, data = [], [], []
+        for i in range(n):
+            ci = members[ordered[i]]
+            if not ci:
+                continue
+            for j in range(i + 1, n):
+                cj = members[ordered[j]]
+                if not cj:
+                    continue
+                w = max((_structural_weight(a, b) for a in ci for b in cj), default=0.0)
+                if w > 0.0:
+                    rows += [i, j]
+                    cols += [j, i]
+                    data += [w, w]
+        weights = sp.csr_matrix((data, (rows, cols)), shape=(n, n)) if data else sp.csr_matrix((n, n))
+        return cls(codes=ordered, weights=weights, legality_class="structural",
+                   provenance=("cid10_hierarchy", "who_icd10", "variable_code_sets"))
 
     def laplacian(self) -> sp.csr_matrix:
         """Graph Laplacian ``L_D = D - W`` (the disease smoothness operator for the LDO prior)."""

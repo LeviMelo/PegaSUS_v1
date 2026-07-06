@@ -174,6 +174,11 @@ def run_ldo(
         "n_selected": sum(1 for r in records if r.certification_status == "selected"),
         "residual_scan_error": _residual_error,
         "envelope_bytes": envelope_bytes,
+        # Disease-axis effects (visible only when variable_meta/disease_graph were threaded):
+        # the mechanical-overlap guard's re-typings and the disease-informed penalty.
+        "disease_prior_applied": disease_penalty is not None,
+        "n_mechanical_overlap": sum(1 for r in records if r.edge_type == "mechanical_overlap"),
+        "n_disease_provenanced": sum(1 for r in records if r.code_system is not None),
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

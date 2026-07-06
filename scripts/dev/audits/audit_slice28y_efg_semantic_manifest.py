@@ -5,17 +5,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 DAG = ROOT / "src/pegasus/efg/dag.py"
+DAG_PACKAGE = ROOT / "src/pegasus/efg/dag"
 
 
 def run_audit() -> dict:
     errors: list[str] = []
     warnings: list[str] = []
 
-    if not DAG.exists():
+    if DAG.exists():
+        text = DAG.read_text(encoding="utf-8")
+    elif DAG_PACKAGE.is_dir():
+        text = "".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(DAG_PACKAGE.glob("*.py"))
+        )
+    else:
         errors.append("src/pegasus/efg/dag.py missing")
         text = ""
-    else:
-        text = DAG.read_text(encoding="utf-8")
 
     required = {
         "_build_efg_base": "base build_efg preserved under _build_efg_base",

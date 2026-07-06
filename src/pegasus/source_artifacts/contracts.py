@@ -88,12 +88,18 @@ def _sha256_file(path: Path) -> str:
 def _table_shape(path: Path) -> tuple[int | None, list[str]]:
     suffix = path.suffix.lower()
     if suffix == ".parquet":
-        df = pl.read_parquet(path)
-        return df.height, list(df.columns)
+        # Row count + columns from the parquet FOOTER only — never materialize the frame.
+        # Reading a national combined artifact (~30M rows, GBs) into RAM just to count
+        # rows was the acquire chokepoint (10+GB, minutes per artifact). scan+select(len)
+        # reads row-group metadata; collect_schema reads the schema — both O(footer).
+        lazy = pl.scan_parquet(path)
+        n = int(lazy.select(pl.len()).collect().item())
+        return n, list(lazy.collect_schema().names())
     if suffix in {".csv", ".tsv"}:
         separator = "\t" if suffix == ".tsv" else ","
-        df = pl.read_csv(path, separator=separator)
-        return df.height, list(df.columns)
+        lazy = pl.scan_csv(path, separator=separator)
+        n = int(lazy.select(pl.len()).collect().item())
+        return n, list(lazy.collect_schema().names())
     if suffix in {".json", ".jsonl", ".ndjson"}:
         return None, []
     return None, []

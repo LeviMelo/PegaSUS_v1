@@ -35,6 +35,11 @@ def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = 
     if "low_n_eff_descriptive_only" in record.warnings:
         return replace(record, certification_status="descriptive")
 
+    # §V.6: an unconverged low-rank ADMM solve yields an unreliable S/L split — never
+    # present its edges as exact. Downgrade to descriptive (surfaced, not certified).
+    if "lowrank_unconverged_descriptive_only" in record.warnings:
+        return replace(record, certification_status="descriptive")
+
     if record.edge_type == "mechanical_overlap":
         # Shared-code correlation is known structure, never an epidemiological discovery (§5.3).
         return replace(record, certification_status="descriptive")

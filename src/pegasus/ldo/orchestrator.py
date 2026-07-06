@@ -164,6 +164,16 @@ def run_ldo(
     else:
         _residual_error = None
 
+    # §V.6 convergence gate: if the low-rank ADMM did not converge, the S/L split (and
+    # every edge read off it, backbone and residual) is unreliable — flag so the
+    # certifier downgrades to descriptive rather than certifying an approximation as exact.
+    if not lagged.fit.converged:
+        from dataclasses import replace as _replace
+        records = [
+            _replace(r, warnings=tuple(r.warnings) + ("lowrank_unconverged_descriptive_only",))
+            for r in records
+        ]
+
     records = certify_links(records, policy=certification_policy)
 
     n_eff = int(np.isfinite(gf.Z).any(axis=0).sum())

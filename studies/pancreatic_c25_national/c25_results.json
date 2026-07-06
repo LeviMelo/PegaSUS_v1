@@ -1,0 +1,700 @@
+{
+  "meta": {
+    "years": [
+      2021,
+      2022
+    ],
+    "cause": "C25 (malignant neoplasm of pancreas)",
+    "source": "SIM-DO via PegaSUS; denominators FAL-POP national population tensor"
+  },
+  "headline": {
+    "c25_deaths": 24628,
+    "all_deaths": 3376915,
+    "c25_pct_of_all_deaths": 0.729
+  },
+  "comparative": {
+    "c25": 24628,
+    "digestive_cancer_C15_C26": 154854,
+    "all_neoplasm_C00_D48": 479814,
+    "all_cause": 3376915,
+    "c25_pct_of_digestive_ca": 15.9,
+    "c25_pct_of_neoplasm": 5.13
+  },
+  "denominator": {
+    "person_years_total": 404987283.5421965,
+    "mean_annual_pop": 202493641.77109826
+  },
+  "national_rates": {
+    "crude_per_100k_yr": 6.081,
+    "asmr_who_per_100k": 4.716,
+    "asmr_who_ci": [
+      4.657,
+      4.775
+    ],
+    "asmr_brazil2010_per_100k": 4.112
+  },
+  "by_sex": [
+    {
+      "sex": null,
+      "deaths": 0,
+      "crude": 0.0,
+      "asmr_who": 0.0,
+      "ci": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "sex": "female",
+      "deaths": 12422,
+      "crude": 5.96,
+      "asmr_who": 4.214,
+      "ci": [
+        4.139,
+        4.29
+      ]
+    },
+    {
+      "sex": "male",
+      "deaths": 12203,
+      "crude": 6.208,
+      "asmr_who": 5.311,
+      "ci": [
+        5.217,
+        5.407
+      ]
+    }
+  ],
+  "sex_ratio_M_F_asmr": 1.26,
+  "by_race": [
+    {
+      "race": "Asian-desc.",
+      "deaths": 270,
+      "crude": 14.928,
+      "asmr_who": 6.411,
+      "ci": [
+        5.611,
+        7.452
+      ]
+    },
+    {
+      "race": "White",
+      "deaths": 14910,
+      "crude": 8.436,
+      "asmr_who": 5.535,
+      "ci": [
+        5.445,
+        5.626
+      ]
+    },
+    {
+      "race": "Mixed (Parda)",
+      "deaths": 7106,
+      "crude": 3.878,
+      "asmr_who": 3.619,
+      "ci": [
+        3.535,
+        3.704
+      ]
+    },
+    {
+      "race": "Black",
+      "deaths": 1786,
+      "crude": 4.381,
+      "asmr_who": 3.463,
+      "ci": [
+        3.304,
+        3.631
+      ]
+    },
+    {
+      "race": "Indigenous",
+      "deaths": 27,
+      "crude": 1.116,
+      "asmr_who": 1.423,
+      "ci": [
+        0.935,
+        2.079
+      ]
+    }
+  ],
+  "by_age_group": [
+    {
+      "age_group": "0-4",
+      "deaths": 3,
+      "person_years": 25498206.299737934,
+      "rate_per_100k": 0.01
+    },
+    {
+      "age_group": "5-9",
+      "deaths": 1,
+      "person_years": 27596947.829845436,
+      "rate_per_100k": 0.0
+    },
+    {
+      "age_group": "10-14",
+      "deaths": 4,
+      "person_years": 27650097.74144625,
+      "rate_per_100k": 0.01
+    },
+    {
+      "age_group": "15-19",
+      "deaths": 6,
+      "person_years": 28976391.531955652,
+      "rate_per_100k": 0.02
+    },
+    {
+      "age_group": "20-24",
+      "deaths": 12,
+      "person_years": 31081876.76601216,
+      "rate_per_100k": 0.04
+    },
+    {
+      "age_group": "25-29",
+      "deaths": 44,
+      "person_years": 31073650.319688134,
+      "rate_per_100k": 0.14
+    },
+    {
+      "age_group": "30-34",
+      "deaths": 105,
+      "person_years": 30959279.116182525,
+      "rate_per_100k": 0.34
+    },
+    {
+      "age_group": "35-39",
+      "deaths": 196,
+      "person_years": 32134229.947823275,
+      "rate_per_100k": 0.61
+    },
+    {
+      "age_group": "40-44",
+      "deaths": 462,
+      "person_years": 31866220.380216166,
+      "rate_per_100k": 1.45
+    },
+    {
+      "age_group": "45-49",
+      "deaths": 807,
+      "person_years": 27115607.00952366,
+      "rate_per_100k": 2.98
+    },
+    {
+      "age_group": "50-54",
+      "deaths": 1320,
+      "person_years": 24976803.2763646,
+      "rate_per_100k": 5.28
+    },
+    {
+      "age_group": "55-59",
+      "deaths": 2296,
+      "person_years": 22846248.55859299,
+      "rate_per_100k": 10.05
+    },
+    {
+      "age_group": "60-64",
+      "deaths": 3082,
+      "person_years": 19584806.195913393,
+      "rate_per_100k": 15.74
+    },
+    {
+      "age_group": "65-69",
+      "deaths": 3726,
+      "person_years": 15484495.447500475,
+      "rate_per_100k": 24.06
+    },
+    {
+      "age_group": "70-74",
+      "deaths": 3799,
+      "person_years": 11530604.000912758,
+      "rate_per_100k": 32.95
+    },
+    {
+      "age_group": "75-79",
+      "deaths": 3282,
+      "person_years": 7582125.461963313,
+      "rate_per_100k": 43.29
+    },
+    {
+      "age_group": "80-84",
+      "deaths": 2690,
+      "person_years": 4879287.2683879975,
+      "rate_per_100k": 55.13
+    },
+    {
+      "age_group": "85+",
+      "deaths": 2793,
+      "person_years": 4150406.3901296584,
+      "rate_per_100k": 67.29
+    }
+  ],
+  "by_region": [
+    {
+      "reg": "South",
+      "deaths": 5200,
+      "crude": 8.72,
+      "asmr_who": 6.201,
+      "ci": [
+        6.033,
+        6.374
+      ]
+    },
+    {
+      "reg": "Southeast",
+      "deaths": 12258,
+      "crude": 7.242,
+      "asmr_who": 5.09,
+      "ci": [
+        4.999,
+        5.182
+      ]
+    },
+    {
+      "reg": "Center-West",
+      "deaths": 1596,
+      "crude": 4.931,
+      "asmr_who": 4.523,
+      "ci": [
+        4.303,
+        4.752
+      ]
+    },
+    {
+      "reg": "Northeast",
+      "deaths": 4647,
+      "crude": 4.257,
+      "asmr_who": 3.531,
+      "ci": [
+        3.43,
+        3.635
+      ]
+    },
+    {
+      "reg": "North",
+      "deaths": 923,
+      "crude": 2.671,
+      "asmr_who": 3.055,
+      "ci": [
+        2.861,
+        3.26
+      ]
+    }
+  ],
+  "by_uf": [
+    {
+      "uf": "RS",
+      "deaths": 2453,
+      "crude": 11.28,
+      "asmr_who": 7.073,
+      "ci": [
+        6.792,
+        7.366
+      ]
+    },
+    {
+      "uf": "SC",
+      "deaths": 1072,
+      "crude": 7.104,
+      "asmr_who": 5.7,
+      "ci": [
+        5.363,
+        6.057
+      ]
+    },
+    {
+      "uf": "SP",
+      "deaths": 6865,
+      "crude": 7.754,
+      "asmr_who": 5.568,
+      "ci": [
+        5.437,
+        5.703
+      ]
+    },
+    {
+      "uf": "PR",
+      "deaths": 1675,
+      "crude": 7.348,
+      "asmr_who": 5.514,
+      "ci": [
+        5.253,
+        5.789
+      ]
+    },
+    {
+      "uf": "DF",
+      "deaths": 322,
+      "crude": 5.736,
+      "asmr_who": 5.233,
+      "ci": [
+        4.675,
+        5.85
+      ]
+    },
+    {
+      "uf": "RJ",
+      "deaths": 2438,
+      "crude": 7.595,
+      "asmr_who": 5.036,
+      "ci": [
+        4.836,
+        5.245
+      ]
+    },
+    {
+      "uf": "MS",
+      "deaths": 289,
+      "crude": 5.267,
+      "asmr_who": 4.554,
+      "ci": [
+        4.043,
+        5.118
+      ]
+    },
+    {
+      "uf": "ES",
+      "deaths": 448,
+      "crude": 5.865,
+      "asmr_who": 4.455,
+      "ci": [
+        4.05,
+        4.898
+      ]
+    },
+    {
+      "uf": "GO",
+      "deaths": 686,
+      "crude": 4.896,
+      "asmr_who": 4.35,
+      "ci": [
+        4.03,
+        4.692
+      ]
+    },
+    {
+      "uf": "MT",
+      "deaths": 299,
+      "crude": 4.121,
+      "asmr_who": 4.257,
+      "ci": [
+        3.785,
+        4.774
+      ]
+    },
+    {
+      "uf": "MG",
+      "deaths": 2507,
+      "crude": 6.116,
+      "asmr_who": 4.246,
+      "ci": [
+        4.08,
+        4.419
+      ]
+    },
+    {
+      "uf": "RN",
+      "deaths": 356,
+      "crude": 5.401,
+      "asmr_who": 4.214,
+      "ci": [
+        3.784,
+        4.691
+      ]
+    },
+    {
+      "uf": "RO",
+      "deaths": 127,
+      "crude": 4.019,
+      "asmr_who": 3.933,
+      "ci": [
+        3.275,
+        4.694
+      ]
+    },
+    {
+      "uf": "PE",
+      "deaths": 860,
+      "crude": 4.753,
+      "asmr_who": 3.905,
+      "ci": [
+        3.648,
+        4.179
+      ]
+    },
+    {
+      "uf": "CE",
+      "deaths": 800,
+      "crude": 4.556,
+      "asmr_who": 3.687,
+      "ci": [
+        3.433,
+        3.957
+      ]
+    },
+    {
+      "uf": "SE",
+      "deaths": 182,
+      "crude": 4.13,
+      "asmr_who": 3.668,
+      "ci": [
+        3.153,
+        4.255
+      ]
+    },
+    {
+      "uf": "BA",
+      "deaths": 1290,
+      "crude": 4.564,
+      "asmr_who": 3.62,
+      "ci": [
+        3.424,
+        3.827
+      ]
+    },
+    {
+      "uf": "AL",
+      "deaths": 242,
+      "crude": 3.87,
+      "asmr_who": 3.582,
+      "ci": [
+        3.145,
+        4.068
+      ]
+    },
+    {
+      "uf": "AM",
+      "deaths": 209,
+      "crude": 2.665,
+      "asmr_who": 3.525,
+      "ci": [
+        3.059,
+        4.046
+      ]
+    },
+    {
+      "uf": "PB",
+      "deaths": 346,
+      "crude": 4.363,
+      "asmr_who": 3.298,
+      "ci": [
+        2.955,
+        3.678
+      ]
+    },
+    {
+      "uf": "RR",
+      "deaths": 28,
+      "crude": 2.231,
+      "asmr_who": 3.253,
+      "ci": [
+        2.145,
+        4.787
+      ]
+    },
+    {
+      "uf": "TO",
+      "deaths": 101,
+      "crude": 3.355,
+      "asmr_who": 3.172,
+      "ci": [
+        2.583,
+        3.865
+      ]
+    },
+    {
+      "uf": "PI",
+      "deaths": 246,
+      "crude": 3.768,
+      "asmr_who": 3.039,
+      "ci": [
+        2.668,
+        3.455
+      ]
+    },
+    {
+      "uf": "AC",
+      "deaths": 38,
+      "crude": 2.301,
+      "asmr_who": 2.879,
+      "ci": [
+        2.035,
+        3.969
+      ]
+    },
+    {
+      "uf": "PA",
+      "deaths": 399,
+      "crude": 2.466,
+      "asmr_who": 2.736,
+      "ci": [
+        2.473,
+        3.019
+      ]
+    },
+    {
+      "uf": "MA",
+      "deaths": 325,
+      "crude": 2.402,
+      "asmr_who": 2.378,
+      "ci": [
+        2.125,
+        2.653
+      ]
+    },
+    {
+      "uf": "AP",
+      "deaths": 21,
+      "crude": 1.437,
+      "asmr_who": 1.95,
+      "ci": [
+        1.197,
+        3.031
+      ]
+    }
+  ],
+  "temporal": [
+    {
+      "year": 2021,
+      "deaths": 11974,
+      "crude_per_100k": 5.93
+    },
+    {
+      "year": 2022,
+      "deaths": 12654,
+      "crude_per_100k": 6.231
+    }
+  ],
+  "place_of_death": [
+    {
+      "place": "hospital",
+      "deaths": 19421,
+      "pct": 78.86
+    },
+    {
+      "place": "household",
+      "deaths": 3941,
+      "pct": 16.0
+    },
+    {
+      "place": "other_health_facility",
+      "deaths": 1059,
+      "pct": 4.3
+    },
+    {
+      "place": "other",
+      "deaths": 169,
+      "pct": 0.69
+    },
+    {
+      "place": "public_road",
+      "deaths": 30,
+      "pct": 0.12
+    },
+    {
+      "place": "None",
+      "deaths": 8,
+      "pct": 0.03
+    }
+  ],
+  "data_quality": {
+    "missing_race_pct": 2.148,
+    "missing_age_pct": 0.008,
+    "missing_sex_pct": 0.012,
+    "missing_muni_pct": 0.016
+  },
+  "municipality": {
+    "n_municipalities_with_deaths": 3518,
+    "n_total_munis_with_pop": 5571,
+    "top10_by_deaths": [
+      {
+        "cod6": "355030",
+        "deaths": 2063,
+        "crude": 9.01
+      },
+      {
+        "cod6": "330455",
+        "deaths": 1161,
+        "crude": 9.34
+      },
+      {
+        "cod6": "310620",
+        "deaths": 424,
+        "crude": 9.15
+      },
+      {
+        "cod6": "292740",
+        "deaths": 391,
+        "crude": 8.05
+      },
+      {
+        "cod6": "431490",
+        "deaths": 384,
+        "crude": 14.37
+      },
+      {
+        "cod6": "410690",
+        "deaths": 331,
+        "crude": 9.34
+      },
+      {
+        "cod6": "530010",
+        "deaths": 322,
+        "crude": 5.74
+      },
+      {
+        "cod6": "230440",
+        "deaths": 311,
+        "crude": 6.4
+      },
+      {
+        "cod6": "261160",
+        "deaths": 266,
+        "crude": 8.92
+      },
+      {
+        "cod6": "520870",
+        "deaths": 224,
+        "crude": 7.82
+      }
+    ]
+  },
+  "qtensor": {
+    "n_fields": 72,
+    "state_counts": {
+      "verified": 58,
+      "fragile": 14
+    },
+    "moran_i_summary": {
+      "mean": 0.1414,
+      "max": 0.4697
+    },
+    "mean_n_eff": 6679.6
+  },
+  "ldo": {
+    "n_link_records": 20,
+    "columns": [
+      "source_var",
+      "target_var",
+      "edge_type",
+      "lag_k",
+      "weight",
+      "partial_correlation",
+      "response_curve_ref",
+      "spatial_field_ref",
+      "stability",
+      "uncertainty",
+      "confounding_factor_refs",
+      "null_strategy",
+      "fdr_method",
+      "code_system",
+      "topology_role",
+      "projection_status",
+      "overlap_jaccard",
+      "certification_status",
+      "warnings"
+    ],
+    "certification": {
+      "selected": 20
+    }
+  }
+}

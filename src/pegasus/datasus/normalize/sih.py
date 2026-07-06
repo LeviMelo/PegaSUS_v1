@@ -268,7 +268,7 @@ _SIH_AGE_UNITS = {
 _ICD_NORM = r"([A-Z][0-9]{2}[0-9A-Z]?)"
 
 
-def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.DataFrame:
+def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str, row_offset: int = 0) -> pl.DataFrame:
     """Fully vectorized SIH-RD raw→canonical decode (MSD §2.4.2).
 
     Produces the same canonical schema as ``normalize_sih_rd_record`` — including
@@ -327,7 +327,7 @@ def _sih_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     principal_norm = icd_norm("DIAG_PRINC", "principal_icd")
     principal_state = icd_state("DIAG_PRINC", "principal_icd")
 
-    out = lf.with_row_index("_i").with_columns(
+    out = lf.with_row_index("_i", offset=row_offset).with_columns(
         pl.concat_str([pl.lit("SIH-"), pl.coalesce([clean("AIH", "N_AIH", "admission_id"),
                        pl.col("_i").cast(pl.Utf8) + pl.lit("_" + source_manifest_hash[:8])])]).alias("admission_id"),
         pl.lit("SIH-RD").alias("source_system"),
@@ -420,14 +420,16 @@ def normalize_sih_rd_events(
     the record-level authority (``normalize_sih_rd_record``) for single-record use
     and as the correctness oracle the equivalence test pins.
     """
-    from pegasus.datasus.normalize.primitives import scan_raw_table
+    from pegasus.datasus.normalize.primitives import scan_raw_table, stream_normalize_batched
 
-    lf = scan_raw_table(input_path)  # stream scan → transform → sink; never hold the frame in RAM
-    missing = check_raw_completeness(lf, "SIH-RD")  # schema-only
-    out_lf = _sih_vectorized_frame(lf, source_manifest_hash=source_manifest_hash)
+    # Decode in bounded row-batches (the with_row_index/json_encode plan can't stream, so a
+    # whole-frame sink peaks at national-frame size — 15+ GB per UF). Peak RAM = one batch.
+    missing = check_raw_completeness(scan_raw_table(input_path), "SIH-RD")  # schema-only
     out_path = Path(output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_lf.sink_parquet(out_path, compression="zstd")
+    stream_normalize_batched(
+        input_path=input_path, output_path=out_path,
+        frame_fn=_sih_vectorized_frame, source_manifest_hash=source_manifest_hash,
+    )
     # Manifest stats in one streaming aggregate over the written artifact (footer + one scan).
     stats = (
         pl.scan_parquet(out_path)
@@ -439,12 +441,13 @@ def normalize_sih_rd_events(
         .collect()
         .row(0, named=True)
     )
+    written_columns = pl.scan_parquet(out_path).collect_schema().names()
     return {
         "input_path": str(input_path),
         "output_path": str(out_path),
         "row_count": int(stats["row_count"]),
-        "column_count": len(out_lf.collect_schema().names()),
-        "columns": list(out_lf.collect_schema().names()),
+        "column_count": len(written_columns),
+        "columns": list(written_columns),
         "valid_rows": int(stats["valid_rows"] or 0),
         "deaths": int(stats["deaths"] or 0),
         "cost_components": list(COST_COMPONENTS),

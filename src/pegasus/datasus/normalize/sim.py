@@ -236,7 +236,7 @@ _SIM_AGE_UNITS = {
 _SIM_CAUSE_CHAIN = (("A", "LINHAA"), ("B", "LINHAB"), ("C", "LINHAC"), ("D", "LINHAD"))
 
 
-def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.DataFrame:
+def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str, row_offset: int = 0) -> pl.DataFrame:
     """Fully vectorized SIM-DO raw→canonical decode (MSD §2.4.0/§2.4.1).
 
     Reproduces the registry-routed record path (`normalize_record` +
@@ -360,7 +360,7 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     # .hash() was pure waste (~1.8s/1M rows).
     content = row_hash(source_manifest_hash, "_i")
 
-    out = lf.with_row_index("_i").with_columns(
+    out = lf.with_row_index("_i", offset=row_offset).with_columns(
         pl.concat_str([pl.lit("sim_"), pl.col("_i").cast(pl.Utf8), pl.lit("_" + source_manifest_hash[:8])]).alias("event_id"),
         pl.lit("SIM-DO").alias("source_system"),
         year.alias("year"),
@@ -438,17 +438,17 @@ def normalize_sim_do_events(
     `_assemble_sim_do_record`) is retained as the correctness oracle the equivalence
     stress-check pins against; it is the same raw→canonical routing expressed as
     column operations."""
-    from pegasus.datasus.normalize.primitives import scan_raw_table
+    from pegasus.datasus.normalize.primitives import scan_raw_table, stream_normalize_batched
 
     input_path = Path(input_path)
     output_path = Path(output_path)
-    # Stream scan → transform → sink: never hold the (national, 30M-row) frame in RAM.
-    lf = scan_raw_table(input_path)
-    missing = check_raw_completeness(lf, "SIM-DO")  # schema-only
-    out_lf = _sim_vectorized_frame(lf, source_manifest_hash=source_manifest_hash)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    out_lf.sink_parquet(output_path, compression="zstd")
-    row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())  # footer read
+    # Decode in bounded row-batches: the plan can't stream (with_row_index) so a whole-frame
+    # sink would peak at national-frame size; the batched helper keeps peak RAM at one batch.
+    missing = check_raw_completeness(scan_raw_table(input_path), "SIM-DO")  # schema-only
+    row_count = stream_normalize_batched(
+        input_path=input_path, output_path=output_path,
+        frame_fn=_sim_vectorized_frame, source_manifest_hash=source_manifest_hash,
+    )
     return {
         "input_path": str(input_path),
         "output_path": str(output_path),

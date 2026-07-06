@@ -68,6 +68,81 @@ def scan_raw_table(path: str | Path) -> pl.LazyFrame:
         return pl.scan_ndjson(path)
     raise ValueError(f"Unsupported DATASUS input format: {path}")
 
+
+def stream_normalize_batched(
+    *,
+    input_path: str | Path,
+    output_path: str | Path,
+    frame_fn,
+    source_manifest_hash: str,
+    batch_rows: int = 120_000,
+) -> int:
+    """Decode a combined raw table into canonical form in bounded row-batches.
+
+    polars' streaming engine cannot stream the DATASUS decode plans — ``with_row_index``
+    plus per-row ``struct.json_encode`` force the whole-frame path, so ``sink_parquet`` on a
+    national/large-UF frame peaks at tens of GB (a per-UF SIH/CNES decode was measured at
+    15–17 GB and minutes of wall time). Instead we pull fixed-size row batches straight off
+    the parquet row groups, decode each eagerly (bounded ~``batch_rows`` working set), and
+    append via a single ``ParquetWriter`` — so peak RAM is one batch, independent of UF or
+    national size.
+
+    ``frame_fn(df, *, source_manifest_hash, row_offset)`` is a system's ``_X_vectorized_frame``
+    (eager in → eager out). ``row_offset`` is the running global row index, so the per-row
+    surrogate identity (``_i`` / ``row_hash`` / ``event_id``) is byte-identical to a
+    hypothetical whole-frame decode — batching changes only *where* rows are materialized,
+    never their values or order. Returns the total row count written.
+    """
+    import pyarrow.parquet as pq
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _eager(frame):
+        return frame.collect() if isinstance(frame, pl.LazyFrame) else frame
+
+    # Non-parquet ad-hoc inputs (test CSV/JSON) are small — decode whole-frame.
+    if input_path.suffix.lower() != ".parquet":
+        out = _eager(frame_fn(read_raw_table(input_path), source_manifest_hash=source_manifest_hash, row_offset=0))
+        out.write_parquet(output_path, compression="zstd")
+        return out.height
+
+    parquet = pq.ParquetFile(str(input_path))
+    writer: "pq.ParquetWriter | None" = None
+    target_schema: dict | None = None
+    total = 0
+    try:
+        for record_batch in parquet.iter_batches(batch_size=batch_rows):
+            if record_batch.num_rows == 0:
+                continue
+            batch = pl.from_arrow(record_batch)
+            if isinstance(batch, pl.Series):  # single-column arrow batch
+                batch = batch.to_frame()
+            out = _eager(frame_fn(batch, source_manifest_hash=source_manifest_hash, row_offset=total))
+            # Pin the schema from the first batch so every appended table matches (a column
+            # that is all-null in one batch must not drift dtype across batches). The decode
+            # dtypes are expression-determined, so batches almost always already agree — only
+            # cast on the rare mismatch to avoid a full-frame cast per batch.
+            if target_schema is None:
+                target_schema = dict(out.schema)
+            elif dict(out.schema) != target_schema:
+                out = out.cast(target_schema)
+            table = out.to_arrow()
+            if writer is None:
+                writer = pq.ParquetWriter(str(output_path), table.schema, compression="zstd")
+            writer.write_table(table)
+            total += record_batch.num_rows
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if writer is None:  # empty parquet input → emit a schema-only canonical file
+        empty = _eager(frame_fn(scan_raw_table(input_path).head(0), source_manifest_hash=source_manifest_hash, row_offset=0))
+        empty.write_parquet(output_path, compression="zstd")
+    return total
+
+
 # Canonical blank/sentinel tokens. Matches ``decoders._none_or_blank`` (strip +
 # case-insensitive {"", NA, NAN, NULL}) plus the historical "NONE" that the SIH/CNES
 # substrate normalizers also treated as blank. These are never legitimate values in

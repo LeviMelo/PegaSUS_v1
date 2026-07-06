@@ -242,24 +242,42 @@ def normalize_anomaly_icd(value: Any, anomaly_flag: bool | None) -> tuple[str | 
     return code, "valid_non_q_not_anomaly", False
 
 
-def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, source_manifest_hash: str) -> dict[str, Any]:
-    """Real vectorized SINASC raw→canonical SHE decoder (MSD §2.4.3, §2.6).
+SINASC_NORMALIZED_COLUMNS = [
+    "event_id", "source_system", "birth_date", "birth_year", "birth_date_state",
+    "mun_residence_cod6", "mun_residence_cod7", "mun_residence_state",
+    "mun_birth_cod6", "mun_birth_cod7", "mun_birth_state",
+    "mother_age_years", "maternal_birth_date", "newborn_sex", "newborn_sex_state",
+    "newborn_race_admin", "newborn_race_state", "maternal_race_admin", "maternal_race_state",
+    "birth_weight_g", "birth_weight_grams", "birth_weight_state", "gestational_weeks",
+    "gestational_age_state", "apgar_1min", "apgar_1min_state", "apgar_5min",
+    "apgar_5min_state", "delivery_mode_code", "delivery_mode_state", "delivery_mode_label",
+    "prenatal_consult_count", "prenatal_consult_state", "prenatal_consult_raw_digits",
+    "prenatal_visit_group", "live_children_count", "live_children_state",
+    "deceased_children_count", "deceased_children_state", "prior_pregnancy_count",
+    "prior_pregnancy_state", "prior_vaginal_delivery_count", "prior_vaginal_delivery_state",
+    "prior_cesarean_delivery_count", "prior_cesarean_delivery_state", "anomaly_flag",
+    "anomaly_flag_state", "anomaly_icd_code", "anomaly_icd_state", "anomaly_positive",
+    "place_of_birth", "maternal_marital_status",
+    "record_state", "source_manifest_hash", "row_hash", "raw_json",
+]
 
-    Replaces the previous path whose summary logic read flag keys the
-    registry-routed record normalizer never produced (it raised KeyError on the
-    first real file). Every canonical field is a Polars expression over the raw
-    SINASC columns; clinical indicators (low birth weight, prematurity, cesarean,
-    maternal-age bands) are computed per §2.6 definitions as 0/1 additive flags."""
-    df = _read_table(input_path).with_row_index("_row_idx")
-    missing_columns = check_raw_completeness(df, "SINASC")
-    out_path = Path(output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+def _sinasc_vectorized_frame(df: "pl.DataFrame | pl.LazyFrame", *, source_manifest_hash: str, row_offset: int = 0):
+    """Vectorized SINASC raw→canonical SHE decode (MSD §2.4.3, §2.6).
+
+    Every canonical field is a Polars expression over the raw SINASC columns; clinical
+    indicators (low birth weight, prematurity, cesarean, maternal-age bands) are computed
+    per §2.6 definitions as 0/1 additive flags. Lazy in → lazy out; eager in → eager out
+    (record oracle / tests / the batched decode). ``row_offset`` is the running global row
+    index so the per-row surrogate identity is stable across batches."""
+    is_lazy = isinstance(df, pl.LazyFrame)
+    lf = (df if is_lazy else df.lazy()).with_row_index("_row_idx", offset=row_offset)
 
     # Shared decode primitives (single source of truth, XCUT-02). SINASC carries no
     # cod6→cod7 crosswalk (only a 7-digit input yields cod7), matching Cols'
     # crosswalk=None path. The scalar/count2 builders below keep SINASC's own §2.3
     # output-state vocabulary (missing/sentinel/invalid/valid, MissingCount/…).
-    cx = Cols(df)
+    cx = Cols(lf)
     clean = cx.clean
     digits = cx.digits
     int_digits = cx.int_digits
@@ -306,7 +324,7 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
     anomaly_code = clean("CODANOMAL").str.to_uppercase().str.extract(r"([A-Z][0-9]{2}[0-9A-Z]?)", 1)
     event_key = pl.coalesce([clean("NUMERODN"), clean("contador"), clean("CONTADOR"), pl.col("_row_idx").cast(pl.Utf8) + pl.lit(f"_{source_manifest_hash[:8]}")])
 
-    out = df.with_columns(
+    out = lf.with_columns(
         birth_dt.alias("_birth_dt"),
         birth_dt.dt.year().alias("_birth_year"),
         *municipality("mun_residence", "CODMUNRES"),
@@ -389,38 +407,56 @@ def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, 
         pl.lit(source_manifest_hash).alias("source_manifest_hash"),
         pl.concat_str([pl.lit(source_manifest_hash), pl.lit(":"), pl.col("_row_idx").cast(pl.Utf8)]).hash().cast(pl.Utf8).alias("row_hash"),
         pl.lit(None, dtype=pl.Utf8).alias("raw_json"),
-    ).select([
-        "event_id", "source_system", "birth_date", "birth_year", "birth_date_state",
-        "mun_residence_cod6", "mun_residence_cod7", "mun_residence_state",
-        "mun_birth_cod6", "mun_birth_cod7", "mun_birth_state",
-        "mother_age_years", "maternal_birth_date", "newborn_sex", "newborn_sex_state",
-        "newborn_race_admin", "newborn_race_state", "maternal_race_admin", "maternal_race_state",
-        "birth_weight_g", "birth_weight_grams", "birth_weight_state", "gestational_weeks",
-        "gestational_age_state", "apgar_1min", "apgar_1min_state", "apgar_5min",
-        "apgar_5min_state", "delivery_mode_code", "delivery_mode_state", "delivery_mode_label",
-        "prenatal_consult_count", "prenatal_consult_state", "prenatal_consult_raw_digits",
-        "prenatal_visit_group", "live_children_count", "live_children_state",
-        "deceased_children_count", "deceased_children_state", "prior_pregnancy_count",
-        "prior_pregnancy_state", "prior_vaginal_delivery_count", "prior_vaginal_delivery_state",
-        "prior_cesarean_delivery_count", "prior_cesarean_delivery_state", "anomaly_flag",
-        "anomaly_flag_state", "anomaly_icd_code", "anomaly_icd_state", "anomaly_positive",
-        "place_of_birth", "maternal_marital_status",
-        "record_state", "source_manifest_hash", "row_hash", "raw_json",
-    ])
-    out.write_parquet(out_path)
-    valid_rows = int((out.get_column("record_state") == "valid").sum()) if out.height else 0
+    ).select(SINASC_NORMALIZED_COLUMNS)
+    # Lazy in → lazy out (streaming sink); eager in → eager out (record oracle / tests).
+    return out if is_lazy else out.collect()
+
+
+def normalize_sinasc_events(*, input_path: str | Path, output_path: str | Path, source_manifest_hash: str) -> dict[str, Any]:
+    """SINASC raw→canonical SHE normalizer (MSD §2.4.3, §2.6), fully streaming.
+
+    Streams ``scan_raw_table → _sinasc_vectorized_frame(lazy) → sink_parquet`` so the
+    national per-UF SINASC frame is never held in RAM (matches SIM/SIH/CNES). Summary
+    stats are one streaming aggregate over the written parquet — not seven eager
+    ``filter().height`` re-materializations of the whole frame."""
+    from pegasus.datasus.normalize.primitives import scan_raw_table, stream_normalize_batched
+
+    input_path = Path(input_path)
+    out_path = Path(output_path)
+    missing_columns = check_raw_completeness(scan_raw_table(input_path), "SINASC")  # schema-only
+    stream_normalize_batched(
+        input_path=input_path, output_path=out_path,
+        frame_fn=_sinasc_vectorized_frame, source_manifest_hash=source_manifest_hash,
+    )
+    # One streaming pass computes every summary count (booleans sum to their True-count;
+    # an empty frame sums to 0). Read back from the written parquet, never the input.
+    stats = (
+        pl.scan_parquet(out_path)
+        .select(
+            pl.len().alias("row_count"),
+            (pl.col("record_state") == "valid").sum().alias("valid_rows"),
+            (pl.col("birth_weight_g").is_not_null() & (pl.col("birth_weight_g") < 2500)).sum().alias("low_birth_weight_rows"),
+            (pl.col("gestational_weeks").is_not_null() & (pl.col("gestational_weeks") < 37)).sum().alias("prematurity_rows"),
+            (pl.col("delivery_mode_code") == "2").sum().alias("cesarean_rows"),
+            (pl.col("apgar_5min").is_not_null() & (pl.col("apgar_5min") < 7)).sum().alias("low_apgar5_rows"),
+            (pl.col("prenatal_consult_count").is_not_null() & (pl.col("prenatal_consult_count") < 7)).sum().alias("insufficient_prenatal_rows"),
+            pl.col("anomaly_positive").fill_null(False).sum().alias("anomaly_rows"),
+        )
+        .collect(engine="streaming")
+        .row(0, named=True)
+    )
     return {
-        "row_count": out.height,
-        "valid_rows": valid_rows,
-        "low_birth_weight_rows": int(out.filter(pl.col("birth_weight_g").is_not_null() & (pl.col("birth_weight_g") < 2500)).height) if out.height else 0,
-        "prematurity_rows": int(out.filter(pl.col("gestational_weeks").is_not_null() & (pl.col("gestational_weeks") < 37)).height) if out.height else 0,
-        "cesarean_rows": int(out.filter(pl.col("delivery_mode_code") == "2").height) if out.height else 0,
-        "low_apgar5_rows": int(out.filter(pl.col("apgar_5min").is_not_null() & (pl.col("apgar_5min") < 7)).height) if out.height else 0,
-        "insufficient_prenatal_rows": int(out.filter(pl.col("prenatal_consult_count").is_not_null() & (pl.col("prenatal_consult_count") < 7)).height) if out.height else 0,
-        "anomaly_rows": int(out.get_column("anomaly_positive").fill_null(False).sum()) if out.height else 0,
+        "row_count": int(stats["row_count"]),
+        "valid_rows": int(stats["valid_rows"] or 0),
+        "low_birth_weight_rows": int(stats["low_birth_weight_rows"] or 0),
+        "prematurity_rows": int(stats["prematurity_rows"] or 0),
+        "cesarean_rows": int(stats["cesarean_rows"] or 0),
+        "low_apgar5_rows": int(stats["low_apgar5_rows"] or 0),
+        "insufficient_prenatal_rows": int(stats["insufficient_prenatal_rows"] or 0),
+        "anomaly_rows": int(stats["anomaly_rows"] or 0),
         "output_path": str(out_path),
-        "column_count": len(out.columns),
-        "columns": out.columns,
+        "column_count": len(SINASC_NORMALIZED_COLUMNS),
+        "columns": list(SINASC_NORMALIZED_COLUMNS),
         "missing_required_columns": missing_columns,
     }
 

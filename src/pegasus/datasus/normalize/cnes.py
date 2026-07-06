@@ -203,7 +203,7 @@ def normalize_cnes_st_record(row: dict[str, Any], *, source_manifest_hash: str) 
     }
 
 
-def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.DataFrame:
+def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str, row_offset: int = 0) -> pl.DataFrame:
     """Fully vectorized CNES-ST raw→canonical decode (MSD §2.4.4, §2.4.0.4).
 
     Produces the same canonical schema as ``normalize_cnes_st_record`` — typed
@@ -269,7 +269,7 @@ def _cnes_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl
     facility = cx.clean("CNES", "facility_id")
     mun = cx.municipality("mun_facility", "CODUFMUN", "CODMUN", "MUNIC_RES", "facility_municipality", crosswalk=load_municipality_crosswalk())
 
-    out = lf.with_row_index("_i").with_columns(
+    out = lf.with_row_index("_i", offset=row_offset).with_columns(
         facility.alias("facility_id"),
         pl.lit("CNES-ST").alias("source_system"),
         year.alias("year"),
@@ -323,14 +323,16 @@ def normalize_cnes_st_events(
     linkage gate. ``normalize_cnes_st_record`` is retained as the record-level
     correctness oracle the equivalence stress-check pins against.
     """
-    from pegasus.datasus.normalize.primitives import scan_raw_table
+    from pegasus.datasus.normalize.primitives import scan_raw_table, stream_normalize_batched
 
-    lf = scan_raw_table(input_path)  # stream scan → transform → sink; never hold the frame in RAM
-    missing = check_raw_completeness(lf, "CNES-ST")  # schema-only
-    out_lf = _cnes_vectorized_frame(lf, source_manifest_hash=source_manifest_hash)
+    # Decode in bounded row-batches (the with_row_index/json_encode plan can't stream, so a
+    # whole-frame sink peaks at national-frame size — 17+ GB per UF). Peak RAM = one batch.
+    missing = check_raw_completeness(scan_raw_table(input_path), "CNES-ST")  # schema-only
     out_path = Path(output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_lf.sink_parquet(out_path, compression="zstd")
+    stream_normalize_batched(
+        input_path=input_path, output_path=out_path,
+        frame_fn=_cnes_vectorized_frame, source_manifest_hash=source_manifest_hash,
+    )
     written = pl.scan_parquet(out_path)
     stats = written.select(
         pl.len().alias("row_count"),
@@ -345,7 +347,7 @@ def normalize_cnes_st_events(
                 capacity_components.update(json.loads(first.item()).keys())
         except (ValueError, TypeError):
             pass
-    cols = out_lf.collect_schema().names()
+    cols = written.collect_schema().names()
     return {
         "row_count": int(stats["row_count"]),
         "output_path": str(out_path),

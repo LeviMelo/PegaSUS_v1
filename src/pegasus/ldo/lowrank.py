@@ -56,6 +56,31 @@ def _psd_project_shifted(M: np.ndarray, shift: float) -> np.ndarray:
     return (vecs * vals) @ vecs.T
 
 
+def _low_rank_factors(
+    L: np.ndarray, *, rank_cap: int, randomized: bool, seed: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Eigenfactors of the PSD low-rank component ``L`` (values desc, loadings aligned).
+
+    MSD-III §V.3: the shared-driver factors are few, so at scale the top-``rank_cap``
+    eigenpairs are recovered by **randomized SVD** (Halko–Martinsson–Tropp) in O(p²·r)
+    instead of a dense O(p³) eigh — bounded error since ``L`` is genuinely low-rank
+    (the tail past its numerical rank is zero). This is a post-convergence readout; it
+    does not touch the ADMM iteration (or the CPW S/L split), so the exact and
+    randomized paths agree to tolerance. Small ``p`` uses the exact eigh.
+    """
+    p = L.shape[0]
+    if randomized and p > 2 * rank_cap and rank_cap >= 1:
+        from sklearn.utils.extmath import randomized_svd
+
+        # L is symmetric PSD → its SVD is its eigendecomposition (U singular vectors are
+        # eigenvectors, singular values are the non-negative eigenvalues).
+        U, s, _ = randomized_svd(L, n_components=min(rank_cap, p - 1), random_state=seed,
+                                 n_oversamples=10, n_iter=4)
+        return s, U
+    vals, vecs = np.linalg.eigh(L)
+    return vals[::-1], vecs[:, ::-1]
+
+
 def fit_sparse_plus_lowrank(
     emp_cov: np.ndarray,
     *,
@@ -68,6 +93,9 @@ def fit_sparse_plus_lowrank(
     loading_threshold: float = 0.3,
     min_factor_support: int = 3,
     penalty_matrix: np.ndarray | None = None,
+    factor_rank_cap: int = 24,
+    randomized_factors: bool | None = None,
+    seed: int = 0,
 ) -> SparseLowRankFit:
     """LVGLASSO ADMM: ``Ω = S - L`` from an empirical covariance.
 
@@ -128,11 +156,16 @@ def fit_sparse_plus_lowrank(
     ]
     direct_edges.sort(key=lambda e: abs(e[2]), reverse=True)
 
-    # Latent factors: eigen-decomposition of L.
-    vals, vecs = np.linalg.eigh(L)
-    keep = vals > max(1e-6, 1e-3 * vals.max() if vals.size else 0.0)
-    factor_values = vals[keep][::-1]
-    factor_loadings = vecs[:, keep][:, ::-1]
+    # Latent factors: eigendecomposition of L (randomized SVD at scale, §V.3).
+    use_randomized = randomized_factors if randomized_factors is not None else (p > 2 * factor_rank_cap)
+    vals, vecs = _low_rank_factors(L, rank_cap=factor_rank_cap, randomized=use_randomized, seed=seed)
+    # Keep only factors clearly above the noise floor (2% of the top eigenvalue). Shared
+    # drivers are few and large; the fat tail of small PSD-projection eigenvalues emitted
+    # spurious latent_shared pairs and made the exact/randomized readouts disagree —
+    # dropping it cleans the readout and lets §V.6 exact-certifies-approximate hold.
+    keep = vals > max(1e-6, 0.02 * vals.max() if vals.size else 0.0)
+    factor_values = vals[keep]
+    factor_loadings = vecs[:, keep]
 
     # latent_shared pairs: variables both loading strongly on a common factor.
     # CPW incoherence gate: a factor supported on < min_factor_support variables is a

@@ -45,21 +45,23 @@ class LDORun:
         return [r.as_row() for r in self.link_records]
 
 
-def _to_gaussian_field(
+def _prepare_ldo_inputs(
     source: CommonPanel | LDOField | GaussianField,
     *,
     seed: int,
     keep_variables: set[str] | frozenset[str] | None = None,
     exposure=None,
-) -> GaussianField:
+) -> tuple[LDOField | None, GaussianField]:
+    """Return ``(raw_field, gaussian_field)``. The raw (pre-gaussianized) LDOField is
+    kept for causal orientation — LiNGAM cannot identify direction on gaussianized
+    data. It is ``None`` when the source is already a GaussianField (no raw values)."""
     if isinstance(source, CommonPanel):
-        return gaussianize_field(
-            assemble_ldo_tensor(source, keep_variables=keep_variables), seed=seed, exposure=exposure
-        )
+        raw = assemble_ldo_tensor(source, keep_variables=keep_variables)
+        return raw, gaussianize_field(raw, seed=seed, exposure=exposure)
     if isinstance(source, LDOField):
-        return gaussianize_field(source, seed=seed, exposure=exposure)
+        return source, gaussianize_field(source, seed=seed, exposure=exposure)
     if isinstance(source, GaussianField):
-        return source
+        return None, source
     raise TypeError(f"run_ldo cannot consume {type(source).__name__}")
 
 
@@ -109,7 +111,7 @@ def run_ldo(
     prior: related disease-concept variables get a lower ℓ1 penalty so their sparse
     links survive. Absent it, the estimator is the plain scalar-penalty LVGLASSO.
     """
-    gf = _to_gaussian_field(source, seed=seed, keep_variables=keep_variables, exposure=exposure)
+    raw_field, gf = _prepare_ldo_inputs(source, seed=seed, keep_variables=keep_variables, exposure=exposure)
     p, S, T = gf.shape
 
     requested_K = K
@@ -176,6 +178,18 @@ def run_ldo(
 
     records = certify_links(records, policy=certification_policy)
 
+    # Rung-1 causal orientation (§IV): direct contemporaneous edges by non-Gaussian
+    # LiNGAM where identifiable (lagged edges already carry time precedence); the LDO
+    # emits an oriented hypothesis skeleton, not just undirected associations. Orientation
+    # needs the RAW (non-gaussianized) values — direction is unidentifiable on Gaussian
+    # data — so it is a no-op (all undirected) when the source was a GaussianField.
+    from pegasus.causal.orient import orient_links
+    if raw_field is not None:
+        orient_data = {v: raw_field.X[i].reshape(-1) for i, v in enumerate(raw_field.variables)}
+    else:
+        orient_data = {v: gf.Z[i].reshape(-1) for i, v in enumerate(gf.variables)}
+    records = orient_links(records, orient_data)
+
     n_eff = int(np.isfinite(gf.Z).any(axis=0).sum())
     diagnostics = {
         "p": p, "S": S, "T": T, "K": K, "K_requested": requested_K,
@@ -191,6 +205,9 @@ def run_ldo(
         "disease_prior_applied": disease_penalty is not None,
         "n_mechanical_overlap": sum(1 for r in records if r.edge_type == "mechanical_overlap"),
         "n_disease_provenanced": sum(1 for r in records if r.code_system is not None),
+        # Rung-1 orientation (§IV): edges given a non-Gaussian LiNGAM direction vs left undirected.
+        "n_oriented_lingam": sum(1 for r in records if "oriented_non_gaussian_lingam" in r.warnings),
+        "n_orientation_undirected": sum(1 for r in records if "orientation_undirected_unidentifiable" in r.warnings),
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

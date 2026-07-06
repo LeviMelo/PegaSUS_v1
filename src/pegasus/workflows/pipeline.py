@@ -24,6 +24,7 @@ so ``from pegasus.workflows.pipeline import <X>`` keeps working for every caller
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -198,27 +199,41 @@ def _acquire_datasus(
     # Fetch all systems in one global worker pool (parallel across systems AND
     # years) instead of one system at a time.
     batches = client.fetch_systems(systems=systems, uf=uf, years=years)
-    # Fail fast (serially) on any unsuccessful fetch before spawning combine/normalize work.
+    # Tolerate per-chunk unavailability: a DATASUS system simply lacks its earliest years
+    # (CNES-ST begins ~2005, not 2000; SIH/SINASC start later than SIM-DO), or a whole system
+    # is absent for a UF. An exhaustive engine uses ALL AVAILABLE data and MUST NOT abort the
+    # national run over year-UF chunks that do not exist in DATASUS. A system with ≥1 successful
+    # chunk is normalized over exactly those; a system with zero is skipped (logged); only ALL
+    # systems failing for a UF is a hard error.
+    usable_systems: list[str] = []
     for system in systems:
         batch = batches[system]
-        if not batch.ok:
-            failed = [r for r in batch.requests if r.status not in {"success", "cached"}]
-            if failed:
-                reason = "; ".join(
-                    f"{r.system} {r.uf} {r.year_start}-{r.month_start or 'NA'}:{r.status}:{r.error_message}"
-                    for r in failed[:12]
-                )
-            else:
-                reason = f"datasus fetch not ok for {system}"
-            raise LivePipelineError(f"DATASUS acquisition failed for {system} {uf} {years}: {reason}")
+        ok = [r for r in batch.requests if r.status in {"success", "cached"}]
+        failed = [r for r in batch.requests if r.status not in {"success", "cached"}]
+        if failed:
+            example = failed[0].error_message or failed[0].status
+            warnings.warn(
+                f"DATASUS {system} {uf} {years}: {len(failed)}/{len(batch.requests)} chunks "
+                f"unavailable (e.g. {example}); normalizing the {len(ok)} available chunk(s).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if ok:
+            usable_systems.append(system)
+    if not usable_systems:
+        raise LivePipelineError(
+            f"DATASUS acquisition failed: no available chunks for ANY of {systems} in {uf} {years}"
+        )
 
     def _combine_normalize_one(system: str) -> dict[str, Any]:
         """Combine chunks → normalize → inspect for one system. Self-contained: writes
         to system-keyed paths, reads only its own already-completed batch, and calls the
         pure ``inspect_source_artifact`` — no shared mutable state, so systems run in
-        parallel. The normalizers stream (scan→sink) so per-thread RAM stays bounded."""
+        parallel. The normalizers stream (scan→sink) so per-thread RAM stays bounded.
+        Only the successfully-fetched chunks are combined (missing early years are skipped)."""
         batch = batches[system]
-        request_hashes = [sha256_file(Path(path)) for path in batch.manifest_paths]
+        ok_requests = [r for r in batch.requests if r.status in {"success", "cached"}]
+        request_hashes = [sha256_file(Path(path)) for path in batch.manifest_paths if Path(path).exists()]
         combined_hash = sha256_text(json.dumps({
             "system": system,
             "uf": uf,
@@ -233,7 +248,7 @@ def _acquire_datasus(
             data_root / "normalized" / "datasus" / system
             / f"uf={uf}" / f"years={years}" / combined_hash[:16] / "canonical.parquet"
         )
-        _combine_processed_datasus_chunks(system=system, requests=list(batch.requests), out_path=combined_processed)
+        _combine_processed_datasus_chunks(system=system, requests=ok_requests, out_path=combined_processed)
         _normalize_datasus(
             system=system,
             raw_path=combined_processed,
@@ -251,12 +266,12 @@ def _acquire_datasus(
 
     # Overlap the CPU/I-O-heavy combine+normalize across systems (polars releases the
     # GIL during scan/sink). ``pool.map`` preserves ``systems`` order in the result.
-    if len(systems) <= 1:
-        return [_combine_normalize_one(system) for system in systems]
+    if len(usable_systems) <= 1:
+        return [_combine_normalize_one(system) for system in usable_systems]
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=len(systems), thread_name_prefix="datasus-normalize") as pool:
-        return list(pool.map(_combine_normalize_one, systems))
+    with ThreadPoolExecutor(max_workers=len(usable_systems), thread_name_prefix="datasus-normalize") as pool:
+        return list(pool.map(_combine_normalize_one, usable_systems))
 
 
 _RACE_BRIDGE_PRIOR_REQUIRED_MODES = frozenset({

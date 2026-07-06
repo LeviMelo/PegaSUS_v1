@@ -185,7 +185,14 @@ def compile_common_panel(
         )
 
     value_frame = index.clone()
-    manifest_rows: list[dict[str, Any]] = []
+    # The per-cell provenance manifest is built per-field as a VECTORIZED polars frame
+    # (state/reason as when/then columns) and concatenated — never a per-cell Python append
+    # loop. The old row-by-row `manifest_rows.append({...})` was O(fields x cells) dict builds
+    # (~800k at national scale) AND crashed polars' schema inference: `reason` is String|Null,
+    # the first 100 rows were all-null so polars typed the column Null, then a later
+    # "cell_absent_from_field_support" string failed to append. Typing reason as Utf8 fixes it.
+    _key_cols = list(cell_keys)
+    manifest_frames: list[pl.DataFrame] = []
     panel_fields: list[PanelField] = []
 
     for fid, row in meta.items():
@@ -196,35 +203,45 @@ def compile_common_panel(
         if tensor is None:
             panel_fields.append(PanelField(fid, name, provenance, state, ()))
             value_frame = value_frame.with_columns(pl.lit(None).alias(fid))
-            for cell in index.iter_rows(named=True):
-                manifest_rows.append({**cell, "field_id": fid, "state": "unavailable_on_panel", "reason": "field_not_materialized"})
+            manifest_frames.append(
+                index.select(
+                    *_key_cols,
+                    pl.lit(fid).alias("field_id"),
+                    pl.lit("unavailable_on_panel").alias("state"),
+                    pl.lit("field_not_materialized", dtype=pl.Utf8).alias("reason"),
+                )
+            )
             continue
 
         support = _support_keys(tensor)
         panel_fields.append(PanelField(fid, name, provenance, state, support))
         aligned, broadcast_state = _align_field(fid, tensor, index, cell_keys)
-        value_frame = value_frame.join(aligned, on=list(cell_keys), how="left")
+        value_frame = value_frame.join(aligned, on=_key_cols, how="left")
 
-        # Per-cell provenance: observed/broadcast where a value landed, else
-        # unavailable_on_panel with a reason (never blank).
+        # Per-cell provenance (vectorized): observed/broadcast where a value landed, else
+        # unavailable_on_panel with a non-blank reason.
         coarse_reason = None
         if resolution == "month" and "month" not in support and "year" in support:
             coarse_reason = "field_resolution_coarser_than_panel:year"
-        for cell in aligned.iter_rows(named=True):
-            has_value = cell.get(fid) is not None
-            if has_value:
-                cell_state = broadcast_state
-                reason = None
-            else:
-                cell_state = "unavailable_on_panel"
-                reason = coarse_reason or "cell_absent_from_field_support"
-            manifest_rows.append(
-                {**{k: cell.get(k) for k in cell_keys}, "field_id": fid, "state": cell_state, "reason": reason}
+        absent_reason = coarse_reason or "cell_absent_from_field_support"
+        _has = pl.col(fid).is_not_null()
+        manifest_frames.append(
+            aligned.select(
+                *_key_cols,
+                pl.lit(fid).alias("field_id"),
+                pl.when(_has).then(pl.lit(broadcast_state)).otherwise(pl.lit("unavailable_on_panel")).alias("state"),
+                pl.when(_has).then(pl.lit(None, dtype=pl.Utf8)).otherwise(pl.lit(absent_reason, dtype=pl.Utf8)).alias("reason"),
             )
+        )
 
-    manifest = pl.DataFrame(manifest_rows) if manifest_rows else pl.DataFrame(
-        {**{k: [] for k in cell_keys}, "field_id": [], "state": [], "reason": []}
-    )
+    if manifest_frames:
+        manifest = pl.concat(manifest_frames, how="vertical_relaxed")
+    else:
+        manifest = index.select(*_key_cols).head(0).with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias("field_id"),
+            pl.lit(None, dtype=pl.Utf8).alias("state"),
+            pl.lit(None, dtype=pl.Utf8).alias("reason"),
+        )
     return CommonPanel(
         resolution=resolution,
         cell_keys=cell_keys,

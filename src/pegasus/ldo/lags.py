@@ -42,6 +42,7 @@ class LaggedFit:
     lagged_links: list[LaggedLink] = field(default_factory=list)
     latent_shared: list[tuple[str, str, float]] = field(default_factory=list)
     contemporaneous: list[tuple[str, str, float]] = field(default_factory=list)  # (i, j, partial_corr) lag-0
+    lag0_precision: np.ndarray | None = None  # (p×p) lag-0 precision aligned to `variables`
 
 
 def _build_lagged_feature_matrix(Z: np.ndarray, K: int) -> np.ndarray:
@@ -140,9 +141,26 @@ def fit_lagged_links(
         if fa in lag0_feature_to_var and fb in lag0_feature_to_var:
             latent_shared.append((field.variables[fa], field.variables[fb], v))
 
+    # Lag-0 precision aligned to the p base variables (feature index of base var i at
+    # lag 0 is i). Built through the kept `pos` map so a dropped low-coverage variable
+    # defaults to identity (no edge) rather than misindexing a lag>0 feature row — the
+    # residual scan requires a p×p block aligned to `variables`; slicing S[:p,:p] by raw
+    # position misattributes edges when any lag-0 var is dropped and is undersized (q<p)
+    # when many are, silently disabling the scan.
+    lag0_precision = np.eye(p)
+    for i in range(p):
+        ai = pos.get(i)
+        if ai is None:
+            continue
+        for j in range(p):
+            aj = pos.get(j)
+            if aj is not None:
+                lag0_precision[i, j] = S[ai, aj]
+
     return LaggedFit(
         variables=field.variables, K=K, fit=fit,
         lagged_links=lagged_links, latent_shared=latent_shared, contemporaneous=contemporaneous,
+        lag0_precision=lag0_precision,
     )
 
 

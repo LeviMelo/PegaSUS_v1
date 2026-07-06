@@ -148,17 +148,19 @@ def run_ldo(
             records = type_mechanical_overlap(records, code_sets)
 
     if run_residual_scan:
-        # Residual scan uses the contemporaneous (lag-0) precision block.
-        lag0 = lagged.fit.S[:p, :p]
+        # Residual scan uses the lag-0 precision block, aligned p×p to gf.variables
+        # (built through the kept-feature map in lags.py; NOT the raw S[:p,:p] slice,
+        # which misindexes when low-coverage variables are dropped).
+        lag0 = lagged.lag0_precision
+        if lag0 is None:
+            lag0 = np.eye(p)
         try:
             records.extend(
                 scan_residual_nonlinear_edges(gf, lag0, budget=budget, seed=seed + 2)
             )
-        except Exception as exc:  # residual scan is additive; never fail the run
-            records = records  # noqa: PLW0127
-            _residual_error = f"{type(exc).__name__}:{exc}"
-        else:
             _residual_error = None
+        except Exception as exc:  # residual scan is additive; never fail the run
+            _residual_error = f"{type(exc).__name__}:{exc}"
     else:
         _residual_error = None
 

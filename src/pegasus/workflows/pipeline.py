@@ -173,12 +173,16 @@ def _combine_processed_datasus_chunks(*, system: str, requests: list[Any], out_p
     """
     if out_path.exists():
         return out_path
-    frames = [pl.read_parquet(request.processed_path) for request in requests]
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if not frames:
+    if not requests:
         pl.DataFrame().write_parquet(out_path)
         return out_path
-    pl.concat(frames, how="diagonal_relaxed").write_parquet(out_path)
+    # Stream the per-chunk scans into one combined artifact via a lazy concat + streaming
+    # sink — never materialize all chunks in RAM (§V.1/§V.7(3): no O(national) in-memory
+    # copy; a national SIH combine is ~10⁷ rows/year × 27 UFs). ZSTD on write. Mirrors
+    # _combine_national_artifacts. Same output file + consumer contract as before.
+    lazy = [pl.scan_parquet(request.processed_path) for request in requests]
+    pl.concat(lazy, how="diagonal_relaxed").sink_parquet(out_path, compression="zstd")
     return out_path
 
 

@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from pegasus.core.hashing import content_hash
@@ -64,11 +65,34 @@ def extract_one_chunk(
 ) -> SIDRAChunkResult:
     raw_path = _raw_chunk_path(chunk, raw_dir=raw_dir)
     facts_path = _facts_chunk_path(chunk, facts_root=facts_root)
+    request_hash = content_hash(chunk.model_dump(mode="json"))
+
+    # Warm-run cache-skip: chunk_id (+ table_id) is the chunk's content identity and keys the
+    # facts file, so if it already exists this exact chunk is materialized — don't re-fetch the
+    # (cached) payload, re-parse it, and re-write the parquet. A national compendium re-run
+    # reprocessed thousands of on-disk chunks (~94 tables × 27 UFs × chunks). Row count is read
+    # from the parquet footer; a corrupt/unreadable cache falls through and re-extracts.
+    if facts_path.exists():
+        try:
+            n = int(pl.scan_parquet(facts_path).select(pl.len()).collect().item())
+        except Exception:
+            pass
+        else:
+            return SIDRAChunkResult(
+                chunk_id=chunk.chunk_id,
+                table_id=chunk.table_id,
+                status="success",
+                status_code=200,
+                raw_path=str(raw_path) if raw_path.exists() else None,
+                facts_path=str(facts_path),
+                row_count=n,
+                request_hash=request_hash,
+            )
+
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     facts_path.parent.mkdir(parents=True, exist_ok=True)
 
     response = client.values_from_chunk(chunk)
-    request_hash = content_hash(chunk.model_dump(mode="json"))
 
     # The full response payload is already archived by the SidraClient cache
     # (data/cache/sidra, namespace=values, keyed by url+params). Dumping it again here doubled the

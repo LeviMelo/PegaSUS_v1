@@ -8,8 +8,8 @@ __pycache__/
 .mypy_cache/
 .coverage
 htmlcov/
-build/
-dist/
+/build/
+/dist/
 *.egg-info/
 
 # Virtual environments

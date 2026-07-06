@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -405,20 +405,62 @@ def _build_population_tensor_artifact(
     return artifact, manifest
 
 
-def _run_compile_impl(
+@dataclass
+class _CompilePlan:
+    """Resolved compile plan: every local established during plan resolution and
+    threaded through the downstream materialization/serialization phases."""
+
+    intent: UserIntent
+    intent_payload: dict[str, Any]
+    intent_path: Path
+    data_root: Path
+    source_manifest: str | Path | None
+    compile_source_reality: Any
+    municipality_cod6: str | None
+    geo_scope: GeoScope
+    include_cnes_sih: bool
+    population_tensor_mode: str | None
+    compiler_architecture: dict[str, Any]
+    compiler_stage_plan: Any
+    race_bridge_plan: RaceBridgePlan
+    intent_hash: str
+    run_id: str
+    run_dir: Path
+    telemetry: RunTelemetry
+    bundle_manager: OutputBundleManager
+    source_hashes: dict[str, str]
+    registry_hashes: dict[str, str]
+    compile_manifest_path: Path
+    autonomous_artifacts: tuple[SourceArtifactRef, ...]
+
+
+@dataclass
+class _StageStatusResult:
+    """PURE derivation output: domain-summary metadata + stage-status decisions.
+
+    Holds no telemetry side effects; the ordered `stage_updates` list is applied
+    to the telemetry object by `_apply_derived_telemetry`."""
+
+    cnes_sih_metadata: dict[str, Any] | None
+    population_tensor_metadata: dict[str, Any] | None
+    race_bridge_metadata: dict[str, Any] | None
+    sidra_context_metadata: dict[str, Any] | None
+    skipped_reasons: dict[str, Any]
+    stage_updates: list[tuple[str, str, float]] = field(default_factory=list)
+
+
+def _resolve_compile_plan(
     *,
-    intent_path: str | Path,
-    run_dir: str | Path | None = None,
-    data_root: str | Path = "data",
-    source_manifest: str | Path | None = None,
-    require_materialized_external: bool = False,
-) -> dict[str, Any]:
-    intent_path = Path(intent_path)
-    data_root = Path(data_root)
-    from pegasus.source_artifacts.compile_policy import (
-        attach_compile_source_reality,
-        resolve_compile_source_reality,
-    )
+    intent_path: Path,
+    run_dir: str | Path | None,
+    data_root: Path,
+    source_manifest: str | Path | None,
+    require_materialized_external: bool,
+) -> _CompilePlan:
+    """Plan resolution: intent, geo scope, race-bridge plan (incl. materialized
+    prior validation), stage plan, run identity, telemetry, and manifest-artifact
+    validation. Produces the fully-resolved `_CompilePlan` context."""
+    from pegasus.source_artifacts.compile_policy import resolve_compile_source_reality
 
     compile_source_reality = resolve_compile_source_reality(
         source_manifest=source_manifest,
@@ -519,15 +561,49 @@ def _run_compile_impl(
         )
         source_hashes["race_bridge_emission_prior"] = prior_artifact.artifact_hash or prior.prior_hash
 
+    return _CompilePlan(
+        intent=intent,
+        intent_payload=intent_payload,
+        intent_path=intent_path,
+        data_root=data_root,
+        source_manifest=source_manifest,
+        compile_source_reality=compile_source_reality,
+        municipality_cod6=municipality_cod6,
+        geo_scope=geo_scope,
+        include_cnes_sih=include_cnes_sih,
+        population_tensor_mode=population_tensor_mode,
+        compiler_architecture=compiler_architecture,
+        compiler_stage_plan=compiler_stage_plan,
+        race_bridge_plan=race_bridge_plan,
+        intent_hash=intent_hash,
+        run_id=run_id,
+        run_dir=run_dir,
+        telemetry=telemetry,
+        bundle_manager=bundle_manager,
+        source_hashes=source_hashes,
+        registry_hashes=registry_hashes,
+        compile_manifest_path=compile_manifest_path,
+        autonomous_artifacts=autonomous_artifacts,
+    )
+
+
+def _hash_and_manifest_sources(plan: _CompilePlan) -> None:
+    """Source hashing + compile manifest write across the datasus_manifest /
+    datasus_acquire / datasus_decode / sidra_normalize telemetry stages. Mutates
+    `plan.source_hashes` and `plan.compile_manifest_path` in place."""
+    telemetry = plan.telemetry
+    source_hashes = plan.source_hashes
+    autonomous_artifacts = plan.autonomous_artifacts
+
     with telemetry.stage("datasus_manifest"):
-        compile_manifest_path = _write_compile_manifest(
-            run_id=run_id,
-            intent_path=intent_path,
-            data_root=data_root,
-            run_dir=run_dir,
-            payload=intent_payload,
+        plan.compile_manifest_path = _write_compile_manifest(
+            run_id=plan.run_id,
+            intent_path=plan.intent_path,
+            data_root=plan.data_root,
+            run_dir=plan.run_dir,
+            payload=plan.intent_payload,
         )
-        source_hashes["compile_manifest"] = sha256_file(compile_manifest_path)
+        source_hashes["compile_manifest"] = sha256_file(plan.compile_manifest_path)
 
     with telemetry.stage("datasus_acquire"):
         for idx, artifact in enumerate(autonomous_artifacts):
@@ -538,9 +614,9 @@ def _run_compile_impl(
 
     with telemetry.stage("datasus_decode"):
         source_hashes["source_manifest"] = (
-            sha256_file(Path(source_manifest))
-            if source_manifest is not None
-            else content_hash(compile_source_reality.as_manifest())
+            sha256_file(Path(plan.source_manifest))
+            if plan.source_manifest is not None
+            else content_hash(plan.compile_source_reality.as_manifest())
         )
 
     telemetry.set_stage("sidra_metadata", "skipped", 0.0)
@@ -555,75 +631,98 @@ def _run_compile_impl(
             if artifact.source_system == "SIDRA" and artifact.artifact_role == "normalized_facts"
         )
 
+
+def _materialize_population_and_substrate(
+    plan: _CompilePlan,
+) -> tuple[Any, dict[str, Any] | None, dict[str, Any]]:
+    """Population solver + SHE substrate build + autonomous EFG build/attach.
+
+    Mutates `plan.autonomous_artifacts`/`plan.source_hashes` in place and returns
+    `(autonomous_result, population_solver_manifest, autonomous_efg_metadata)`."""
+    telemetry = plan.telemetry
+    intent = plan.intent
+    source_hashes = plan.source_hashes
+
     population_solver_manifest: dict[str, Any] | None = None
     with telemetry.stage("population_solver"):
         population_tensor_artifact, population_solver_manifest = _build_population_tensor_artifact(
-            artifacts=autonomous_artifacts,
-            run_dir=run_dir,
+            artifacts=plan.autonomous_artifacts,
+            run_dir=plan.run_dir,
             population_mode=intent.population_mode,
-            race_bridge_plan=race_bridge_plan,
+            race_bridge_plan=plan.race_bridge_plan,
             execution_scale=intent.execution_scale,
             time_window=intent.time,
         )
         if population_tensor_artifact is None:
             telemetry.set_stage("population_solver", "skipped", 0.0)
         else:
-            autonomous_artifacts = (*autonomous_artifacts, population_tensor_artifact)
+            plan.autonomous_artifacts = (*plan.autonomous_artifacts, population_tensor_artifact)
             source_hashes["population_tensor_solver"] = population_tensor_artifact.artifact_hash or sha256_file(Path(population_tensor_artifact.path))
 
-    autonomous_efg_metadata: dict[str, Any] | None = None
     with telemetry.stage("she_build"):
-        autonomous_substrate = build_substrate_bundle(artifacts=autonomous_artifacts)
+        autonomous_substrate = build_substrate_bundle(artifacts=plan.autonomous_artifacts)
 
     with telemetry.stage("efg_build"):
         autonomous_result = build_efg(
             substrate=autonomous_substrate,
             intent=intent,
-            intent_constraints={"race_bridge_plan": race_bridge_plan.as_manifest()},
+            intent_constraints={"race_bridge_plan": plan.race_bridge_plan.as_manifest()},
             operator_mode="standard",
         )
         autonomous_attach = attach_autonomous_efg_to_run(
-            run_dir=run_dir,
+            run_dir=plan.run_dir,
             result=autonomous_result,
             validate=False,
-            bundle=bundle_manager,
+            bundle=plan.bundle_manager,
             intent=intent,
         )
         autonomous_efg_metadata = {
             **autonomous_attach.as_manifest(),
             "substrate_id": autonomous_substrate.substrate_id,
             "source_reality_mode": autonomous_substrate.source_reality_mode,
-            "source_systems": sorted({artifact.source_system for artifact in autonomous_artifacts}),
+            "source_systems": sorted({artifact.source_system for artifact in plan.autonomous_artifacts}),
             "registry_hashes": autonomous_result.registry_hashes,
             "legality_summary": autonomous_result.legality_summary,
             "precompression": autonomous_result.precompression.as_manifest(),
         }
         source_hashes["autonomous_efg_manifest"] = autonomous_attach.manifest_hash
 
+    return autonomous_result, population_solver_manifest, autonomous_efg_metadata
+
+
+def _derive_stage_status(
+    *,
+    autonomous_result: Any,
+    intent: UserIntent,
+    compiler_stage_plan: Any,
+    population_solver_manifest: dict[str, Any] | None,
+) -> _StageStatusResult:
+    """PURE (no I/O): extract domain-summary metadata and derive the stage-status
+    decisions + skipped-reason map. Emits an ordered `stage_updates` list that
+    `_apply_derived_telemetry` replays against the telemetry object."""
     domain_summaries = dict(autonomous_result.domain_summaries or {})
     cnes_sih_metadata: dict[str, Any] | None = domain_summaries.get("cnes_sih")
     population_tensor_metadata: dict[str, Any] | None = domain_summaries.get("population_tensor")
     race_bridge_metadata: dict[str, Any] | None = domain_summaries.get("race_bridge")
     sidra_context_metadata: dict[str, Any] | None = domain_summaries.get("sidra_context")
 
+    stage_updates: list[tuple[str, str, float]] = []
     # MSD cutover: manual domain attachers are forbidden. CNES/SIH, maternal-child,
     # SIDRA denominators, population, and race bridge fields must be produced by
     # SHE substrate + autonomous EFG bridge/operator expansion + physical executor.
-    telemetry.set_stage("race_bridge", "success" if race_bridge_metadata is not None else "skipped", 0.0)
-    telemetry.flush()
-
-    telemetry.set_stage("geo_support", "success", 0.0)
-    telemetry.set_stage("q_tensor", "success", 0.0)
+    stage_updates.append(("race_bridge", "success" if race_bridge_metadata is not None else "skipped", 0.0))
+    stage_updates.append(("geo_support", "success", 0.0))
+    stage_updates.append(("q_tensor", "success", 0.0))
     if population_tensor_metadata is None:
-        telemetry.set_stage("population_solver", "skipped", 0.0)
+        stage_updates.append(("population_solver", "skipped", 0.0))
     stdfm_executed_count = int((sidra_context_metadata or {}).get("stdfm_executed_count") or 0)
     sidra_context_field_count = int((sidra_context_metadata or {}).get("field_count") or 0)
     if stdfm_executed_count > 0:
-        telemetry.set_stage("stdfm", "success", 0.0)
+        stage_updates.append(("stdfm", "success", 0.0))
     elif intent.run_profile in {"contextual", "full"} and sidra_context_field_count > 0:
-        telemetry.set_stage("stdfm", "skipped", 0.0)
+        stage_updates.append(("stdfm", "skipped", 0.0))
     else:
-        telemetry.set_stage("stdfm", "skipped", 0.0)
+        stage_updates.append(("stdfm", "skipped", 0.0))
     skipped_reasons = {
         **compiler_stage_plan.skip_reason_map(),
     }
@@ -635,7 +734,37 @@ def _run_compile_impl(
         skipped_reasons["stdfm"] = "blocked_no_sidra_context_fields: contextual/full profile requires materialized SIDRA context_facts"
     if population_tensor_metadata is None:
         skipped_reasons["population_solver"] = "official SIDRA anchor selected by intent"
-    elif population_solver_manifest is not None:
+
+    return _StageStatusResult(
+        cnes_sih_metadata=cnes_sih_metadata,
+        population_tensor_metadata=population_tensor_metadata,
+        race_bridge_metadata=race_bridge_metadata,
+        sidra_context_metadata=sidra_context_metadata,
+        skipped_reasons=skipped_reasons,
+        stage_updates=stage_updates,
+    )
+
+
+def _apply_derived_telemetry(
+    plan: _CompilePlan,
+    status: _StageStatusResult,
+    *,
+    population_solver_manifest: dict[str, Any] | None,
+) -> None:
+    """Replay the PURE stage-status derivation onto the telemetry object,
+    preserving the original flush points and resource-summary writes."""
+    telemetry = plan.telemetry
+    updates = status.stage_updates
+    # The first update (race_bridge) is followed by a flush; the remainder are
+    # applied together before the skipped_reasons flush — matching the original
+    # interleaving of set_stage / flush calls.
+    if updates:
+        stage, state, value = updates[0]
+        telemetry.set_stage(stage, state, value)
+        telemetry.flush()
+        for stage, state, value in updates[1:]:
+            telemetry.set_stage(stage, state, value)
+    if status.population_tensor_metadata is not None and population_solver_manifest is not None:
         telemetry.resource_summary["population_solver"] = population_solver_manifest
 
     # Surface the full intent (incl. force_selectors) into the bundle BEFORE the
@@ -645,14 +774,55 @@ def _run_compile_impl(
     # workspace copies the stub and the forced outcome is silently dropped.
     # Surface the full intent (incl. force_selectors) into the bundle before output
     # serialization so downstream stages (and the LDO at investigate) see them.
-    _seed_user_intent_for_pirs(bundle_manager, run_dir, intent_payload)
+    _seed_user_intent_for_pirs(plan.bundle_manager, plan.run_dir, plan.intent_payload)
     # Inference is an ExecutionStage=investigate concern (MSD-II §II.5). The compile
     # stage materializes V_fields/Q_tensor only; the Lattice Dependency Operator (the
     # LDO, run below after the bundle flush) is the single inference engine, replacing
     # the retired PIRS/HSIC slice-zoo (MII-LDO-06). At compile/validate stage the
     # inference keys stay empty with an empty_by_stage row (anti-silence).
-    telemetry.resource_summary["skipped_reasons"] = skipped_reasons
+    telemetry.resource_summary["skipped_reasons"] = status.skipped_reasons
     telemetry.flush()
+
+
+def _serialize_run_bundle(
+    plan: _CompilePlan,
+    status: _StageStatusResult,
+    *,
+    autonomous_efg_metadata: dict[str, Any] | None,
+) -> None:
+    """Run-bundle serialization: RunConfig.json + reproducibility manifests.
+
+    The manifest-extras / final-extras construction (originally two near-identical
+    blocks) is factored into a single local `_build_extras` helper."""
+    intent = plan.intent
+    telemetry = plan.telemetry
+    run_dir = plan.run_dir
+    run_id = plan.run_id
+    cnes_sih_metadata = status.cnes_sih_metadata
+    population_tensor_metadata = status.population_tensor_metadata
+    race_bridge_metadata = status.race_bridge_metadata
+
+    def _build_extras() -> dict[str, Any]:
+        extras = {
+            "compile_mode": "compile",
+            "run_profile": intent.run_profile,
+            "compile_manifest": str(plan.compile_manifest_path),
+            "intent_path": str(plan.intent_path),
+            "maternal_child_linkage": True,
+            "race_bridge_plan": plan.race_bridge_plan.as_manifest(),
+            "context_policy": intent.context_policy,
+            "compiler_architecture": plan.compiler_architecture,
+            "compiler_stage_plan": plan.compiler_stage_plan.as_manifest(),
+        }
+        if race_bridge_metadata is not None:
+            extras["race_bridge"] = race_bridge_metadata
+        if cnes_sih_metadata is not None:
+            extras["cnes_sih"] = cnes_sih_metadata
+        if population_tensor_metadata is not None:
+            extras["population_tensor"] = population_tensor_metadata
+        if autonomous_efg_metadata is not None:
+            extras["autonomous_efg"] = autonomous_efg_metadata
+        return extras
 
     with telemetry.stage("output_serialization"):
         # Ensure the run directory exists for the pre-flush serialization writes. The
@@ -660,7 +830,7 @@ def _run_compile_impl(
         # after the flush, so create it explicitly here (idempotent).
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "UserIntent.json").write_text(
-            json.dumps(intent_payload, ensure_ascii=False, sort_keys=True, indent=2),
+            json.dumps(plan.intent_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
         run_config_path = run_dir / "RunConfig.json"
@@ -669,29 +839,29 @@ def _run_compile_impl(
             "compile_mode": "compile",
             "run_id": run_id,
             "run_profile": intent.run_profile,
-            "intent_path": str(intent_path),
-            "data_root": str(data_root),
+            "intent_path": str(plan.intent_path),
+            "data_root": str(plan.data_root),
             "context_policy": intent.context_policy,
             "support_policy": {
                 "geography_level": intent.geography.level,
                 "ibge_cod7": intent.geography.codes,
-                "datasus_cod6": [municipality_cod6],
+                "datasus_cod6": [plan.municipality_cod6],
                 "geo_scope": {
-                    "level": geo_scope.level,
-                    "uf": geo_scope.uf,
-                    "datasus_uf_prefix": geo_scope.datasus_uf_prefix,
-                    "ibge_uf_cod2": geo_scope.ibge_uf_cod2,
-                    "expected_municipality_count": geo_scope.expected_municipality_count,
+                    "level": plan.geo_scope.level,
+                    "uf": plan.geo_scope.uf,
+                    "datasus_uf_prefix": plan.geo_scope.datasus_uf_prefix,
+                    "ibge_uf_cod2": plan.geo_scope.ibge_uf_cod2,
+                    "expected_municipality_count": plan.geo_scope.expected_municipality_count,
                 },
                 "geo_mode": intent.geo_mode,
             },
             "population_mode": intent.population_mode,
             "race_tensor_mode": intent.race_tensor_mode,
-            "race_bridge_plan": race_bridge_plan.as_manifest(),
-            "compiler_architecture": compiler_architecture,
-            "compiler_stage_plan": compiler_stage_plan.as_manifest(),
-            "registry_hashes": registry_hashes,
-            "source_hashes": source_hashes,
+            "race_bridge_plan": plan.race_bridge_plan.as_manifest(),
+            "compiler_architecture": plan.compiler_architecture,
+            "compiler_stage_plan": plan.compiler_stage_plan.as_manifest(),
+            "registry_hashes": plan.registry_hashes,
+            "source_hashes": plan.source_hashes,
         }
         existing_run_config = {}
         if run_config_path.exists():
@@ -719,69 +889,48 @@ def _run_compile_impl(
             json.dumps(run_config_payload, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
-        manifest_extras = {
-            "compile_mode": "compile",
-            "run_profile": intent.run_profile,
-            "compile_manifest": str(compile_manifest_path),
-            "intent_path": str(intent_path),
-            "maternal_child_linkage": True,
-            "race_bridge_plan": race_bridge_plan.as_manifest(),
-            "context_policy": intent.context_policy,
-            "compiler_architecture": compiler_architecture,
-            "compiler_stage_plan": compiler_stage_plan.as_manifest(),
-        }
-        if race_bridge_metadata is not None:
-            manifest_extras["race_bridge"] = race_bridge_metadata
-        if cnes_sih_metadata is not None:
-            manifest_extras["cnes_sih"] = cnes_sih_metadata
-        if population_tensor_metadata is not None:
-            manifest_extras["population_tensor"] = population_tensor_metadata
-        if autonomous_efg_metadata is not None:
-            manifest_extras["autonomous_efg"] = autonomous_efg_metadata
         write_reproducibility_manifest(
             run_dir=run_dir,
             run_id=run_id,
-            intent_hash=intent_hash,
-            source_hashes=source_hashes,
-            registry_hashes=registry_hashes,
+            intent_hash=plan.intent_hash,
+            source_hashes=plan.source_hashes,
+            registry_hashes=plan.registry_hashes,
             telemetry=telemetry,
-            extras=manifest_extras,
+            extras=_build_extras(),
         )
 
-    final_extras = {
-        "compile_mode": "compile",
-        "run_profile": intent.run_profile,
-        "compile_manifest": str(compile_manifest_path),
-        "intent_path": str(intent_path),
-        "maternal_child_linkage": True,
-        "race_bridge_plan": race_bridge_plan.as_manifest(),
-        "context_policy": intent.context_policy,
-        "compiler_architecture": compiler_architecture,
-        "compiler_stage_plan": compiler_stage_plan.as_manifest(),
-    }
-    if race_bridge_metadata is not None:
-        final_extras["race_bridge"] = race_bridge_metadata
-    if cnes_sih_metadata is not None:
-        final_extras["cnes_sih"] = cnes_sih_metadata
-    if population_tensor_metadata is not None:
-        final_extras["population_tensor"] = population_tensor_metadata
-    if autonomous_efg_metadata is not None:
-        final_extras["autonomous_efg"] = autonomous_efg_metadata
     write_reproducibility_manifest(
         run_dir=run_dir,
         run_id=run_id,
-        intent_hash=intent_hash,
-        source_hashes=source_hashes,
-        registry_hashes=registry_hashes,
+        intent_hash=plan.intent_hash,
+        source_hashes=plan.source_hashes,
+        registry_hashes=plan.registry_hashes,
         telemetry=telemetry,
-        extras=final_extras,
+        extras=_build_extras(),
     )
+
+    # The RunConfig-merge block above may hydrate metadata from an existing
+    # RunConfig.json; write the (possibly-updated) values back onto `status` so the
+    # caller's return payload and manifests observe the same values.
+    status.race_bridge_metadata = race_bridge_metadata
+    status.cnes_sih_metadata = cnes_sih_metadata
+    status.population_tensor_metadata = population_tensor_metadata
+
+
+def _flush_and_investigate(plan: _CompilePlan) -> tuple[Path, dict[str, Any] | None]:
+    """Atomic bundle flush + the ExecutionStage=investigate LDO run. Returns the
+    (possibly relocated) run_dir and the LDO metadata (or None)."""
+    from pegasus.source_artifacts.compile_policy import attach_compile_source_reality
+
+    telemetry = plan.telemetry
+    intent = plan.intent
+    run_dir = plan.run_dir
 
     # Phase E boundary: first-class tables are valid only after atomic bundle flush.
     with telemetry.stage("output_bundle_flush"):
-        attach_compile_source_reality(run_dir=run_dir, source_reality=compile_source_reality)
-        bundle_manager.collect_missing_from_run(run_dir)
-        run_dir = bundle_manager.flush_to_disk(run_dir)
+        attach_compile_source_reality(run_dir=run_dir, source_reality=plan.compile_source_reality)
+        plan.bundle_manager.collect_missing_from_run(run_dir)
+        run_dir = plan.bundle_manager.flush_to_disk(run_dir)
 
     # ExecutionStage=investigate: run the LDO over the freshly-flushed CommonPanel and
     # write the typed LinkRecords to Hypotheses (MSD-II §II.6/§II.8, MII-LDO-06). The
@@ -800,23 +949,60 @@ def _run_compile_impl(
         }
         telemetry.resource_summary["ldo"] = ldo_metadata
 
+    return run_dir, ldo_metadata
+
+
+def _run_compile_impl(
+    *,
+    intent_path: str | Path,
+    run_dir: str | Path | None = None,
+    data_root: str | Path = "data",
+    source_manifest: str | Path | None = None,
+    require_materialized_external: bool = False,
+) -> dict[str, Any]:
+    plan = _resolve_compile_plan(
+        intent_path=Path(intent_path),
+        run_dir=run_dir,
+        data_root=Path(data_root),
+        source_manifest=source_manifest,
+        require_materialized_external=require_materialized_external,
+    )
+
+    _hash_and_manifest_sources(plan)
+
+    autonomous_result, population_solver_manifest, autonomous_efg_metadata = (
+        _materialize_population_and_substrate(plan)
+    )
+
+    status = _derive_stage_status(
+        autonomous_result=autonomous_result,
+        intent=plan.intent,
+        compiler_stage_plan=plan.compiler_stage_plan,
+        population_solver_manifest=population_solver_manifest,
+    )
+    _apply_derived_telemetry(plan, status, population_solver_manifest=population_solver_manifest)
+
+    _serialize_run_bundle(plan, status, autonomous_efg_metadata=autonomous_efg_metadata)
+
+    run_dir, _ldo_metadata = _flush_and_investigate(plan)
+
     validation = validate_output_bundle(run_dir=str(run_dir))
     return {
         "status": "success" if validation.ok else "failed",
-        "run_id": run_id,
+        "run_id": plan.run_id,
         "run_dir": run_dir,
-        "intent": intent,
+        "intent": plan.intent,
         "validation": validation,
-        "source_hashes": source_hashes,
-        "registry_hashes": registry_hashes,
-        "telemetry": telemetry.model(),
-        "race_bridge_plan": race_bridge_plan.as_manifest(),
-        "race_bridge": race_bridge_metadata,
-        "cnes_sih": cnes_sih_metadata,
-        "population_tensor": population_tensor_metadata,
+        "source_hashes": plan.source_hashes,
+        "registry_hashes": plan.registry_hashes,
+        "telemetry": plan.telemetry.model(),
+        "race_bridge_plan": plan.race_bridge_plan.as_manifest(),
+        "race_bridge": status.race_bridge_metadata,
+        "cnes_sih": status.cnes_sih_metadata,
+        "population_tensor": status.population_tensor_metadata,
         "autonomous_efg": autonomous_efg_metadata,
-        "compiler_architecture": compiler_architecture,
-        "compiler_stage_plan": compiler_stage_plan.as_manifest(),
+        "compiler_architecture": plan.compiler_architecture,
+        "compiler_stage_plan": plan.compiler_stage_plan.as_manifest(),
     }
 
 # ---- Slice 13C compile/substrate contract consolidation ----

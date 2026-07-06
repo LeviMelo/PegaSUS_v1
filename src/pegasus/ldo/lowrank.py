@@ -66,6 +66,7 @@ def fit_sparse_plus_lowrank(
     tol: float = 1e-5,
     edge_threshold: float = 0.05,
     loading_threshold: float = 0.3,
+    min_factor_support: int = 3,
     penalty_matrix: np.ndarray | None = None,
 ) -> SparseLowRankFit:
     """LVGLASSO ADMM: ``Ω = S - L`` from an empirical covariance.
@@ -75,6 +76,17 @@ def fit_sparse_plus_lowrank(
     related disease-concept variables get a *lower* penalty so their (sparse) edges
     survive, i.e. dependency profiles vary smoothly across the disease hierarchy.
     Absent it, the estimator is the plain scalar-penalty LVGLASSO (a no-op prior).
+
+    ``min_factor_support`` enforces the Chandrasekaran–Parrilo–Willsky **incoherence
+    identifiability condition** at readout: a genuine low-rank latent driver must be
+    *spread* across variables, so a recovered factor whose strong loadings concentrate
+    on fewer than ``min_factor_support`` variables is not a shared driver but a direct
+    edge (a rank-1 component on 2 variables is exactly a strong pairwise link). Such
+    concentrated factors are dropped from ``latent_shared`` (they surface in ``S`` as
+    ``direct_edges``). Without this, one direct edge is double-reported as both a
+    ``contemporaneous`` and a ``latent_shared`` link, and there is no fixed ``lambda2``
+    that separates the two roles — the collapse the LDO exhibited at every operating
+    point.
     """
     p = emp_cov.shape[0]
     C = 0.5 * (emp_cov + emp_cov.T) + 1e-4 * np.eye(p)
@@ -123,10 +135,15 @@ def fit_sparse_plus_lowrank(
     factor_loadings = vecs[:, keep][:, ::-1]
 
     # latent_shared pairs: variables both loading strongly on a common factor.
+    # CPW incoherence gate: a factor supported on < min_factor_support variables is a
+    # concentrated (coherent) component — a direct edge, not a shared driver — so it is
+    # not reported as latent_shared (it is already recovered in S / direct_edges).
     latent_shared: list[tuple[int, int, float]] = []
     for f in range(factor_loadings.shape[1]):
         load = factor_loadings[:, f]
         strong = [i for i in range(p) if abs(load[i]) >= loading_threshold]
+        if len(strong) < min_factor_support:
+            continue
         for a_i in range(len(strong)):
             for b_i in range(a_i + 1, len(strong)):
                 i, j = strong[a_i], strong[b_i]
@@ -136,7 +153,14 @@ def fit_sparse_plus_lowrank(
     for i, j, v in latent_shared:
         key = (i, j)
         best[key] = max(best.get(key, 0.0), v)
-    latent_shared = sorted(((i, j, v) for (i, j), v in best.items()), key=lambda e: e[2], reverse=True)
+    # Mutual exclusion (§III.4.2): a pair reported as a direct edge in S is not also a
+    # confounded (latent_shared) pair — one pair, one role. S (net of the shared driver)
+    # is authoritative for direct links, so drop any direct-edge pair from latent_shared.
+    direct_pairs = {(i, j) for i, j, _ in direct_edges}
+    latent_shared = sorted(
+        ((i, j, v) for (i, j), v in best.items() if (i, j) not in direct_pairs),
+        key=lambda e: e[2], reverse=True,
+    )
 
     return SparseLowRankFit(
         S=S, L=L, precision=precision,

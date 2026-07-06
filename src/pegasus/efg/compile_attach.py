@@ -15,6 +15,7 @@ from pegasus.core.hashing import sha256_file
 from pegasus.efg.dag import EFGResult
 from pegasus.efg.executor import VALUE_COLUMN, execute_efg_result
 from pegasus.efg.lineage import lineage_hash
+from pegasus.efg.q_tensor import _kish_effective_n, _moran_corrected_n_eff
 from pegasus.geo.adjacency import load_adjacency
 from pegasus.geo.spatial_graph import structural_cod6_adjacency
 from pegasus.output.bundle_manager import OutputBundleManager
@@ -220,10 +221,10 @@ def _moran_diagnostic(vector: list[float | None], panel: pl.DataFrame | None, ad
     return _moran_i_adjacency(vector, panel, adjacency)
 
 
-def _moran_corrected_n_eff(n_obs: int, moran_i: float | None) -> float:
-    if moran_i is None or moran_i <= 0:
-        return float(n_obs)
-    return float(max(1.0, n_obs * (1.0 - moran_i) / (1.0 + moran_i)))
+# n_eff is computed from the single §3.12.3 source of truth in efg.q_tensor
+# (_kish_effective_n + _moran_corrected_n_eff) — see _vector_diagnostics. The old local
+# n_obs-based estimator (no Kish weighting, (1-I)/(1+I) deflation) over-counted the number
+# of independent observations and was non-conformant with MSD-I §3.12.3.
 
 
 def _vector_diagnostics(
@@ -244,8 +245,14 @@ def _vector_diagnostics(
     else:
         cv = None
     moran_i = _moran_diagnostic(vector, panel, adjacency)
+    # §3.12.3 effective sample size: Kish (Σw)²/Σw² over the observed cell weights
+    # (numerator counts / rate values — the no-denominator fallback q_tensor.compute_q_state
+    # also uses), deflated by 1/(1+max(0,MoranI)); falls back to the raw observed-cell count
+    # when no positive weight exists. Uses the geography-aware moran_i computed above.
+    _kish = _kish_effective_n(observed)
+    n_eff = _moran_corrected_n_eff(_kish if _kish is not None else float(n_obs), moran_i)
     return {
-        "n_eff": _moran_corrected_n_eff(n_obs, moran_i),
+        "n_eff": n_eff,
         "missingness": float(missingness),
         "zero_inflation": float(zero_inflation),
         "cv": cv,

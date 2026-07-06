@@ -53,6 +53,21 @@ def read_raw_table(path: str | Path) -> pl.DataFrame:
         return pl.read_ndjson(path)
     raise ValueError(f"Unsupported DATASUS input format: {path}")
 
+
+def scan_raw_table(path: str | Path) -> pl.LazyFrame:
+    """Lazy counterpart of :func:`read_raw_table` — lets a normalizer stream
+    ``scan → transform → sink_parquet`` with bounded (O(chunk)) memory instead of
+    reading the whole national frame into RAM. Same typing discipline (CSV/TXT all-Utf8)."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        return pl.scan_parquet(path)
+    if suffix in {".csv", ".txt"}:
+        return pl.scan_csv(path, infer_schema_length=0, ignore_errors=False)
+    if suffix in {".json", ".ndjson"}:
+        return pl.scan_ndjson(path)
+    raise ValueError(f"Unsupported DATASUS input format: {path}")
+
 # Canonical blank/sentinel tokens. Matches ``decoders._none_or_blank`` (strip +
 # case-insensitive {"", NA, NAN, NULL}) plus the historical "NONE" that the SIH/CNES
 # substrate normalizers also treated as blank. These are never legitimate values in
@@ -76,8 +91,10 @@ class Cols:
     resolves to a typed null literal so an optional field never crashes the decode.
     """
 
-    def __init__(self, df: pl.DataFrame):
-        self._columns = set(df.columns)
+    def __init__(self, df: "pl.DataFrame | pl.LazyFrame"):
+        # Only the column NAMES are needed (every method returns an expression), so a
+        # LazyFrame works too — this lets the normalizer stream scan→transform→sink.
+        self._columns = set(df.collect_schema().names()) if isinstance(df, pl.LazyFrame) else set(df.columns)
 
     # -- raw access -------------------------------------------------------
     def has(self, name: str) -> bool:

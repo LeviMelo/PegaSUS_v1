@@ -248,7 +248,9 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     """
     from pegasus.datasus.normalize.primitives import Cols, row_hash
 
-    cx = Cols(df)
+    is_lazy = isinstance(df, pl.LazyFrame)
+    lf = df if is_lazy else df.lazy()
+    cx = Cols(lf)
     crosswalk = _load_sim_crosswalk()
 
     def preserve(col: str) -> pl.Expr:
@@ -358,7 +360,7 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
     # .hash() was pure waste (~1.8s/1M rows).
     content = row_hash(source_manifest_hash, "_i")
 
-    out = df.with_row_index("_i").with_columns(
+    out = lf.with_row_index("_i").with_columns(
         pl.concat_str([pl.lit("sim_"), pl.col("_i").cast(pl.Utf8), pl.lit("_" + source_manifest_hash[:8])]).alias("event_id"),
         pl.lit("SIM-DO").alias("source_system"),
         year.alias("year"),
@@ -412,7 +414,9 @@ def _sim_vectorized_frame(df: pl.DataFrame, *, source_manifest_hash: str) -> pl.
         content.alias("processed_record_hash"),
         pl.lit(source_manifest_hash).alias("source_manifest_hash"),
     )
-    return out.select(SIM_DO_NORMALIZED_COLUMNS)
+    result = out.select(SIM_DO_NORMALIZED_COLUMNS)
+    # Lazy in → lazy out (streaming sink); eager in → eager out (record oracle / tests).
+    return result if is_lazy else result.collect()
 
 
 def _load_sim_crosswalk() -> dict[str, str]:
@@ -434,19 +438,23 @@ def normalize_sim_do_events(
     `_assemble_sim_do_record`) is retained as the correctness oracle the equivalence
     stress-check pins against; it is the same raw→canonical routing expressed as
     column operations."""
+    from pegasus.datasus.normalize.primitives import scan_raw_table
+
     input_path = Path(input_path)
     output_path = Path(output_path)
-    df = _read_table(input_path)
-    missing = check_raw_completeness(df, "SIM-DO")
-    out = _sim_vectorized_frame(df, source_manifest_hash=source_manifest_hash)
+    # Stream scan → transform → sink: never hold the (national, 30M-row) frame in RAM.
+    lf = scan_raw_table(input_path)
+    missing = check_raw_completeness(lf, "SIM-DO")  # schema-only
+    out_lf = _sim_vectorized_frame(lf, source_manifest_hash=source_manifest_hash)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    out.write_parquet(output_path)
+    out_lf.sink_parquet(output_path, compression="zstd")
+    row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())  # footer read
     return {
         "input_path": str(input_path),
         "output_path": str(output_path),
-        "row_count": out.height,
-        "column_count": len(out.columns),
-        "columns": out.columns,
+        "row_count": row_count,
+        "column_count": len(SIM_DO_NORMALIZED_COLUMNS),
+        "columns": list(SIM_DO_NORMALIZED_COLUMNS),
         "missing_required_columns": missing,
     }
 

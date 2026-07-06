@@ -36,10 +36,13 @@ REQUIRED_RAW_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 
-def missing_required_columns(df: pl.DataFrame, system: str) -> list[str]:
-    """Return the required raw columns for ``system`` that are absent from ``df``."""
+def missing_required_columns(df: "pl.DataFrame | pl.LazyFrame", system: str) -> list[str]:
+    """Return the required raw columns for ``system`` that are absent from ``df``.
+
+    Accepts a LazyFrame (schema-only, no data scan) so the streaming normalizer can
+    check completeness without materializing the frame."""
     expected = REQUIRED_RAW_COLUMNS.get(system, ())
-    present = set(df.columns)
+    present = set(df.collect_schema().names()) if isinstance(df, pl.LazyFrame) else set(df.columns)
     return [c for c in expected if c not in present]
 
 

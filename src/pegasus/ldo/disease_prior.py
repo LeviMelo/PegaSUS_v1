@@ -1,12 +1,19 @@
 """Disease-structure prior on the LDO precision (MSD-III §II.6/§III.4/§5.2; MII-DIS-04).
 
-The disease Laplacian ``L_D`` enters the variable-dependency operator ``Ω_var`` as a
-smoothness/fused prior — the disease-axis analogue of the spatial GMRF ``L_W`` on the
-cell precision. It is realized as a disease-informed *adaptive ℓ1 penalty* on the
-sparse component ``S`` of the LVGLASSO: structurally related disease-concept variables
-(siblings / parent-child in the CID-10 hierarchy) get a *lower* penalty, so their
-(sparse) edges survive — "dependency profiles vary smoothly across semantically
-similar diseases" (§5.2).
+MSD-III §III.4(5) names three prior-regularizers that "shrink estimates across
+neighbours/parents": the spatial GMRF ``L_W``, the disease Laplacian ``L_D``, and
+temporal smoothness. This module realizes ``L_D`` in its **adaptive-ℓ1 edge-selection
+form**: structurally related disease-concept variables (siblings / parent-child in the
+CID-10 hierarchy) get a *lower* ℓ1 penalty on the sparse component ``S`` of the
+LVGLASSO, so their sparse edges face a lower selection threshold and survive.
+
+Scope, stated precisely (do not overclaim): this lowers the *selection threshold* for
+related-disease edges — it does **not** shrink the dependency *profiles* of related
+diseases toward each other. The full §III.4(5) Laplacian-*quadratic* form
+``+(γ/2)·tr(Sᵀ L_D S)`` (which would smooth connection profiles across the hierarchy,
+the direct analogue of ``L_W``'s spatial whitening in ``lags.fit_lagged_links``) is a
+scoped enhancement, **DIS-04b**, not yet implemented — adding it means a smoothness
+prox in the ADMM S-step and must not perturb the CPW S/L split at ``γ=0``.
 
 Only ``structural`` DiseaseGraphs are admissible as a prior; a ``context_derived``
 co-occurrence graph is refused by ``DiseaseGraph.as_prior`` (the circularity guard).

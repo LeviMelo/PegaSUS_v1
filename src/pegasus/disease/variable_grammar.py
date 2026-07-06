@@ -18,6 +18,17 @@ Contracts honoured here:
   ``projection_status`` across its member concepts (CCSR on CID-10 ⇒ ``approximate`` ⇒
   the downstream field enters at ``state ≤ fragile``, §II.13.1). Multi-label is preserved:
   at ``concept:<family>`` resolution a code may feed several variables.
+
+Wiring status (resolves audit #11 — avoid silent §5.1 divergence). This grammar is the
+*richer, forward* unfolder (carrier × disease_selector × topology_role, multi-label,
+``…_OTHER`` residual routing). It is **not currently wired into the live pipeline**: the
+canonical §5.1 path is the EFG's per-field ``σ_C`` restriction at compile time, whose
+code set + SIM topology role are persisted in ``V_fields.parquet`` and read back —
+without regeneration — by ``workflows.investigate.disease_variable_meta``. So the LDO
+variable set is defined by the EFG, not this module. Wiring this grammar as the compile-
+time generator (unfolding one ``σ_C`` field into its crossed carrier×concept variables)
+is a scoped task; until then the two must not both feed the LDO. Do not reintroduce this
+as a second live generator without a test pinning it against the ``V_fields`` path.
 """
 
 from __future__ import annotations

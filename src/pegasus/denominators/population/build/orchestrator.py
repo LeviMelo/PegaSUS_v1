@@ -20,48 +20,48 @@ from pegasus.core.hashing import content_hash, sha256_file
 from pegasus.efg.race_bridge import RaceBridgePrior, bridge_admin_race_group_counts, load_race_bridge_prior
 from pegasus.registries.demographic_axis import TOTAL, UNKNOWN, age_group_for_years, age_group_sort_key, map_category
 from pegasus.registries.population import assert_dense_population_tensor_allowed, select_population_solver
-from pegasus.she.reconstruction.diagnostics import population_tensor_diagnostics
-from pegasus.she.reconstruction.schema import (
+from pegasus.denominators.reconstruction.diagnostics import population_tensor_diagnostics
+from pegasus.denominators.reconstruction.schema import (
     PopulationObjectiveWeights,
     PopulationSolverTelemetry,
     PopulationTensorProblem,
     PopulationTensorRequest,
     PopulationTensorResult,
 )
-from pegasus.she.reconstruction.solvers import solve_population_tensor_blocked, solve_population_tensor_problem
-from pegasus.sidra.population_cube.anchor import (
+from pegasus.denominators.reconstruction.solvers import solve_population_tensor_blocked, solve_population_tensor_problem
+from pegasus.denominators.population.anchor import (
     geometric_interpolate_closure,
     load_combined_population_totals_frame,
     load_sidra_population_total_anchor,
 )
 
-from pegasus.sidra.population_cube.build.strata import *  # noqa: F401,F403 (intra-package layer)
-from pegasus.sidra.population_cube.build.strata import (
+from pegasus.denominators.population.build.strata import *  # noqa: F401,F403 (intra-package layer)
+from pegasus.denominators.population.build.strata import (
     AXES,
     _canonical_stratum,
     _census_2000_records_from_facts,
     _read_population_strata,
 )
-from pegasus.sidra.population_cube.build.indexing import *  # noqa: F401,F403 (intra-package base layer)
-from pegasus.sidra.population_cube.build.layer1 import *  # noqa: F401,F403 (intra-package layer)
-from pegasus.sidra.population_cube.build.layer1 import interpolate_census_composition
-from pegasus.sidra.population_cube.build.priors import *  # noqa: F401,F403 (intra-package layer)
-from pegasus.sidra.population_cube.build.priors import (
+from pegasus.denominators.population.build.indexing import *  # noqa: F401,F403 (intra-package base layer)
+from pegasus.denominators.population.build.layer1 import *  # noqa: F401,F403 (intra-package layer)
+from pegasus.denominators.population.build.layer1 import interpolate_census_composition
+from pegasus.denominators.population.build.priors import *  # noqa: F401,F403 (intra-package layer)
+from pegasus.denominators.population.build.priors import (
     _census_race_composition_prior,
     _sim_death_priors,
     _sinasc_birth_priors,
 )
-from pegasus.sidra.population_cube.build.closure import *  # noqa: F401,F403 (intra-package layer)
-from pegasus.sidra.population_cube.build.closure import (
+from pegasus.denominators.population.build.closure import *  # noqa: F401,F403 (intra-package layer)
+from pegasus.denominators.population.build.closure import (
     _datasus_event_totals,
     _migration_residual_totals,
     _reanchor_closure_single_vintage,
     _sidra_vital_totals,
 )
-from pegasus.sidra.population_cube.build.flows import *  # noqa: F401,F403 (intra-package layer)
-from pegasus.sidra.population_cube.build.flows import _reconstruct_and_persist_migration_flows
-from pegasus.sidra.population_cube.build.projection_envelope import *  # noqa: F401,F403 (intra-package layer)
-from pegasus.sidra.population_cube.build.projection_envelope import _classify_projection_years
+from pegasus.denominators.population.build.flows import *  # noqa: F401,F403 (intra-package layer)
+from pegasus.denominators.population.build.flows import _reconstruct_and_persist_migration_flows
+from pegasus.denominators.population.build.projection_envelope import *  # noqa: F401,F403 (intra-package layer)
+from pegasus.denominators.population.build.projection_envelope import _classify_projection_years
 
 
 # SIDRA civil-registry vital-statistics tables (IBGE Registro Civil), the
@@ -189,7 +189,7 @@ def solve_population_tensor_from_sidra_strata(
     # census-year total stays the enumerated total instead of double-counting the child's people (which
     # were counted inside the parents). The child→parent map is authoritative (IBGE territorial
     # evolution), never inferred. Mass-preserving: parents lose X, child gains X.
-    from pegasus.sidra.population_cube.census_2000 import (
+    from pegasus.denominators.population.census_2000 import (
         carve_pre_census_children,
         load_amc_crosswalk,
         load_municipality_genealogy_overrides,
@@ -465,7 +465,7 @@ def solve_population_tensor_from_sidra_strata(
             warnings.append("population_tensor_solver_nonconvergence")
             reconstruction_uncertainty = max(reconstruction_uncertainty, 0.1)
     else:
-        from pegasus.she.reconstruction.projected_gradient import (
+        from pegasus.denominators.reconstruction.projected_gradient import (
             PopulationOptimizationResult,
             _project_population,
         )

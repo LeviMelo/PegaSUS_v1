@@ -274,7 +274,7 @@ def resolve_race_bridge_plan(
     # "downstream_bridge" attaches a standalone Bridge_R EFG field (a numerator-side
     # observer). The "embedded_*" modes instead feed the SAME prior directly into the
     # population tensor's birth/death race stratification (MSD §2.8.5/§2.8.6) via
-    # pegasus.sidra.population_cube.build -- no separate EFG field is attached, so
+    # pegasus.denominators.population.build -- no separate EFG field is attached, so
     # status is reported distinctly ("embedded") even though the prior resolution is
     # identical, per §2.12.2/§3.7.4's single canonical Bridge_R prior.
     status: Literal["planned", "embedded"] = "planned" if mode == "downstream_bridge" else "embedded"

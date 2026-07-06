@@ -23,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-from pegasus.she.reconstruction.schema import PopulationTensorProblem
+from pegasus.denominators.reconstruction.schema import PopulationTensorProblem
 
 
 @dataclass(frozen=True)

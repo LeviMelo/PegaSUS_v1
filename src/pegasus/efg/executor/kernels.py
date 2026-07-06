@@ -552,7 +552,7 @@ def _sidra_population_tensor(field: FieldNode, output_dir: Path) -> tuple[Path, 
     facts_path = support.get("sidra_facts_path") or support.get("artifact_path")
     if not facts_path:
         raise ValueError("SIDRA population anchor field has no sidra_facts_path")
-    from pegasus.sidra.population_cube.anchor import load_sidra_population_totals_frame
+    from pegasus.denominators.population.anchor import load_sidra_population_totals_frame
 
     frame = load_sidra_population_totals_frame(facts_path)
     if frame.height == 0:

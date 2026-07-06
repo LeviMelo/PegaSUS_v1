@@ -7,10 +7,10 @@ from pegasus.registries.population import (
     assert_dense_population_tensor_allowed,
     select_population_solver,
 )
-from pegasus.she.reconstruction.projected_gradient import PopulationOptimizationResult, solve_projected_gradient_small
-from pegasus.she.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorProblem
-from pegasus.she.reconstruction.sparse_admm import solve_population_admm, solve_sparse_population
-from pegasus.she.reconstruction.state_space import solve_population_state_space_smoother
+from pegasus.denominators.reconstruction.projected_gradient import PopulationOptimizationResult, solve_projected_gradient_small
+from pegasus.denominators.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorProblem
+from pegasus.denominators.reconstruction.sparse_admm import solve_population_admm, solve_sparse_population
+from pegasus.denominators.reconstruction.state_space import solve_population_state_space_smoother
 
 
 def solve_population_tensor_problem(

@@ -6,7 +6,7 @@ provenance: >
   Multi-table SIDRA cube stitching policy. A "synthetic SIDRA cube" combines more
   than one SIDRA table's period coverage into one coherent time series when no
   single table spans the run window -- e.g. the population denominator tensor
-  (MSD §2.8, pegasus.sidra.population_cube). This registry documents WHICH tables
+  (MSD §2.8, pegasus.denominators.population). This registry documents WHICH tables
   play which role and the conflict-resolution rule; it deliberately does NOT
   hardcode gap/exclusion years -- each table's own live SIDRA `periods` metadata
   is trusted directly by the acquisition code, so a resumed estimate or a new
@@ -20,7 +20,7 @@ entries:
     supplies the full disaggregation; table 6579 (post-censal estimates; total
     population only) supplies intercensal-year totals so the tensor's per-year
     closure constraint has real anchoring data across the whole run window, not
-    just census years. Implemented in pegasus.sidra.population_cube (anchor.py
+    just census years. Implemented in pegasus.denominators.population (anchor.py
     loads each table; build.py stitches them; pegasus.workflows.pipeline acquires
     both across the intent's full year window).
   warnings: []

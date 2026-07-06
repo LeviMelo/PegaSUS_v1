@@ -9,17 +9,17 @@ from typing import Any
 import numpy as np
 
 from pegasus.compute.memory import MemoryPreflight, preflight_memory
-from pegasus.she.reconstruction.block_coordinate import solve_population_block_coordinate
-from pegasus.she.reconstruction.loss import evaluate_population_loss, validate_population_problem
-from pegasus.she.reconstruction.projected_gradient import (
+from pegasus.denominators.reconstruction.block_coordinate import solve_population_block_coordinate
+from pegasus.denominators.reconstruction.loss import evaluate_population_loss, validate_population_problem
+from pegasus.denominators.reconstruction.projected_gradient import (
     PopulationOptimizationResult,
     _initial_population,
     _migration_bounds,
     _project_migration,
     _project_population,
 )
-from pegasus.she.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorProblem
-from pegasus.she.reconstruction.state_space import PopulationStateSpace, build_population_state_space
+from pegasus.denominators.reconstruction.schema import PopulationSolverTelemetry, PopulationTensorProblem
+from pegasus.denominators.reconstruction.state_space import PopulationStateSpace, build_population_state_space
 
 
 @dataclass(frozen=True)

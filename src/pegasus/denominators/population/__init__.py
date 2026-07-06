@@ -5,7 +5,7 @@ population-denominator tensor, optionally anchored/adjusted with DATASUS vital-f
 contributions (SIM deaths, SINASC births). This package owns the SIDRA-specific data
 acquisition and orchestration; the underlying constrained-optimization math (loss
 terms, solvers) is generic reconstruction machinery shared with other tensor
-instances (age-bin disaggregation, ST-DFM) and lives in ``pegasus.she.reconstruction``.
+instances (age-bin disaggregation, ST-DFM) and lives in ``pegasus.denominators.reconstruction``.
 
 - ``anchor``: loads SIDRA 9606 population facts (single-anchor and multi-locality forms).
 - ``fields``: admits disaggregated SIDRA facts as a canonical Population FieldNode.
@@ -18,18 +18,18 @@ instances (age-bin disaggregation, ST-DFM) and lives in ``pegasus.she.reconstruc
 
 from __future__ import annotations
 
-from pegasus.sidra.population_cube.anchor import (
+from pegasus.denominators.population.anchor import (
     SidraPopulationAnchor,
     load_sidra_population_total_anchor,
     load_sidra_population_totals_frame,
 )
-from pegasus.sidra.population_cube.build import (
+from pegasus.denominators.population.build import (
     PopulationTensorBuild,
     solve_population_tensor_from_sidra_anchor,
     solve_population_tensor_from_sidra_strata,
 )
-from pegasus.sidra.population_cube.fields import build_sidra_demographic_population_fields
-from pegasus.sidra.population_cube.migration import (
+from pegasus.denominators.population.fields import build_sidra_demographic_population_fields
+from pegasus.denominators.population.migration import (
     MigrationFlowReconstruction,
     reconstruct_migration_flows,
     reconstruct_migration_flows_for_year,

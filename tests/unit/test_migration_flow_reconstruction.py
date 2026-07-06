@@ -13,11 +13,11 @@ import pytest
 
 from pegasus.geo.migration_affinity import build_migration_affinity_graph
 from pegasus.geo.spatial_graph import SpatialCircularityError, assert_spatial_legality
-from pegasus.she.reconstruction.instances import migration_flow_instance, net_flow_operator
-from pegasus.she.reconstruction.problem import evaluate_ctr, solve_ctr
+from pegasus.denominators.reconstruction.instances import migration_flow_instance, net_flow_operator
+from pegasus.denominators.reconstruction.problem import evaluate_ctr, solve_ctr
 from pegasus.sidra.facts import normalize_flat_records_to_facts, write_facts_parquet
-from pegasus.sidra.population_cube.build import solve_population_tensor_from_sidra_strata
-from pegasus.sidra.population_cube.migration import (
+from pegasus.denominators.population.build import solve_population_tensor_from_sidra_strata
+from pegasus.denominators.population.migration import (
     MigrationFlowError,
     hop_distances,
     reconstruct_migration_flows_for_year,
@@ -144,7 +144,7 @@ def test_pair_count_guard_refuses_oversized_dense_problem():
     net["33"] = -5.0
     with pytest.raises(MigrationFlowError):
         # max_hops huge => fully-connected candidate set; monkeypatch the cap low.
-        import pegasus.sidra.population_cube.migration as m
+        import pegasus.denominators.population.migration as m
         old = m.MAX_DENSE_FLOW_PAIRS
         m.MAX_DENSE_FLOW_PAIRS = 10
         try:
@@ -241,7 +241,7 @@ def test_build_emits_migration_flow_and_affinity_artifacts(tmp_path: Path):
 def test_hop_distances_max_hops_bounds_radius_without_changing_kept_distances() -> None:
     """M4: bounding the BFS radius records only pairs within max_hops, and those distances
     match the unbounded all-pairs result — the memory win costs no candidate-support accuracy."""
-    from pegasus.sidra.population_cube.migration import hop_distances
+    from pegasus.denominators.population.migration import hop_distances
 
     # a path graph A-B-C-D-E: all-pairs has distances up to 4; max_hops=2 keeps only <=2.
     adjacency = {

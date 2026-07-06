@@ -9,12 +9,12 @@ from pegasus.registries.population import (
     get_population_solver,
     select_population_solver,
 )
-from pegasus.she.reconstruction.schema import PopulationObjectiveWeights, PopulationTensorProblem
-from pegasus.she.reconstruction.solvers import dense_national_abort_check, solve_population_tensor_problem
-from pegasus.she.reconstruction.sparse_admm import plan_sparse_population_solver, solve_sparse_population
-from pegasus.she.reconstruction.state_space import build_population_state_space, solve_population_state_space_smoother
+from pegasus.denominators.reconstruction.schema import PopulationObjectiveWeights, PopulationTensorProblem
+from pegasus.denominators.reconstruction.solvers import dense_national_abort_check, solve_population_tensor_problem
+from pegasus.denominators.reconstruction.sparse_admm import plan_sparse_population_solver, solve_sparse_population
+from pegasus.denominators.reconstruction.state_space import build_population_state_space, solve_population_state_space_smoother
 from pegasus.sidra.facts import normalize_fixture_json_to_facts
-from pegasus.sidra.population_cube.build import solve_population_tensor_from_sidra_anchor
+from pegasus.denominators.population.build import solve_population_tensor_from_sidra_anchor
 
 
 def _facts(tmp_path: Path) -> Path:
@@ -185,7 +185,7 @@ def test_sparse_population_memory_preflight_aborts():
 def test_interpolate_census_composition_reproduces_and_interpolates():
     """The closed-form prior mean (MSD §2.8.10) reproduces census strata exactly and
     linearly interpolates the joint composition, scaled to each year's closure total."""
-    from pegasus.sidra.population_cube.build import interpolate_census_composition
+    from pegasus.denominators.population.build import interpolate_census_composition
 
     # 1 locality, 3 years (2010 census, 2015 intercensal, 2020 census), 1 age, 1 sex, 2 races.
     shape = (1, 3, 1, 1, 2)

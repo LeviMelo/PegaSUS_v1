@@ -31,8 +31,8 @@ from typing import Any
 
 import numpy as np
 
-from pegasus.she.reconstruction.instances import migration_flow_instance, net_flow_operator
-from pegasus.she.reconstruction.problem import solve_ctr
+from pegasus.denominators.reconstruction.instances import migration_flow_instance, net_flow_operator
+from pegasus.denominators.reconstruction.problem import solve_ctr
 
 
 # Guard: the generic CTR builds a dense (P×P) Hessian for its exact solve. Above

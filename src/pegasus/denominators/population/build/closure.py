@@ -6,10 +6,10 @@ from pathlib import Path
 
 import polars as pl
 
-from pegasus.sidra.population_cube.anchor import geometric_interpolate_closure
+from pegasus.denominators.population.anchor import geometric_interpolate_closure
 
-from pegasus.sidra.population_cube.build.priors import *  # noqa: F401,F403 (intra-package layer)
-from pegasus.sidra.population_cube.build.priors import _resolve_geo_year_columns
+from pegasus.denominators.population.build.priors import *  # noqa: F401,F403 (intra-package layer)
+from pegasus.denominators.population.build.priors import _resolve_geo_year_columns
 
 
 def _sidra_vital_totals(path: str | Path | None, *, table_id: str, variable_id: str) -> dict[tuple[str, str], float] | None:

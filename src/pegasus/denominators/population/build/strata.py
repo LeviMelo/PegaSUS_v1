@@ -71,7 +71,7 @@ def _census_2000_records_from_facts(
     declared races by local composition (§II.5 FAL-POP-RECON), never dropped** — so the 2000 anchor
     sums to the enumerated census total, computationally equal to the 2010/2022 direct-total anchors.
     Returns (records, reconciliation telemetry); ([], {}) on an absent/empty 2093 artifact."""
-    from pegasus.sidra.population_cube.census_2000 import (
+    from pegasus.denominators.population.census_2000 import (
         CLEAN_AGE_BRACKETS_2093,
         SIDRA_2093_UNDECLARED_RACE,
         assemble_2000_single_year_records,

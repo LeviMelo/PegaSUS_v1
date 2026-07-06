@@ -6,8 +6,8 @@ from typing import Any
 
 import numpy as np
 
-from pegasus.sidra.population_cube.build.indexing import *  # noqa: F401,F403 (intra-package base layer)
-from pegasus.sidra.population_cube.build.indexing import _census_count_arrays
+from pegasus.denominators.population.build.indexing import *  # noqa: F401,F403 (intra-package base layer)
+from pegasus.denominators.population.build.indexing import _census_count_arrays
 
 
 def _interpolate_shares(shares: dict[str, np.ndarray], census_years: list[str], t: int) -> np.ndarray:

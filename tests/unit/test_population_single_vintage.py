@@ -13,8 +13,8 @@ import polars as pl
 import pytest
 
 from pegasus.sidra.facts import normalize_flat_records_to_facts, write_facts_parquet
-from pegasus.sidra.population_cube.anchor import geometric_interpolate_closure
-from pegasus.sidra.population_cube.build import solve_population_tensor_from_sidra_strata
+from pegasus.denominators.population.anchor import geometric_interpolate_closure
+from pegasus.denominators.population.build import solve_population_tensor_from_sidra_strata
 
 MUNI = "2704302"
 

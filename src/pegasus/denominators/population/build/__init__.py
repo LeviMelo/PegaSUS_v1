@@ -11,30 +11,30 @@ layered package -- ``indexing`` (flat-cell math) <- ``layer1`` (closed-form prio
 <- ``priors`` (flow priors) <- ``closure`` (closure panel); ``strata``,
 ``projection_envelope``, ``flows`` are independent; ``orchestrator`` sits on top. Every
 symbol the old module exposed (including the underscore helpers imported by tests) is
-re-exported here, so ``from pegasus.sidra.population_cube.build import <X>`` is unchanged.
+re-exported here, so ``from pegasus.denominators.population.build import <X>`` is unchanged.
 """
 
 from __future__ import annotations
 
-from pegasus.sidra.population_cube.build.indexing import *  # noqa: F401,F403
-from pegasus.sidra.population_cube.build.layer1 import *  # noqa: F401,F403
-from pegasus.sidra.population_cube.build.strata import *  # noqa: F401,F403
-from pegasus.sidra.population_cube.build.priors import *  # noqa: F401,F403
-from pegasus.sidra.population_cube.build.closure import *  # noqa: F401,F403
-from pegasus.sidra.population_cube.build.flows import *  # noqa: F401,F403
-from pegasus.sidra.population_cube.build.projection_envelope import *  # noqa: F401,F403
-from pegasus.sidra.population_cube.build.orchestrator import *  # noqa: F401,F403
+from pegasus.denominators.population.build.indexing import *  # noqa: F401,F403
+from pegasus.denominators.population.build.layer1 import *  # noqa: F401,F403
+from pegasus.denominators.population.build.strata import *  # noqa: F401,F403
+from pegasus.denominators.population.build.priors import *  # noqa: F401,F403
+from pegasus.denominators.population.build.closure import *  # noqa: F401,F403
+from pegasus.denominators.population.build.flows import *  # noqa: F401,F403
+from pegasus.denominators.population.build.projection_envelope import *  # noqa: F401,F403
+from pegasus.denominators.population.build.orchestrator import *  # noqa: F401,F403
 
-from pegasus.sidra.population_cube.build.indexing import (
+from pegasus.denominators.population.build.indexing import (
     _birth_cell_index,
     _cell_index,
     _census_count_arrays,
 )
-from pegasus.sidra.population_cube.build.layer1 import (
+from pegasus.denominators.population.build.layer1 import (
     _interpolate_shares,
     interpolate_census_composition,
 )
-from pegasus.sidra.population_cube.build.strata import (
+from pegasus.denominators.population.build.strata import (
     AXES,
     AXIS_CLASSIFICATIONS,
     _canonical_stratum,
@@ -43,7 +43,7 @@ from pegasus.sidra.population_cube.build.strata import (
     _pairs,
     _read_population_strata,
 )
-from pegasus.sidra.population_cube.build.priors import (
+from pegasus.denominators.population.build.priors import (
     _bridge_race_stratified_counts,
     _census_race_composition_prior,
     _coalesce_race_columns,
@@ -53,19 +53,19 @@ from pegasus.sidra.population_cube.build.priors import (
     _stratify_age_column,
     _stratify_sex_column,
 )
-from pegasus.sidra.population_cube.build.closure import (
+from pegasus.denominators.population.build.closure import (
     _datasus_event_totals,
     _migration_residual_totals,
     _reanchor_closure_single_vintage,
     _sidra_vital_totals,
 )
-from pegasus.sidra.population_cube.build.flows import _reconstruct_and_persist_migration_flows
-from pegasus.sidra.population_cube.build.projection_envelope import (
+from pegasus.denominators.population.build.flows import _reconstruct_and_persist_migration_flows
+from pegasus.denominators.population.build.projection_envelope import (
     PROJECTION_H_SOFT,
     PROJECTION_UNCERTAINTY_PER_YEAR,
     _classify_projection_years,
 )
-from pegasus.sidra.population_cube.build.orchestrator import (
+from pegasus.denominators.population.build.orchestrator import (
     SIDRA_CIVIL_REGISTRY_BIRTHS_TABLE,
     SIDRA_CIVIL_REGISTRY_BIRTHS_VARIABLE,
     SIDRA_CIVIL_REGISTRY_DEATHS_TABLE,

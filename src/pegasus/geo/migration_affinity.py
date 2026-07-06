@@ -30,7 +30,7 @@ from math import sqrt
 from typing import Iterable
 
 from pegasus.geo.spatial_graph import SpatialWeightGraph
-from pegasus.sidra.population_cube.migration import MigrationFlowReconstruction
+from pegasus.denominators.population.migration import MigrationFlowReconstruction
 
 
 MIGRATION_AFFINITY_PROVENANCE = ("migration_flow", "population")

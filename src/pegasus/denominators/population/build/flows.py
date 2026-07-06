@@ -27,7 +27,7 @@ def _reconstruct_and_persist_migration_flows(
         return None, None, ()
     from pegasus.geo.migration_affinity import build_migration_affinity_graph
     from pegasus.geo.spatial_graph import structural_cod6_adjacency
-    from pegasus.sidra.population_cube.migration import MigrationFlowError, reconstruct_migration_flows
+    from pegasus.denominators.population.migration import MigrationFlowError, reconstruct_migration_flows
 
     try:
         full_adjacency = structural_cod6_adjacency(contiguity_graph_id)

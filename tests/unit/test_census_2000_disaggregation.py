@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pegasus.sidra.population_cube.census_2000 import (
+from pegasus.denominators.population.census_2000 import (
     CLEAN_AGE_BRACKETS_2093,
     assemble_2000_single_year_records,
     bracket_single_year_labels,

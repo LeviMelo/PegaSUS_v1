@@ -322,7 +322,7 @@ def _build_population_tensor_artifact(
     # registries.race_bridge.resolve_race_bridge_plan), and "decoupled" runs the
     # tensor with race left unstratified for DATASUS-origin priors.
     race_bridge_prior_path = race_bridge_plan.prior_path if race_bridge_plan.status == "embedded" else None
-    from pegasus.sidra.population_cube import solve_population_tensor_from_sidra_strata
+    from pegasus.denominators.population import solve_population_tensor_from_sidra_strata
     from pegasus.assets import (
         NATIONAL_FULL_HISTORY,
         PersistentAssetStore,

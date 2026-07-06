@@ -8,9 +8,9 @@ from typing import Any, Iterator
 
 import numpy as np
 
-from pegasus.she.reconstruction.projected_gradient import PopulationOptimizationResult, _initial_population, _project_population
-from pegasus.she.reconstruction.schema import PopulationSolverTelemetry
-from pegasus.she.reconstruction.schema import PopulationTensorProblem
+from pegasus.denominators.reconstruction.projected_gradient import PopulationOptimizationResult, _initial_population, _project_population
+from pegasus.denominators.reconstruction.schema import PopulationSolverTelemetry
+from pegasus.denominators.reconstruction.schema import PopulationTensorProblem
 
 
 @dataclass(frozen=True)

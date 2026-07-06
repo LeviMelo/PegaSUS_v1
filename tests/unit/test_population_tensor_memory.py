@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.she.reconstruction.schema import PopulationTensorProblem
+from pegasus.denominators.reconstruction.schema import PopulationTensorProblem
 
 
 def test_array_fields_are_numpy_with_nan_sentinels() -> None:
@@ -47,7 +47,7 @@ def test_accepts_tuple_list_or_array_interchangeably() -> None:
 def test_blocked_solve_equals_whole_problem_exactly() -> None:
     """POP-02 M3: locality-blocked solve is numerically EXACT vs whole-problem (the objective is
     locality-separable when migration_totals is None), while bounding peak memory to O(block)."""
-    from pegasus.she.reconstruction.solvers import (
+    from pegasus.denominators.reconstruction.solvers import (
         solve_population_tensor_blocked,
         solve_population_tensor_problem,
     )

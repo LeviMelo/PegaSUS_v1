@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from pegasus.she.reconstruction.loss import evaluate_population_loss
-from pegasus.she.reconstruction.schema import PopulationTensorProblem
-from pegasus.she.reconstruction.problem import (
+from pegasus.denominators.reconstruction.loss import evaluate_population_loss
+from pegasus.denominators.reconstruction.schema import PopulationTensorProblem
+from pegasus.denominators.reconstruction.problem import (
     CTRProblem,
     MarginalConstraint,
     ObservationTerm,

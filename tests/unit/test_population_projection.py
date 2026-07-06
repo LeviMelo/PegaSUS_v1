@@ -11,7 +11,7 @@ from pathlib import Path
 
 import polars as pl
 
-from pegasus.sidra.population_cube.build import (
+from pegasus.denominators.population.build import (
     _classify_projection_years,
     solve_population_tensor_from_sidra_strata,
     PROJECTION_H_SOFT,

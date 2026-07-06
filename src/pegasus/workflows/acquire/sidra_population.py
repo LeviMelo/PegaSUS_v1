@@ -466,7 +466,7 @@ def _census_2000_strata_classifications() -> dict[str, list[str]]:
     are excluded so nothing is double-counted. The undeclared-race bin (2781) is fetched so it can be
     RECONCILED into the declared races by local composition at build time (§II.5 FAL-POP-RECON) rather
     than silently dropped — without it the 2000 anchor sums short of the enumerated total."""
-    from pegasus.sidra.population_cube.census_2000 import CLEAN_AGE_BRACKETS_2093, SIDRA_2093_UNDECLARED_RACE
+    from pegasus.denominators.population.census_2000 import CLEAN_AGE_BRACKETS_2093, SIDRA_2093_UNDECLARED_RACE
 
     return {
         SIDRA_CENSUS_2000_STRATA_RACE_CLSF: ["2776", "2777", "2778", "2779", "2780", SIDRA_2093_UNDECLARED_RACE],

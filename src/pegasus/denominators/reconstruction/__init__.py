@@ -1,17 +1,17 @@
 """Constrained Tensor Reconstruction (CTR) kernel — MSD-II §II.3."""
 
-from pegasus.she.reconstruction.certify import (
+from pegasus.denominators.reconstruction.certify import (
     CTRCertificationError,
     CTRCertificationPolicy,
     CTRCertificationRow,
     assert_ctr_verified_promotion_allowed,
     certify_ctr,
 )
-from pegasus.she.reconstruction.instances import (
+from pegasus.denominators.reconstruction.instances import (
     age_bin_disaggregation_instance,
     population_ctr_instance,
 )
-from pegasus.she.reconstruction.problem import (
+from pegasus.denominators.reconstruction.problem import (
     CTREvaluation,
     CTRProblem,
     MarginalConstraint,

@@ -176,8 +176,11 @@ def joint_logdet(op: KroneckerPrecision, *, exact_space_max: int = 20000,
     from pegasus.ldo.stochastic import stochastic_logdet
 
     space = op.sigma_space_inv
-    ld_s = stochastic_logdet(lambda x: space @ x, op.S, n_probes=n_probes, seed=seed)
-    return op.logdet(space_logdet=ld_s), "stochastic_lanczos"
+    # §V.3/§V.5: carry the probe-count-scaled Monte-Carlo SE of the space-factor log-det so the
+    # joint estimate's uncertainty is honest (the exact var/time factors contribute no error).
+    ld_s, se_s = stochastic_logdet(lambda x: space @ x, op.S, n_probes=n_probes, seed=seed, return_se=True)
+    joint = op.logdet(space_logdet=ld_s)
+    return joint, f"stochastic_lanczos(space_logdet_se={op.p * op.S:d}*{se_s:.3g})"
 
 
 def sparse_spd_logdet(A) -> float:

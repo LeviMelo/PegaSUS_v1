@@ -269,6 +269,12 @@ def run_investigate(
     hypotheses_path = run_dir / "Hypotheses.parquet"
     if write:
         write_hypotheses(ldo_run.link_records, hypotheses_path)
+        # §VIII.2(3): persist the typed coverage manifest ALONGSIDE the hypotheses so a consumer
+        # of Hypotheses.parquet sees what was NOT searched (and the stated sparsity assumption),
+        # not only the found edges. Written as its own artifact, not buried in the diagnostics dict.
+        coverage = ldo_run.diagnostics.get("coverage_manifest") or ldo_run.diagnostics.get("coverage_manifest_mr")
+        if coverage is not None:
+            (run_dir / "Coverage.json").write_text(json.dumps(coverage, indent=2, default=str), encoding="utf-8")
 
     return InvestigateResult(
         run_dir=str(run_dir),

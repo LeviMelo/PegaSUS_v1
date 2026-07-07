@@ -28,7 +28,12 @@ class CoverageManifest:
     lag_orders_searched: tuple[int, ...]
     functional_forms_searched: tuple[str, ...]
     unsearched: list[UnsearchedRegion] = field(default_factory=list)
-    sparsity_of_truth_assumed: bool = True
+    # §VIII.2: the sparsity-of-truth assumption MUST be STATED (not a hidden bool). A "no edge in
+    # an unsearched region" claim rests on this assumption being true, so it is spelled out.
+    sparsity_of_truth_assumption: str = (
+        "most fine-grained links are null; unsearched regions are assumed edge-free only under "
+        "this sparsity-of-truth prior, whose bounded recall is measured by the §VIII.2(2) audit"
+    )
 
     def mark_unsearched(self, kind: str, description: str, reason: str) -> None:
         self.unsearched.append(UnsearchedRegion(kind=kind, description=description, reason=reason))
@@ -42,7 +47,7 @@ class CoverageManifest:
                 {"kind": u.kind, "description": u.description, "reason": u.reason}
                 for u in self.unsearched
             ],
-            "sparsity_of_truth_assumed": self.sparsity_of_truth_assumed,
+            "sparsity_of_truth_assumption": self.sparsity_of_truth_assumption,
             "n_unsearched_regions": len(self.unsearched),
         }
 

@@ -51,13 +51,17 @@ def _lanczos_tridiag(matvec: Callable[[np.ndarray], np.ndarray], v: np.ndarray, 
 def stochastic_logdet(
     matvec: Callable[[np.ndarray], np.ndarray], n: int, *,
     n_probes: int = 16, lanczos_steps: int = 15, seed: int = 0,
-    floor: float = 1e-12,
-) -> float:
+    floor: float = 1e-12, return_se: bool = False,
+) -> float | tuple[float, float]:
     """Stochastic Lanczos-quadrature estimate of ``log det A`` for a PD operator ``A`` (§V.3).
 
     ``matvec(x) = A @ x`` is the only access to ``A``. Increasing ``n_probes`` lowers the
     variance (∝ 1/n_probes); ``lanczos_steps`` controls the quadrature accuracy. Eigenvalues of
     the Lanczos tridiagonal are floored at ``floor`` for numerical safety.
+
+    Returns the mean estimate; with ``return_se=True`` returns ``(estimate, standard_error)`` where
+    the Monte-Carlo SE is ``std(probe estimates)/√n_probes`` — the §V.3/§V.5 probe-count variance
+    knob (SE ∝ 1/√n_probes) the adaptive controller schedules against.
     """
     rng = np.random.default_rng(seed)
     estimates = np.empty(n_probes)
@@ -69,7 +73,11 @@ def stochastic_logdet(
         theta = np.clip(theta, floor, None)
         # zᵀ log(A) z ≈ ‖z‖² · Σ τ_k log θ_k  (Lanczos started from z/‖z‖; ‖z‖² = n)
         estimates[p] = n * float(np.sum(tau * np.log(theta)))
-    return float(estimates.mean())
+    mean = float(estimates.mean())
+    if return_se:
+        se = float(estimates.std(ddof=1) / np.sqrt(n_probes)) if n_probes > 1 else float("inf")
+        return mean, se
+    return mean
 
 
 def stochastic_logdet_dense(A: np.ndarray, **kwargs) -> float:

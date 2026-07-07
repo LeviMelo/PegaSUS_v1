@@ -327,6 +327,7 @@ def run_ldo(
     # given); bounded to max_spatial_fields; best-effort per edge. This is the effect-modification
     # surface — "is X→Y stronger where …" — read at national/region/state/muni scales.
     n_spatial_fields = 0
+    n_spatial_field_candidates = 0
     if spatial_field_dir is not None and gf.shape[1] > 1:
         from pathlib import Path as _Path
 
@@ -339,6 +340,7 @@ def run_ldo(
             and r.certification_status == "selected"
         ]
         _cands.sort(key=lambda ir: abs(ir[1].weight or 0.0), reverse=True)
+        n_spatial_field_candidates = len(_cands)  # honest coverage: how many were eligible vs fitted
         for i, r in _cands[:max_spatial_fields]:
             try:
                 sf = fit_spatial_varying_coefficient(gf, r.source_var, r.target_var, kappa=kappa)
@@ -445,9 +447,12 @@ def run_ldo(
         # §V.2: separable joint-precision log-det via the Kronecker-factored operator (None
         # when the variable precision is not SPD or the space factor is unavailable).
         "kronecker_joint": kronecker_report,
-        # §III.3/§III.7: number of edges given a fitted spatial BYM varying-coefficient field
-        # (0 unless spatial_field_dir was provided → edges carry spatial_field_ref).
+        # §III.3/§III.7: number of edges given a fitted spatial BYM varying-coefficient field vs
+        # the number ELIGIBLE — so the top-N (max_spatial_fields) cap is an honest coverage bound,
+        # not a silent truncation (edges beyond the cap carry spatial_field_ref=None by design).
         "n_spatial_fields": n_spatial_fields,
+        "n_spatial_field_candidates": n_spatial_field_candidates,
+        "spatial_field_cap": max_spatial_fields,
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -931,6 +932,16 @@ def _flush_and_investigate(plan: _CompilePlan) -> tuple[Path, dict[str, Any] | N
         attach_compile_source_reality(run_dir=run_dir, source_reality=plan.compile_source_reality)
         plan.bundle_manager.collect_missing_from_run(run_dir)
         run_dir = plan.bundle_manager.flush_to_disk(run_dir)
+        # T1.4: the EFG stage workspace (`{run}__efg_stage_workspace`) is a full duplicate of the
+        # multi-GB tensor payload; flush_to_disk has now copied it into the final bundle, so delete
+        # it — otherwise every national run leaves a permanent duplicate that re-inflates the disk
+        # envelope. Best-effort; a cleanup failure never fails the run.
+        try:
+            _efg_ws = Path(plan.run_dir).parent / f"{Path(plan.run_dir).name}__efg_stage_workspace"
+            if _efg_ws.is_dir():
+                shutil.rmtree(_efg_ws, ignore_errors=True)
+        except Exception:
+            pass
 
     # ExecutionStage=investigate: run the LDO over the freshly-flushed CommonPanel and
     # write the typed LinkRecords to Hypotheses (MSD-II §II.6/§II.8, MII-LDO-06). The

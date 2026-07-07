@@ -395,13 +395,24 @@ def _compute_rn_ratio(field: FieldNode, parents_by_id: dict[str, FieldNode], out
         provenance=field.provenance, denom_fragility=combined_fragility, axes=dict(field.axes or {}),
     )
     mq_path = write_measured_quantity(mq, output_dir / f"{field.id}.measured_quantity.parquet")
-    return path, rows, {
+    # §I.2 / §III.5 denominator principle: the count-with-exposure (Poisson-offset) margin is
+    # valid ONLY when the RN numerator is an EXTENSIVE count (deaths, births, hospitalizations).
+    # An intensive numerator — a rate ÷ rate, a density, a continuous index — must enter the LDO
+    # on the plain rank-PIT margin, NOT be modelled as an extensive Poisson count. So the
+    # count-exposure routing ref is advertised only for an extensive numerator; the sidecar is
+    # still written as provenance either way (records the realized numerator/exposure totals).
+    numerator_extensive = str(getattr(numerator, "kind", "")) == "extensive_measure"
+    result: dict[str, Any] = {
         "denom_fragility": combined_fragility,
         "n_events": num_total,
         "n_denom": den_total if den_total > 0 else None,
         "offset_semantics": "log_exposure",
-        "measured_quantity_ref": str(mq_path),
+        "numerator_kind": str(getattr(numerator, "kind", "")),
+        "measured_quantity_extensive": numerator_extensive,
     }
+    if numerator_extensive:
+        result["measured_quantity_ref"] = str(mq_path)
+    return path, rows, result
 
 
 

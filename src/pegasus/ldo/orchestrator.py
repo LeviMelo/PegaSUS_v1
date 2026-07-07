@@ -359,6 +359,14 @@ def run_ldo(
             int(np.isfinite(raw_field.exposure).any(axis=(1, 2)).sum())
             if raw_field is not None and getattr(raw_field, "exposure", None) is not None else 0
         ),
+        # §I.2/§III.5 audit-named alias: number of variables actually routed onto the Poisson-
+        # offset (count-with-exposure) margin — i.e. extensive-numerator RN fields. Intensive
+        # RN outputs (rate÷rate, densities) carry no measured_quantity_ref (kernels.py gate) and
+        # stay on the rank-PIT margin, so this counts only genuine extensive counts.
+        "n_exposure_margins": (
+            int((np.isfinite(raw_field.exposure) & (raw_field.exposure > 0)).any(axis=(1, 2)).sum())
+            if raw_field is not None and getattr(raw_field, "exposure", None) is not None else 0
+        ),
         # §V.6(2): mean propagated numerical (randomized-SVD) error folded into edge uncertainty.
         "numerical_error": float(lagged.fit.numerical_error),
         # §VIII.2(3): typed coverage manifest (searched + explicitly-unsearched regions).

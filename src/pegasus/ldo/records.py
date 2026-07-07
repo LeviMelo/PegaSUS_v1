@@ -8,7 +8,7 @@ the 17-key bundle (the validator is extended additively, not broken).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 EdgeType = Literal[

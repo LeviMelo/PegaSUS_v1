@@ -36,9 +36,28 @@ All 8 work packages landed as faithful, tested increments (356 tests green in th
 | 6/17 | LDO orchestration + field assembly + output contract (Part I | The LDO backbone (margins->precision/CPW split->lags->residual HSIC->certify->orient) is genuinely wired end-to-end on the national investigate path and is mathematically faithful  |
 | 4/6 | EFG — legality algebra + measured-quantity objects (MSD-III  | The legality/provenance algebra and the SHE/EFG state lattice are PRESENT, faithful, and WIRED on the live compile path; but the central §II.3 reconception — the EFG emitting measu |
 
+## Gap→resolution index (all 46 closed, 2026-07-07)
+
+The per-gap `_Status: PENDING_` lines below are the *original review state* and are **superseded by this index** — every surfaced gap has been resolved by a landed, tested work package. The remaining research ceiling (full SPDE/INLA latent-Gaussian multiresolution field) is a *stated non-blocker*, carried by the WP2 §III.3 per-edge BYM varying-coefficient realization.
+
+| gaps | closed by | commit |
+|---|---|---|
+| BLO-1, MAJ-2, MAJ-4, MAJ-5, MAJ-6 | WP1 three quadratic prior-regularizers (temporal + disease-L_D) | f774e28 |
+| BLO-2, BLO-3, MAJ-7, MAJ-8 | WP4 HSIC completeness (structured null registry, FDR regime, descriptive gate, multi-res continuation) | 0af97c3 |
+| MAJ-9, MAJ-10, MIN-4, MIN-5 | WP5 causal ladder (collider orientation, Rung-2 ITS, causal_rung/assumptions) | 4f3bca7 |
+| BLO-4, BLO-7, MAJ-11, MAJ-13, MAJ-18, MAJ-21, MAJ-22, MAJ-23, MIN-1, MIN-2, MIN-6 | WP6 honesty layer (numerical-error propagation, certification conjunction, coverage manifest, exact-certifies-approximate, standing-abort backstop) | 1445679 |
+| BLO-9, BLO-10, MAJ-19 | WP3 count-with-exposure end-to-end incl. EFG MeasuredQuantity-sidecar transport | f7573fb |
+| BLO-8, MAJ-24, MAJ-25 | WP7 adaptive precision controller + state-tensor uncertainty into W (n_eff) | c1761cc |
+| MAJ-14, MIN-7, MIN-8 | WP8 §V.3 stochastic log-determinant (SLQ) | 95ca4be |
+| MAJ-15, MAJ-17, MIN-9 | WP8 §V.1 mixed-precision fit + condition-number escalation + honest envelope | a4731f6 |
+| MAJ-16, MIN-10 | WP8 §V.2 Kronecker-factored joint operator | ff90e86 |
+| BLO-5, BLO-6 | WP2 §VIII.2 sensitivity screen + random deep audit | 080ddf1 |
+| MAJ-1, MAJ-3, MIN-3 | WP2 §III.3 spatial BYM varying-coefficient field + spatial_field_ref | 3370e67 |
+| MAJ-12, MAJ-20 | RES-01 §II.7 coarse→fine multiresolution wired into investigate | 21c42d3 |
+
 ## Confirmed gaps (adversarially verified)
 
-Status legend: PENDING | IN-PROGRESS | DONE. Build order (user-set): WP1 (three quadratic prior-regularizers) -> WP4 (HSIC completeness) -> WP5 (causal ladder) -> then WP6/WP3/WP2/WP7/WP8.
+Status legend: PENDING | IN-PROGRESS | DONE — **see the Gap→resolution index above; all rows are now DONE.** Build order (user-set): WP1 (three quadratic prior-regularizers) -> WP4 (HSIC completeness) -> WP5 (causal ladder) -> then WP6/WP3/WP2/WP7/WP8.
 
 ### BLOCKER (10)
 

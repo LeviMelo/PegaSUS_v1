@@ -216,8 +216,6 @@ def _np_nystrom_features(values: "Any", *, bandwidth: float, landmarks: int, see
 
 
 def _np_feature_hsic(x_features: "Any", y_features: "Any") -> float:
-    import numpy as np
-
     n = x_features.shape[0]
     xc = x_features - x_features.mean(axis=0, keepdims=True)
     yc = y_features - y_features.mean(axis=0, keepdims=True)

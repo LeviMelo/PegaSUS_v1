@@ -85,7 +85,6 @@ def fit_spatial_varying_coefficient(
     A, D, c = _within_locality_stats(X, Y, W)
     if not np.any(A > 0):
         return None
-    S = len(field.space_ids)
 
     if laplacian is not None:
         L_W = laplacian.tocsr() if sp.issparse(laplacian) else sp.csr_matrix(laplacian)

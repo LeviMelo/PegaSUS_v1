@@ -91,7 +91,49 @@ def difference_in_differences(
     return DiDResult(effect=tc - cc, treated_change=tc, control_change=cc)
 
 
+def escalate_rung2_its(records, series_by_var, *, min_level_t: float = 3.0):
+    """Rung-2 quasi-experimental escalation (§IV): for each already-directed (Rung-1) edge
+    whose TARGET series has a detected structural break, run an interrupted-time-series at the
+    break; if the level change is significant (``|level_t| ≥ min_level_t``) promote the edge to
+    Rung 2 and annotate the ITS evidence. This is the machine-checkable auto-trigger ("ITS
+    around detected structure"); a validated external shock date remains an expert refinement.
+    Edges not yet directed (Rung 0/None) are left untouched — the ladder only escalates upward.
+    ``series_by_var[var]`` is that variable's aggregate time series (length T)."""
+    from dataclasses import replace as _replace
+
+    import numpy as _np
+
+    out = []
+    for r in records:
+        if not r.causal_rung or r.causal_rung < 1:
+            out.append(r)
+            continue
+        series = series_by_var.get(r.target_var)
+        if series is None:
+            out.append(r)
+            continue
+        series = _np.asarray(series, dtype=float)
+        series = series[_np.isfinite(series)]
+        if series.size < 10:
+            out.append(r)
+            continue
+        brk = detect_structural_break(series)
+        if brk is None:
+            out.append(r)
+            continue
+        its = interrupted_time_series(series, brk)
+        if abs(its.level_t) < min_level_t:
+            out.append(r)
+            continue
+        out.append(_replace(
+            r, causal_rung=2,
+            causal_assumptions=tuple(dict.fromkeys(r.causal_assumptions + ("interrupted_time_series",))),
+            warnings=r.warnings + (f"rung2_its_shock_t{brk}", f"rung2_its_level_t_{its.level_t:.2f}"),
+        ))
+    return out
+
+
 __all__ = [
     "ITSResult", "interrupted_time_series", "detect_structural_break",
-    "DiDResult", "difference_in_differences",
+    "DiDResult", "difference_in_differences", "escalate_rung2_its",
 ]

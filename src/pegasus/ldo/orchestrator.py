@@ -199,6 +199,14 @@ def run_ldo(
         orient_data = {v: gf.Z[i].reshape(-1) for i, v in enumerate(gf.variables)}
     records = orient_links(records, orient_data)
 
+    # Rung-2 quasi-experimental escalation (§IV): for directed edges whose target series shows
+    # a detected structural break, run an interrupted-time-series and promote to Rung 2 with the
+    # ITS evidence. Machine-checkable auto-trigger; a validated external shock is expert refinement.
+    if T >= 10:
+        from pegasus.causal.quasi import escalate_rung2_its
+        series_by_var = {v: np.nanmean(gf.Z[i], axis=0) for i, v in enumerate(gf.variables)}
+        records = escalate_rung2_its(records, series_by_var)
+
     n_eff = int(np.isfinite(gf.Z).any(axis=0).sum())
     diagnostics = {
         "p": p, "S": S, "T": T, "K": K, "K_requested": requested_K,
@@ -214,9 +222,14 @@ def run_ldo(
         "disease_prior_applied": disease_penalty is not None,
         "n_mechanical_overlap": sum(1 for r in records if r.edge_type == "mechanical_overlap"),
         "n_disease_provenanced": sum(1 for r in records if r.code_system is not None),
-        # Rung-1 orientation (§IV): edges given a non-Gaussian LiNGAM direction vs left undirected.
+        # §IV causal ladder: edges by rung (0 associational / 1 oriented LiNGAM+collider /
+        # 2 quasi-experimental ITS). Rung 3 is expert-invoked only, never autonomous.
         "n_oriented_lingam": sum(1 for r in records if "oriented_non_gaussian_lingam" in r.warnings),
+        "n_oriented_collider": sum(1 for r in records if "oriented_collider" in r.warnings),
         "n_orientation_undirected": sum(1 for r in records if "orientation_undirected_unidentifiable" in r.warnings),
+        "n_rung0": sum(1 for r in records if (r.causal_rung or 0) == 0),
+        "n_rung1": sum(1 for r in records if r.causal_rung == 1),
+        "n_rung2": sum(1 for r in records if r.causal_rung == 2),
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

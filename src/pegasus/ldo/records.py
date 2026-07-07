@@ -40,6 +40,12 @@ class LinkRecord:
     projection_status: str | None = None
     overlap_jaccard: float | None = None
     certification_status: str | None = None
+    # §IV causal ladder: the typed rung this edge's directional claim rests on + the
+    # assumptions each rung adds. 0 = LDO associational/temporal baseline (undirected or
+    # time-directed); 1 = orientation without experiments (LiNGAM / collider); 2 = quasi-
+    # experimental (ITS / DiD). Rung 3 (do-calculus) is expert-invoked only, never autonomous.
+    causal_rung: int | None = None
+    causal_assumptions: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
     def as_row(self) -> dict[str, Any]:
@@ -63,6 +69,8 @@ class LinkRecord:
             "projection_status": self.projection_status,
             "overlap_jaccard": self.overlap_jaccard,
             "certification_status": self.certification_status,
+            "causal_rung": self.causal_rung,
+            "causal_assumptions": list(self.causal_assumptions),
             "warnings": list(self.warnings),
         }
 
@@ -86,6 +94,8 @@ LINK_RECORD_COLUMNS: tuple[str, ...] = (
     "projection_status",
     "overlap_jaccard",
     "certification_status",
+    "causal_rung",
+    "causal_assumptions",
     "warnings",
 )
 

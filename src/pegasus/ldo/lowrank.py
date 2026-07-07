@@ -31,6 +31,8 @@ class SparseLowRankFit:
     converged: bool
     iterations: int
     numerical_error: float = 0.0        # §V.6(2): relative randomized-SVD truncation error (0 = exact)
+    work_dtype: str = "float64"         # §V.1: bulk-iterate precision actually used (after any escalation)
+    cond_escalated: bool = False        # §V.4: float32 was requested but cond(C) forced float64
     direct_edges: list[tuple[int, int, float]] = field(default_factory=list)   # (i,j,partial_corr) from S
     latent_shared: list[tuple[int, int, float]] = field(default_factory=list)  # (i,j,shared_loading) from L
 
@@ -42,8 +44,14 @@ def _soft_threshold_offdiag(M: np.ndarray, tau: float) -> np.ndarray:
 
 
 def _prox_neg_logdet(M: np.ndarray, rho: float) -> np.ndarray:
-    """argmin_R -logdet R + (rho/2)||R - M||^2  (R symmetric PD) via eigenvalues."""
-    M = 0.5 * (M + M.T)
+    """argmin_R -logdet R + (rho/2)||R - M||^2  (R symmetric PD) via eigenvalues.
+
+    §V.1 mixed precision: the eigendecomposition (a *reduction / log-det*) is always done
+    in float64 even when the ADMM iterates are stored in float32 — the spectrum-reshaping
+    step is where float32 round-off would corrupt small eigenvalues (and hence the log-det).
+    The result is returned as float64; the caller casts back to the working dtype.
+    """
+    M = np.asarray(0.5 * (M + M.T), dtype=np.float64)
     vals, vecs = np.linalg.eigh(M)
     d = (vals + np.sqrt(vals**2 + 4.0 / rho)) / 2.0
     return (vecs * d) @ vecs.T
@@ -55,9 +63,10 @@ def _psd_project_shifted(M: np.ndarray, shift: float) -> np.ndarray:
     ``M - shift·I`` shares its eigenvectors with ``M`` and only shifts the eigenvalues
     by ``-shift``, so the shift is applied to the eigenvalues after a single ``eigh(M)``
     — identical result, without allocating/subtracting a ``shift·I`` matrix every ADMM
-    iteration (this runs twice per iteration for up to ``max_iter`` iterations).
+    iteration (this runs twice per iteration for up to ``max_iter`` iterations). Like
+    :func:`_prox_neg_logdet`, the eigh runs in float64 (§V.1 reduction) and returns float64.
     """
-    M = 0.5 * (M + M.T)
+    M = np.asarray(0.5 * (M + M.T), dtype=np.float64)
     vals, vecs = np.linalg.eigh(M)
     vals = np.clip(vals - shift, 0.0, None)
     return (vecs * vals) @ vecs.T
@@ -103,6 +112,8 @@ def fit_sparse_plus_lowrank(
     smoothness_operator: np.ndarray | None = None,
     factor_rank_cap: int = 24,
     randomized_factors: bool | None = None,
+    work_dtype=np.float64,
+    cond_escalate_threshold: float = 1e8,
     seed: int = 0,
 ) -> SparseLowRankFit:
     """LVGLASSO ADMM: ``Ω = S - L`` from an empirical covariance.
@@ -131,9 +142,27 @@ def fit_sparse_plus_lowrank(
     ``contemporaneous`` and a ``latent_shared`` link, and there is no fixed ``lambda2``
     that separates the two roles — the collapse the LDO exhibited at every operating
     point.
+
+    ``work_dtype`` (§V.1 mixed precision): the ADMM bulk iterates ``S,L,U,R`` are stored
+    in this dtype — ``float32`` halves the working-set memory for the national envelope,
+    while every *reduction* (the eigh in ``_prox_neg_logdet`` / ``_psd_project_shifted``,
+    the residual-norm accumulation, and the final edge readout) is always computed in
+    ``float64``. ``cond_escalate_threshold`` (§V.4) monitors ``cond(C)``: if ``float32`` is
+    requested but the covariance is ill-conditioned (``cond`` above the threshold), the
+    solve **escalates** to ``float64`` (``cond_escalated=True``). Default ``float64`` is
+    byte-identical to the historical fit (all casts become no-ops).
     """
     p = emp_cov.shape[0]
     C = 0.5 * (emp_cov + emp_cov.T) + 1e-4 * np.eye(p)
+    # §V.1/§V.4 precision policy: float32 bulk only when C is well-conditioned; else escalate.
+    work_dtype = np.dtype(work_dtype)
+    cond_escalated = False
+    if work_dtype == np.float32:
+        evC = np.linalg.eigvalsh(C)
+        condC = float(evC[-1] / max(float(evC[0]), 1e-12))
+        if not np.isfinite(condC) or condC > cond_escalate_threshold:
+            work_dtype = np.dtype(np.float64)
+            cond_escalated = True
     if penalty_matrix is not None:
         penalty_matrix = np.asarray(penalty_matrix, dtype=np.float64)
         if penalty_matrix.shape != (p, p):
@@ -156,18 +185,19 @@ def fit_sparse_plus_lowrank(
         tau_pg = penalty / lipschitz
     C_over_rho = C / rho            # loop-invariant; was recomputed every ADMM iteration
     l2_over_rho = lambda2 / rho     # loop-invariant shift for the L-step PSD projection
-    S = np.eye(p)
-    L = np.zeros((p, p))
-    U = np.zeros((p, p))
-    R = np.eye(p)
+    S = np.eye(p, dtype=work_dtype)
+    L = np.zeros((p, p), dtype=work_dtype)
+    U = np.zeros((p, p), dtype=work_dtype)
+    R = np.eye(p, dtype=work_dtype)
     converged = False
     it = 0
     for it in range(1, max_iter + 1):
-        # R-step: prox of -logdet + linear term.
-        R = _prox_neg_logdet(S - L - U - C_over_rho, rho)
+        # R-step: prox of -logdet + linear term. The eigh runs in float64 (reduction); cast
+        # the result back to the working dtype so the stored iterate stays float32 when asked.
+        R = _prox_neg_logdet(S - L - U - C_over_rho, rho).astype(work_dtype, copy=False)
         # S-step: soft-threshold off-diagonal (scalar or disease-informed per-pair penalty).
         if G_sym is None:
-            S = _soft_threshold_offdiag(R + L + U, tau1)
+            S = _soft_threshold_offdiag(R + L + U, tau1).astype(work_dtype, copy=False)
         else:
             # §III.4(5) quadratic prior-regularizers: one proximal-gradient step on the smooth
             # part q(S)=(1/2)tr(SᵀG S)+(ρ/2)‖S−(R+L+U)‖² (∇q = G·S + ρ(S−M)), step 1/lipschitz,
@@ -175,16 +205,23 @@ def fit_sparse_plus_lowrank(
             # smoothed-objective solution; at G=0 (lipschitz=ρ) this reduces exactly to the line
             # above. tr(SᵀG S) smooths precision rows across adjacent lags + related diseases.
             grad = G_sym @ S + rho * (S - (R + L + U))
-            S = _soft_threshold_offdiag(S - grad / lipschitz, tau_pg)
-        # L-step: PSD projection with trace shrink.
-        L = _psd_project_shifted(S - R - U, l2_over_rho)
+            S = _soft_threshold_offdiag(S - grad / lipschitz, tau_pg).astype(work_dtype, copy=False)
+        # L-step: PSD projection with trace shrink (eigh in float64; store in work dtype).
+        L = _psd_project_shifted(S - R - U, l2_over_rho).astype(work_dtype, copy=False)
         # Dual update.
         primal = R - (S - L)
         U = U + primal
-        if np.linalg.norm(primal) / max(1.0, np.linalg.norm(R)) < tol:
+        # §V.1: the convergence norms are reductions → accumulate in float64.
+        pn = float(np.linalg.norm(primal.astype(np.float64, copy=False)))
+        rn = max(1.0, float(np.linalg.norm(R.astype(np.float64, copy=False))))
+        if pn / rn < tol:
             converged = True
             break
 
+    # Promote the converged iterates to float64 for the edge/factor readout so float32
+    # round-off cannot flip an edge near the selection threshold (§V.1: reductions in f64).
+    S = S.astype(np.float64, copy=False)
+    L = L.astype(np.float64, copy=False)
     precision = S - L
     # Direct edges: partial correlations from S.
     d = np.sqrt(np.clip(np.diag(S), 1e-12, None))
@@ -247,6 +284,7 @@ def fit_sparse_plus_lowrank(
         S=S, L=L, precision=precision,
         factor_loadings=factor_loadings, factor_values=factor_values,
         converged=converged, iterations=it, numerical_error=numerical_error,
+        work_dtype=str(work_dtype), cond_escalated=cond_escalated,
         direct_edges=direct_edges, latent_shared=latent_shared,
     )
 

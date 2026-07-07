@@ -83,6 +83,7 @@ def fit_lagged_links(
     gamma_disease: float = 0.0,
     spatial_whiten: bool = True,
     randomized_factors: bool | None = None,
+    float32_bulk: bool = False,
 ) -> LaggedFit:
     """Fit the time-extended precision (missing-aware) and read off directed lagged links.
 
@@ -130,10 +131,13 @@ def fit_lagged_links(
     )
     if smoothness is not None:
         smoothness = smoothness[np.ix_(kept, kept)]
+    # §V.1 float32-bulk policy: store the ADMM iterates in float32 (with float64 reductions
+    # + condition-number escalation) when the compute envelope calls for it; float64 otherwise.
     fit = fit_sparse_plus_lowrank(
         pw.correlation, lambda1=lambda1, lambda2=lambda2,
         edge_threshold=edge_threshold, penalty_matrix=penalty_matrix,
         smoothness_operator=smoothness, randomized_factors=randomized_factors,
+        work_dtype=np.float32 if float32_bulk else np.float64,
     )
 
     S = fit.S

@@ -120,6 +120,7 @@ def run_ldo(
     exposure=None,
     exposure_field_by_variable=None,
     measured_quantity_by_variable=None,
+    float32_bulk: bool | str = "auto",
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass.
 
@@ -136,9 +137,21 @@ def run_ldo(
     if adaptive_k:
         K = _adaptive_lag_order(K, p=p, T=T)
 
+    # §V.1 precision policy: "auto" stores the ADMM bulk iterates in float32 (half the working
+    # set, float64 reductions + condition-number escalation) once the float64 fit would use more
+    # than half the envelope — i.e. under memory pressure — and stays float64 otherwise for
+    # maximum numerical fidelity. Small/test runs are unaffected (stay float64).
+    if float32_bulk == "auto":
+        from pegasus.ldo.envelope import estimate_ldo_bytes, load_compute_envelope
+        env = load_compute_envelope()
+        f32 = estimate_ldo_bytes(p=p, S=S, T=T, K=K, float32_bulk=False) > 0.5 * env.max_bytes
+    else:
+        f32 = bool(float32_bulk)
+
     # §II.10: refuse a run whose dense form exceeds the compute envelope rather
-    # than silently subsampling; the caller should tile/multi-resolve (§II.7).
-    envelope_bytes = assert_within_envelope(p=p, S=S, T=T, K=K) if enforce_envelope else None
+    # than silently subsampling; the caller should tile/multi-resolve (§II.7). The guard's
+    # byte model matches the fit's actual working dtype (float32_bulk).
+    envelope_bytes = assert_within_envelope(p=p, S=S, T=T, K=K, float32_bulk=f32) if enforce_envelope else None
 
     disease_penalty = None
     disease_laplacian = None
@@ -155,6 +168,7 @@ def run_ldo(
         edge_threshold=edge_threshold, disease_penalty=disease_penalty,
         disease_laplacian=disease_laplacian,
         gamma_temporal=gamma_temporal, gamma_disease=gamma_disease,
+        float32_bulk=f32,
     )
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
 
@@ -271,6 +285,13 @@ def run_ldo(
         "n_selected": sum(1 for r in records if r.certification_status == "selected"),
         "residual_scan_error": _residual_error,
         "envelope_bytes": envelope_bytes,
+        # §V.1/§V.4 precision policy: the ADMM bulk dtype actually used, plus whether an
+        # ill-conditioned covariance forced a float32→float64 escalation (self-correcting).
+        "precision_policy": {
+            "float32_bulk_requested": bool(f32),
+            "work_dtype": str(getattr(lagged.fit, "work_dtype", "float64")),
+            "cond_escalated": bool(getattr(lagged.fit, "cond_escalated", False)),
+        },
         # Disease-axis effects (visible only when variable_meta/disease_graph were threaded):
         # the mechanical-overlap guard's re-typings and the disease-informed penalty.
         "disease_prior_applied": disease_penalty is not None,

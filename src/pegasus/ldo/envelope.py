@@ -13,7 +13,6 @@ from pathlib import Path
 
 import yaml
 
-_DTYPE_BYTES = 4  # float32 per compute.yaml
 _DEFAULT_DEVICE_BYTES = 6 * 1024**3  # RTX 4050 6 GB fallback
 
 
@@ -50,18 +49,26 @@ def _detect_device_bytes() -> int:
     return _DEFAULT_DEVICE_BYTES
 
 
-def estimate_ldo_bytes(*, p: int, S: int, T: int, K: int) -> int:
+def estimate_ldo_bytes(*, p: int, S: int, T: int, K: int, float32_bulk: bool = False) -> int:
     """Peak dense allocation estimate for one LDO fit.
 
     Dominant terms: the S×S spatial operators (Q, Q_half, eigenvectors ≈ 3 S²),
     the lag-extended sample matrix (S·T × p(K+1)), and the extended covariance /
-    precision (p(K+1))². All in float32.
+    precision (p(K+1))².
+
+    §V.1 mixed precision: the spatial-operator eigendecompositions are float64 *reductions*
+    (8 B), while the lag-sample matrix and the covariance/precision working set are the
+    float32-eligible **bulk** — 4 B under the float32-bulk policy, 8 B otherwise. The old
+    model charged 4 B for *every* term, so a float64 fit under-counted the two bulk terms by
+    2× and the guard could green-light an OOM run. ``float32_bulk`` must match the dtype the
+    guarded fit actually uses (``fit_lagged_links(float32_bulk=...)``).
     """
     pk = p * (K + 1)
-    spatial = 3 * S * S
-    samples = max(0, S * (T - K)) * pk
-    cov = 3 * pk * pk
-    return int((spatial + samples + cov) * _DTYPE_BYTES)
+    bulk = 4 if float32_bulk else 8
+    spatial = 3 * S * S * 8                      # float64 spatial eigen-reductions
+    samples = max(0, S * (T - K)) * pk * bulk    # lag-extended sample matrix
+    cov = 3 * pk * pk * bulk                      # extended covariance / precision working set
+    return int(spatial + samples + cov)
 
 
 def estimate_residual_scan_bytes(*, p: int, n_eff: int, budget: str = "standard", max_exact: int = 5000) -> int:
@@ -88,10 +95,11 @@ def estimate_residual_scan_bytes(*, p: int, n_eff: int, budget: str = "standard"
     return int(p * per_var * 8)  # float64
 
 
-def assert_within_envelope(*, p: int, S: int, T: int, K: int, envelope: ComputeEnvelope | None = None) -> int:
+def assert_within_envelope(*, p: int, S: int, T: int, K: int, float32_bulk: bool = False,
+                           envelope: ComputeEnvelope | None = None) -> int:
     """Return the estimated bytes, or refuse if the dense form exceeds the envelope."""
     envelope = envelope or load_compute_envelope()
-    estimate = estimate_ldo_bytes(p=p, S=S, T=T, K=K)
+    estimate = estimate_ldo_bytes(p=p, S=S, T=T, K=K, float32_bulk=float32_bulk)
     if estimate > envelope.max_bytes:
         raise ScaleExceedsEnvelopeError(
             "scale_exceeds_compute_envelope: estimated "

@@ -26,9 +26,10 @@ from pegasus.ldo.envelope import (
 )
 from pegasus.ldo.fdr import correct_p_values
 from pegasus.ldo.hsic import (
-    _bandwidth,
-    _np_nystrom_features,
-    _np_rff_features,
+    build_hsic_representation,
+    hsic_mode_for_n,
+    hsic_pair_stat_and_null,
+    hsic_pair_stat_and_null_gpu,
 )
 from pegasus.ldo.margins import GaussianField
 from pegasus.ldo.nulls import (
@@ -45,7 +46,6 @@ class ResidualScanUnderpowered(RuntimeError):
     A typed skip (not a bug): the run RECORDS it in ``residual_scan_error`` rather than the scan
     silently returning no edges (which reads as 'scanned, found nothing'). §6.7 power gate."""
 
-import math
 
 _MIN_N_EFF = 100
 _MIN_NULL_BLOCKS = 5  # < this many spatial blocks → certify descriptive only (§6.8/§6.9)
@@ -83,104 +83,35 @@ def joint_model_residuals(Z_matrix: np.ndarray, precision: np.ndarray) -> np.nda
 
 
 # --- Per-variable HSIC representation cache (residual-scan fast path, §V.3) -----------
-# The exhaustive p²/2 residual HSIC scan re-derived each variable's kernel/feature
-# representation once per pair — O(p²) rebuilds of an object that only depends on ONE
-# variable. Cache each variable's representation once (O(p) builds); a pair is then a
-# cheap product-sum (exact) or feature cross-covariance (approx). Reproduces
-# ``numpy_kernel_hsic_permutation_test`` bit-for-bit: same bandwidth seeds (x-side=seed,
-# y-side=seed+1), same kernels, same centering, same feature maps.
+# The exhaustive p²/2 scan re-derived each variable's kernel/feature representation once per pair
+# (O(p²) rebuilds of a per-variable object). Cache each once via the shared hsic.py builder
+# (O(p) builds); a pair is then a cheap product-sum. On CUDA the feature-map modes run the
+# statistic + permutation null in float32 on the GPU (O(N·D), no dense N×N kernel).
 
 
-def _centered_kernel(v: np.ndarray, *, bandwidth: float, kernel: str) -> np.ndarray:
-    """Doubly-centered kernel matrix H K H (matches hsic.py exact path)."""
-    dist = np.abs(v[:, None] - v[None, :])
-    if kernel == "linear":
-        K = v[:, None] * v[None, :]
-    elif kernel == "matern":
-        scaled = math.sqrt(3.0) * dist / bandwidth
-        K = (1.0 + scaled) * np.exp(-scaled)
-    else:
-        K = np.exp(-(dist ** 2) / (2.0 * bandwidth ** 2))
-    # H K H == K - rowmean - colmean + grandmean (identical to the eye/full form,
-    # avoids materializing the m×m centering matrix H and two m×m matmuls).
-    rm = K.mean(axis=0, keepdims=True)
-    cm = K.mean(axis=1, keepdims=True)
-    return K - rm - cm + K.mean()
+def _cuda_available() -> bool:
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
 
 
-def _build_var_reprs(
-    E: np.ndarray, *, seed: int, kernel: str, budget: str, max_exact: int
-) -> tuple[str, list[dict]]:
-    """Precompute each variable's HSIC representation once (x-side and y-side).
-
-    Returns ``(hsic_mode, reprs)`` where ``reprs[v]`` carries the doubly-centered kernel
-    (exact mode) or the RFF/Nyström feature maps (approx mode) for variable ``v`` as
-    covariate (``seed``) and as residual (``seed+1``) — the two seed regimes the pairwise
-    call uses for the x and y slots respectively.
-    """
-    p, n = E.shape
-    reprs: list[dict] = []
-    if n <= max_exact:
-        for v in range(p):
-            row = E[v]
-            bw_x = _bandwidth(row.tolist(), seed=seed)
-            bw_y = _bandwidth(row.tolist(), seed=seed + 1)
-            reprs.append({
-                "kx": _centered_kernel(row, bandwidth=bw_x, kernel=kernel),
-                "ky": _centered_kernel(row, bandwidth=bw_y, kernel=kernel),
-            })
-        return "exact", reprs
-
-    n_features = int(min(max(128, int(math.sqrt(n) * 4)), 1024))
-    if budget == "fast":
-        mode = "rff"
-        for v in range(p):
-            row = E[v]
-            bw_x = _bandwidth(row.tolist(), seed=seed)
-            bw_y = _bandwidth(row.tolist(), seed=seed + 1)
-            fx = _np_rff_features(row, bandwidth=bw_x, features=n_features, seed=seed)
-            fy = _np_rff_features(row, bandwidth=bw_y, features=n_features, seed=seed + 1)
-            reprs.append({"fx": fx - fx.mean(axis=0, keepdims=True),
-                          "fy": fy - fy.mean(axis=0, keepdims=True)})
-    else:
-        mode = "nystrom"
-        landmarks = int(min(max(64, int(math.sqrt(n))), 1024))
-        for v in range(p):
-            row = E[v]
-            bw_x = _bandwidth(row.tolist(), seed=seed)
-            bw_y = _bandwidth(row.tolist(), seed=seed + 1)
-            fx = _np_nystrom_features(row, bandwidth=bw_x, landmarks=landmarks, seed=seed)
-            fy = _np_nystrom_features(row, bandwidth=bw_y, landmarks=landmarks, seed=seed + 1)
-            reprs.append({"fx": fx - fx.mean(axis=0, keepdims=True),
-                          "fy": fy - fy.mean(axis=0, keepdims=True)})
+def _build_var_reprs(E: np.ndarray, *, seed: int, kernel: str, budget: str, max_exact: int):
+    n = int(E.shape[1])
+    mode = hsic_mode_for_n(n=n, budget=budget, max_exact=max_exact)
+    reprs = [
+        build_hsic_representation(E[v], mode=mode, kernel=kernel, seed=seed, budget=budget, n=n)
+        for v in range(E.shape[0])
+    ]
     return mode, reprs
 
 
-def _pair_stat_and_null(
-    ri: dict, rj: dict, *, mode: str, n: int, perms: list[np.ndarray] | None,
-) -> tuple[float, np.ndarray]:
-    """HSIC statistic + null vector for pair (i as covariate, j as residual)."""
-    if mode == "exact":
-        kx = ri["kx"]
-        ky = rj["ky"]
-        denom = max((n - 1) ** 2, 1)
-        stat = float(np.sum(kx * ky) / denom)
-        if perms is None:
-            return stat, np.empty(0)
-        null = np.array([float(np.sum(kx * ky[np.ix_(pm, pm)]) / denom) for pm in perms])
-        return stat, null
-    fx = ri["fx"]
-    fy = rj["fy"]
-    denom = max(n - 1, 1)
-    cross = fx.T @ fy / denom
-    stat = float((cross * cross).sum())
-    if perms is None:
-        return stat, np.empty(0)
-    null = np.empty(len(perms), dtype=np.float64)
-    for k, pm in enumerate(perms):
-        c = fx.T @ fy[pm] / denom
-        null[k] = float((c * c).sum())
-    return stat, null
+def _pair_stat_and_null(ri, rj, *, mode, n, perms, use_gpu, seed):
+    if mode != "exact" and use_gpu and perms is not None:
+        return hsic_pair_stat_and_null_gpu(ri["fx"], rj["fy"], n=n, perms=perms, seed=seed)
+    return hsic_pair_stat_and_null(ri, rj, n=n, perms=perms)
 
 
 def _infer_panel_type(field: GaussianField) -> str:
@@ -361,11 +292,16 @@ def scan_residual_nonlinear_edges(
         _rng = np.random.default_rng(seed)
         perms = [_rng.permutation(n) for _ in range(max(permutations, 1))]
 
+    # Feature-map modes run the statistic + null in float32 on the GPU when CUDA is present
+    # (memory-bound O(N·D) matmuls); exact mode and the CPU-only case use the numpy reference.
+    use_gpu = mode != "exact" and _cuda_available()
     pairs: list[tuple[int, int]] = [(i, j) for i in range(p) for j in range(i + 1, p)]
     stats: list[float] = []
     pvals: list[float] = []
     for i, j in pairs:
-        stat, null_arr = _pair_stat_and_null(reprs[i], reprs[j], mode=mode, n=n, perms=perms)
+        stat, null_arr = _pair_stat_and_null(
+            reprs[i], reprs[j], mode=mode, n=n, perms=perms, use_gpu=use_gpu, seed=seed
+        )
         pval = float((1 + int((null_arr >= stat).sum())) / (1 + null_arr.size)) if null_arr.size else 1.0
         stats.append(stat)
         pvals.append(pval)

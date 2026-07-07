@@ -1,14 +1,13 @@
 """Exact and approximate HSIC kernels with empirical structured nulls.
 
-This module is the HSIC **foundation**: the shared statistic primitives (``_bandwidth``,
-``_np_rff_features``, ``_np_nystrom_features``) and a generic reference scanner
-(``run_hsic_scan`` / ``numpy_kernel_hsic_permutation_test``, exercised by the HSIC foundation +
-acceptance tests). The LIVE LDO residual scan (:mod:`pegasus.ldo.residual_scan`) does NOT call
-the generic scanner: it reuses these core primitives but reimplements the pairing/permutation
-loop because it needs capabilities the generic scanner does not provide — panel-aware structured
-nulls (§6.8), a per-variable representation cache (score every pair without rebuilding kernels),
-and §II.7 multi-resolution coarsening. The two are therefore an intentional
-foundation-vs-specialization split, not accidental duplication.
+This module owns the ONE HSIC kernel implementation: bandwidth (``_bandwidth``), the RFF/Nyström
+feature maps, the doubly-centered kernel, and the statistic + permutation null. The public API is
+``build_hsic_representation`` (one variable's reusable representation) + ``hsic_pair_stat_and_null``
+(statistic + null for a pair), with ``hsic_pair_stat_and_null_gpu`` a float32 feature-map GPU
+variant. Both the reference scanner (``run_hsic_scan`` / ``numpy_kernel_hsic_permutation_test``)
+and the LIVE LDO residual scan (:mod:`pegasus.ldo.residual_scan`) route through these — the
+residual scan adds only its own layer (panel-aware structured nulls §6.8, per-variable caching,
+§II.7 coarsening) on top, without re-deriving any kernel math.
 """
 
 from __future__ import annotations
@@ -203,12 +202,129 @@ def _np_nystrom_features(values: "Any", *, bandwidth: float, landmarks: int, see
     return cross @ inv_root
 
 
-def _np_feature_hsic(x_features: "Any", y_features: "Any") -> float:
-    n = x_features.shape[0]
-    xc = x_features - x_features.mean(axis=0, keepdims=True)
-    yc = y_features - y_features.mean(axis=0, keepdims=True)
-    cross = xc.T @ yc / max(n - 1, 1)
+# --- Single public HSIC representation + statistic API (the ONE kernel implementation) -------
+# Both the reference scanner (numpy_kernel_hsic_permutation_test) and the LIVE LDO residual scan
+# (pegasus.ldo.residual_scan) route through these. A "representation" holds a variable's HSIC
+# feature once so a pair is a cheap product-sum; the x-side uses `seed`, the y-side `seed+1`
+# (the two bandwidth/feature regimes the pairwise call consumes). Modes: exact (doubly-centered
+# n×n kernel), rff / nystrom (mean-centered n×D feature map, O(N·D)).
+
+
+def hsic_features_dim(*, n: int, budget: str) -> int:
+    if budget == "fast":
+        return int(min(max(128, int(math.sqrt(n) * 4)), 1024))
+    return int(min(max(64, int(math.sqrt(n))), 1024))
+
+
+def hsic_mode_for_n(*, n: int, budget: str, max_exact: int = 5000) -> str:
+    if n <= max_exact:
+        return "exact"
+    return "rff" if budget == "fast" else "nystrom"
+
+
+def _centered_kernel_np(v: "Any", *, bandwidth: float, kernel: str) -> "Any":
+    import numpy as np
+
+    v = np.asarray(v, dtype=float)
+    dist = np.abs(v[:, None] - v[None, :])
+    if kernel == "linear":
+        k = v[:, None] * v[None, :]
+    elif kernel == "matern":
+        scaled = math.sqrt(3.0) * dist / bandwidth
+        k = (1.0 + scaled) * np.exp(-scaled)
+    else:
+        k = np.exp(-(dist ** 2) / (2.0 * bandwidth ** 2))
+    return k - k.mean(axis=0, keepdims=True) - k.mean(axis=1, keepdims=True) + k.mean()
+
+
+def build_hsic_representation(
+    values: "Any", *, mode: str, kernel: str, seed: int, budget: str, n: int
+) -> dict:
+    """One variable's HSIC representation (x-side=seed, y-side=seed+1)."""
+    import numpy as np
+
+    row = np.asarray(values, dtype=float)
+    bw_x = _bandwidth(row.tolist(), seed=seed)
+    bw_y = _bandwidth(row.tolist(), seed=seed + 1)
+    if mode == "exact":
+        return {
+            "mode": "exact",
+            "kx": _centered_kernel_np(row, bandwidth=bw_x, kernel=kernel),
+            "ky": _centered_kernel_np(row, bandwidth=bw_y, kernel=kernel),
+        }
+    if mode == "rff":
+        fx = _np_rff_features(row, bandwidth=bw_x, features=hsic_features_dim(n=n, budget="fast"), seed=seed)
+        fy = _np_rff_features(row, bandwidth=bw_y, features=hsic_features_dim(n=n, budget="fast"), seed=seed + 1)
+    else:
+        landmarks = hsic_features_dim(n=n, budget="standard")
+        fx = _np_nystrom_features(row, bandwidth=bw_x, landmarks=landmarks, seed=seed)
+        fy = _np_nystrom_features(row, bandwidth=bw_y, landmarks=landmarks, seed=seed + 1)
+    return {
+        "mode": mode,
+        "fx": fx - fx.mean(axis=0, keepdims=True),
+        "fy": fy - fy.mean(axis=0, keepdims=True),
+    }
+
+
+def hsic_stat_from_reprs(ri: dict, rj: dict, *, n: int) -> float:
+    if ri["mode"] == "exact":
+        return float((ri["kx"] * rj["ky"]).sum() / max((n - 1) ** 2, 1))
+    cross = ri["fx"].T @ rj["fy"] / max(n - 1, 1)
     return float((cross * cross).sum())
+
+
+def hsic_pair_stat_and_null(
+    ri: dict, rj: dict, *, n: int, perms: "Any | None"
+) -> tuple[float, "Any"]:
+    """CPU/numpy reference: HSIC statistic + permutation null for pair (i as x, j as y)."""
+    import numpy as np
+
+    if ri["mode"] == "exact":
+        kx, ky = ri["kx"], rj["ky"]
+        denom = max((n - 1) ** 2, 1)
+        stat = float((kx * ky).sum() / denom)
+        if perms is None:
+            return stat, np.empty(0)
+        null = np.array([float((kx * ky[np.ix_(pm, pm)]).sum() / denom) for pm in perms])
+        return stat, null
+    fx, fy = ri["fx"], rj["fy"]
+    denom = max(n - 1, 1)
+    stat = float(((fx.T @ fy / denom) ** 2).sum())
+    if perms is None:
+        return stat, np.empty(0)
+    null = np.empty(len(perms), dtype=np.float64)
+    for k, pm in enumerate(perms):
+        null[k] = float(((fx.T @ fy[pm] / denom) ** 2).sum())
+    return stat, null
+
+
+def hsic_pair_stat_and_null_gpu(
+    fx: "Any", fy: "Any", *, n: int, perms: "Any", seed: int
+) -> tuple[float, "Any"]:
+    """Float32 feature-map HSIC + permutation null on the GPU (O(N·D), no dense N×N kernel).
+
+    ``fx``/``fy`` are the same mean-centered feature maps the CPU path uses; ``perms`` the same
+    permutation index arrays, so the statistic matches within float32 tolerance and the p-value
+    (exceedance count over the shared perms) is identical."""
+    import numpy as np
+
+    plan = resolve_torch_device(
+        "pirs_hsic_gpu_features",
+        prefer_cuda=True,
+        seed=seed,
+        estimated_bytes=tensor_nbytes((n, fx.shape[1]), dtype="float32", copies=4),
+    )
+    torch, device, _ = torch_runtime(plan)
+    xf = torch.as_tensor(np.ascontiguousarray(fx), dtype=torch.float32, device=device)
+    yf = torch.as_tensor(np.ascontiguousarray(fy), dtype=torch.float32, device=device)
+    denom = float(max(n - 1, 1))
+    stat = float(((xf.t() @ yf / denom) ** 2).sum().item())
+    perm_t = torch.as_tensor(np.asarray(perms, dtype=np.int64), device=device)  # (P, n)
+    null = torch.empty(perm_t.shape[0], dtype=torch.float32, device=device)
+    for k in range(perm_t.shape[0]):
+        cross = xf.t() @ yf.index_select(0, perm_t[k]) / denom
+        null[k] = (cross * cross).sum()
+    return stat, null.cpu().numpy().astype(np.float64)
 
 
 def numpy_kernel_hsic_permutation_test(
@@ -239,69 +355,29 @@ def numpy_kernel_hsic_permutation_test(
     if n < 2 or len(residuals) != n:
         return 0.0, [], {"kernel": kernel, "n": n, "degenerate": True}
 
-    bandwidth_x = _bandwidth(covariate, seed=seed)
-    bandwidth_y = _bandwidth(residuals, seed=seed + 1)
-    null_kind = "structured_provided" if permutation_indices is not None else "iid_permutation"
+    hsic_mode = hsic_mode_for_n(n=n, budget=budget, max_exact=max_exact)
+    # Build the two variables' representations through the shared public builder (x-side=seed,
+    # y-side=seed+1), then reuse them for the statistic and every permutation.
+    x_repr = build_hsic_representation(covariate, mode=hsic_mode, kernel=kernel, seed=seed, budget=budget, n=n)
+    y_repr = build_hsic_representation(residuals, mode=hsic_mode, kernel=kernel, seed=seed, budget=budget, n=n)
 
-    def _iter_perms() -> "Any":
-        if permutation_indices is not None:
-            for perm in permutation_indices:
-                perm_arr = np.asarray(perm, dtype=int)
-                if perm_arr.shape[0] == n:
-                    yield perm_arr
-        else:
-            rng = np.random.default_rng(seed)
-            for _ in range(max(int(permutations), 1)):
-                yield rng.permutation(n)
-
-    if n <= max_exact:
-        hsic_mode = "exact"
-
-        def _kernel_matrix(values: list[float], bandwidth: float) -> "np.ndarray":
-            v = np.asarray(values, dtype=float)
-            dist = np.abs(v[:, None] - v[None, :])
-            if kernel == "linear":
-                return v[:, None] * v[None, :]
-            if kernel == "matern":
-                scaled = math.sqrt(3.0) * dist / bandwidth
-                return (1.0 + scaled) * np.exp(-scaled)
-            return np.exp(-(dist ** 2) / (2.0 * bandwidth ** 2))
-
-        def _center(matrix: "np.ndarray") -> "np.ndarray":
-            m = matrix.shape[0]
-            h = np.eye(m) - np.full((m, m), 1.0 / m)
-            return h @ matrix @ h
-
-        k_centered = _center(_kernel_matrix(covariate, bandwidth_x))
-        l_centered = _center(_kernel_matrix(residuals, bandwidth_y))
-        denom = max((n - 1) ** 2, 1)
-        statistic = float(np.sum(k_centered * l_centered) / denom)
-        null_statistics = [
-            float(np.sum(k_centered * l_centered[np.ix_(perm, perm)]) / denom) for perm in _iter_perms()
-        ]
-        approximation = None
+    if permutation_indices is not None:
+        perms = [np.asarray(p, dtype=int) for p in permutation_indices if np.asarray(p).shape[0] == n]
+        null_kind = "structured_provided"
     else:
-        n_features = int(min(max(128, int(math.sqrt(n) * 4)), 1024))
-        if budget == "fast":
-            hsic_mode = "rff"
-            x_feat = _np_rff_features(covariate, bandwidth=bandwidth_x, features=n_features, seed=seed)
-            y_feat = _np_rff_features(residuals, bandwidth=bandwidth_y, features=n_features, seed=seed + 1)
-        else:
-            hsic_mode = "nystrom"
-            landmarks = int(min(max(64, int(math.sqrt(n))), 1024))
-            x_feat = _np_nystrom_features(covariate, bandwidth=bandwidth_x, landmarks=landmarks, seed=seed)
-            y_feat = _np_nystrom_features(residuals, bandwidth=bandwidth_y, landmarks=landmarks, seed=seed + 1)
-        statistic = _np_feature_hsic(x_feat, y_feat)
-        null_statistics = [_np_feature_hsic(x_feat, y_feat[perm]) for perm in _iter_perms()]
-        approximation = hsic_mode
+        rng = np.random.default_rng(seed)
+        perms = [rng.permutation(n) for _ in range(max(int(permutations), 1))]
+        null_kind = "iid_permutation"
 
+    statistic, null_arr = hsic_pair_stat_and_null(x_repr, y_repr, n=n, perms=perms)
+    null_statistics = null_arr.tolist()
     diagnostics = {
         "kernel": kernel,
-        "bandwidth_x": bandwidth_x,
-        "bandwidth_y": bandwidth_y,
+        "bandwidth_x": _bandwidth(covariate, seed=seed),
+        "bandwidth_y": _bandwidth(residuals, seed=seed + 1),
         "estimator": "biased_centered_kernel_hsic_numpy",
         "hsic_mode": hsic_mode,
-        "approximation": approximation,
+        "approximation": None if hsic_mode == "exact" else hsic_mode,
         "null_kind": null_kind,
         "permutations_executed": len(null_statistics),
         "n": n,

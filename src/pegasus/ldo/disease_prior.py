@@ -73,6 +73,62 @@ def disease_laplacian_matrix(variables: tuple[str, ...], graph: "DiseaseGraph") 
     return np.diag(W.sum(axis=1)) - W
 
 
+def _laplacian_from_mask(mask: np.ndarray) -> np.ndarray:
+    A = mask.astype(np.float64)
+    np.fill_diagonal(A, 0.0)
+    return np.diag(A.sum(axis=1)) - A
+
+
+def hierarchical_disease_laplacians_from_affinity(affinity: np.ndarray) -> dict[str, np.ndarray]:
+    """Decompose the graded structural affinity into PER-SCALE Laplacians (§III.3 sum-of-scales).
+
+    The graded affinity carries three nested scales at distinct weights (1 same category, 0.5 same
+    block, 0.25 same chapter). This splits them into separate same-scale adjacency Laplacians
+    ``{category, block, chapter}`` so each scale can carry its OWN precision — the sum-of-scales
+    GMRF ``θ_leaf = μ_chapter + δ_block + δ_category + δ_leaf`` with distinct ``τ_level`` shrinkage,
+    rather than one flat Laplacian at a single scalar precision. Empty scales are omitted."""
+    W = np.asarray(affinity, dtype=np.float64)
+    bands = {
+        "category": W >= 0.99,
+        "block": (W >= 0.4) & (W < 0.99),
+        "chapter": (W >= 0.15) & (W < 0.4),
+    }
+    out: dict[str, np.ndarray] = {}
+    for name, mask in bands.items():
+        if mask.any():
+            out[name] = _laplacian_from_mask(mask)
+    return out
+
+
+def hierarchical_disease_laplacians(variables: tuple[str, ...], graph: "DiseaseGraph") -> dict[str, np.ndarray]:
+    """Per-scale disease Laplacians aligned to the LDO variables (see
+    :func:`hierarchical_disease_laplacians_from_affinity`)."""
+    return hierarchical_disease_laplacians_from_affinity(variable_affinity(variables, graph))
+
+
+def sum_of_scales_disease_operator(
+    variables: tuple[str, ...], graph: "DiseaseGraph", scale_precisions: dict[str, float],
+) -> np.ndarray | None:
+    """The §III.3 sum-of-scales disease GMRF operator ``G_D = Σ_level τ_level · L_level``.
+
+    Distinct per-scale precisions (e.g. a rare leaf shrinks strongly toward its category but weakly
+    toward its chapter) replace the flat single-γ Laplacian. Returns ``None`` when no scale has a
+    positive precision or the graph induces no coupling — the caller then falls back to the flat
+    ``L_D`` (or no disease prior)."""
+    laps = hierarchical_disease_laplacians(variables, graph)
+    if not laps:
+        return None
+    p = len(variables)
+    G = np.zeros((p, p), dtype=np.float64)
+    used = False
+    for name, L in laps.items():
+        tau = float(scale_precisions.get(name, 0.0))
+        if tau > 0.0:
+            G = G + tau * L
+            used = True
+    return G if used else None
+
+
 def penalty_from_affinity(
     affinity: np.ndarray, *, lambda1: float, beta: float = 0.7, min_frac: float = 0.2
 ) -> np.ndarray:
@@ -114,6 +170,9 @@ def tile_penalty_across_lags(penalty_pp: np.ndarray, K: int, lambda1: float) -> 
 __all__ = [
     "variable_affinity",
     "disease_laplacian_matrix",
+    "hierarchical_disease_laplacians_from_affinity",
+    "hierarchical_disease_laplacians",
+    "sum_of_scales_disease_operator",
     "penalty_from_affinity",
     "disease_penalty_matrix",
     "tile_penalty_across_lags",

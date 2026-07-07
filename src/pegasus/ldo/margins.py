@@ -63,6 +63,28 @@ def randomized_pit_gaussianize(values: np.ndarray, *, rng: np.random.Generator) 
     return out
 
 
+def inverse_gaussianize(z: np.ndarray, observed_values: np.ndarray) -> np.ndarray:
+    """§III.5 'mapped back': the inverse copula map ``F_j⁻¹(Φ(z))`` from the latent Gaussian scale
+    to a variable's NATIVE scale, via the empirical quantile function of its observed values.
+
+    Completes the round trip (forward :func:`randomized_pit_gaussianize` models dependence on the
+    Gaussian scale; this returns a modelled/latent quantile to native units so a readout is
+    interpretable). Note the LDO's emitted edge weights are *partial correlations* — unitless and
+    scale-invariant by construction, so they need no back-map — but any native-scale readout (a
+    predicted count, a counterfactual level) uses this inverse. NaN where no observations exist.
+    """
+    from scipy.special import ndtr
+
+    obs = np.asarray(observed_values, dtype=np.float64)
+    obs = np.sort(obs[np.isfinite(obs)])
+    z = np.asarray(z, dtype=np.float64)
+    if obs.size == 0:
+        return np.full(z.shape, np.nan)
+    u = np.clip(ndtr(z), _EPS, 1.0 - _EPS)
+    idx = np.clip((u * obs.size).astype(int), 0, obs.size - 1)
+    return obs[idx]
+
+
 def count_exposure_gaussianize(
     counts: np.ndarray, exposure: np.ndarray, *, rng: np.random.Generator
 ) -> np.ndarray:
@@ -124,5 +146,5 @@ def gaussianize_field(
 
 __all__ = [
     "GaussianField", "gaussianize_field", "randomized_pit_gaussianize",
-    "count_exposure_gaussianize",
+    "inverse_gaussianize", "count_exposure_gaussianize",
 ]

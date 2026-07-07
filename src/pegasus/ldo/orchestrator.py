@@ -112,6 +112,7 @@ def run_ldo(
     max_workers: int | None = None,
     adaptive_k: bool = True,
     disease_graph=None,
+    disease_scale_precisions: dict[str, float] | None = None,
     gamma_temporal: float = 0.1,
     gamma_disease: float = 0.1,
     precision_target: float | None = None,
@@ -160,12 +161,25 @@ def run_ldo(
     disease_penalty = None
     disease_laplacian = None
     if disease_graph is not None:
-        from pegasus.ldo.disease_prior import disease_laplacian_matrix, disease_penalty_matrix
+        from pegasus.ldo.disease_prior import (
+            disease_laplacian_matrix,
+            disease_penalty_matrix,
+            sum_of_scales_disease_operator,
+        )
         disease_penalty = disease_penalty_matrix(gf.variables, disease_graph, lambda1=lambda1)
-        # §III.4(5) disease-Laplacian quadratic operand (smooth precision rows across the
-        # CID-10 hierarchy). Distinct from the ℓ1 penalty above (edge selection); this is the
-        # GMRF/hierarchy quadratic. Absent a disease graph, only temporal smoothing applies.
-        disease_laplacian = disease_laplacian_matrix(gf.variables, disease_graph)
+        # §III.3/§III.4(5) disease smoothing operand. With disease_scale_precisions the §III.3
+        # SUM-OF-SCALES GMRF (per-scale τ: θ_leaf = μ_chapter+δ_block+δ_category+δ_leaf) is used so
+        # each scale shrinks at its own rate; otherwise the flat single-γ L_D. Absent a graph, only
+        # temporal smoothing applies. When sum-of-scales is used, gamma_disease is baked into the τ
+        # so it is set to 1.0 downstream.
+        disease_laplacian = None
+        if disease_scale_precisions:
+            disease_laplacian = sum_of_scales_disease_operator(
+                gf.variables, disease_graph, disease_scale_precisions)
+            if disease_laplacian is not None:
+                gamma_disease = 1.0  # precisions carried inside G_D
+        if disease_laplacian is None:
+            disease_laplacian = disease_laplacian_matrix(gf.variables, disease_graph)
 
     fit_kwargs = dict(
         kappa=kappa, lambda1=lambda1, lambda2=lambda2,

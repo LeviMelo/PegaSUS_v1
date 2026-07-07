@@ -22,6 +22,13 @@ must **never** be materialized. Every operation factors axis-by-axis instead:
 
 This is the structural-decomposition axis of §III.4(3); §V.6 (exact-certifies-approximate)
 governs its use where separability is an approximation.
+
+Role (§V.2 scope): the factored operator is the JOINT-precision **evaluator** — its log-det feeds
+the §V.6 validity report and its solve is available for downstream marginal-likelihood work. It is
+deliberately NOT swapped into the CPW ADMM R-step: that prox needs the *eigenbasis* of the small
+``p×p`` ``Ω_var`` (to reshape its spectrum), which is already exact and cheap; substituting a
+scalar joint log-det there would be a category error. The ``(pST)²→p²+S²+τ²`` collapse this module
+provides is for the joint likelihood/solve, which is exactly where it is used — not the per-block prox.
 """
 
 from __future__ import annotations

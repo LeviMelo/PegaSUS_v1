@@ -12,6 +12,15 @@ Variables that co-move only through a common factor load on ``L`` and are report
 as ``latent_shared`` (a confounded pair), NOT as dense direct edges in ``S`` — so
 ``S`` recovers the direct structure *net of* the shared driver. ``L``'s eigenfactors
 are the latent drivers (the ST-DFM factors as Layer 2).
+
+§V.3 Johnson–Lindenstrauss neighborhood-regression sketch (scope boundary): that clause targets a
+**Meinshausen–Bühlmann per-node neighborhood-regression** estimator, where each variable is
+lasso-regressed on the others and a JL projection sketches the ``(1±ε)`` regression geometry. The
+LDO does NOT use neighborhood regressions — it fits the JOINT precision by this CPW ADMM — so there
+is no per-node regression design to JL-sketch. The scale reduction §V.3 seeks is instead provided
+by the **randomized SVD** low-rank readout (:func:`_low_rank_factors`, ``O(p²r)`` vs ``O(p³)``) and
+the §V.2 Kronecker factoring of the joint operator. The JL-sketch requirement is therefore
+architecturally N/A to the joint estimator, not an unbuilt feature of it.
 """
 
 from __future__ import annotations

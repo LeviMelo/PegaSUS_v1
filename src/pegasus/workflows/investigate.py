@@ -152,6 +152,35 @@ def measured_quantity_refs(run_dir, keep_variables=None) -> dict[str, str]:
     return out
 
 
+def state_reliability_weights(run_dir, keep_variables=None) -> dict[str, float]:
+    """``{field_id: reliability∈(0,1]}`` from the §3.12 Q-tensor — the state-tensor uncertainty
+    folded into the LDO observation weight ``W`` (§II.3 'uncertainty(state tensor)').
+
+    Reliability = Kish efficiency ``n_eff/n_events`` × ``(1−denom_fragility)`` × ``(1−provenance_risk)``,
+    floored at 0.1 so no field is fully zeroed. A field with a large design effect (low n_eff),
+    fragile denominator, or unofficial provenance is DOWN-WEIGHTED in the precision fit — a
+    normalized/uncertain quantity is no longer modelled as if exact. Empty when Q_tensor is absent."""
+    path = Path(run_dir) / "Q_tensor.parquet"
+    if not path.exists():
+        return {}
+    q = pl.read_parquet(path)
+    if "field_id" not in q.columns:
+        return {}
+    out: dict[str, float] = {}
+    for row in q.iter_rows(named=True):
+        fid = str(row["field_id"])
+        if keep_variables is not None and fid not in keep_variables:
+            continue
+        n_events = float(row.get("n_events") or 0.0)
+        n_eff = row.get("n_eff")
+        kish = float(n_eff) / n_events if (n_eff is not None and n_events > 0) else 1.0
+        frag = float(row.get("denom_fragility") or 0.0)
+        prov = float(row.get("provenance_risk") or 0.0)
+        rel = kish * (1.0 - min(frag, 1.0)) * (1.0 - min(prov, 1.0))
+        out[fid] = float(min(max(rel, 0.1), 1.0))
+    return out
+
+
 def _disease_graph_from_meta(variable_meta: dict[str, dict]):
     """A variable-keyed structural DiseaseGraph over the code-bearing variables, or None.
 
@@ -249,10 +278,17 @@ def run_investigate(
     else:
         use_mr = bool(multiresolution)
 
+    # §3.12.3 / §II.3: fold the per-field Q-tensor state (n_eff, denom_fragility, provenance_risk)
+    # into the LDO reliability weight W so an uncertain/normalized field is not modelled as exact.
+    field_weights = ldo_kwargs.pop("field_weights", None)
+    if field_weights is None:
+        field_weights = state_reliability_weights(run_dir, keep_variables) or None
+
     _ldo_common = dict(
         K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables,
         variable_meta=variable_meta, disease_graph=disease_graph,
         measured_quantity_by_variable=mq_by_var, spatial_field_dir=spatial_field_dir,
+        field_weights=field_weights,
     )
     if use_mr:
         ldo_run = run_ldo_multiresolution(panel, **_ldo_common, **ldo_kwargs)

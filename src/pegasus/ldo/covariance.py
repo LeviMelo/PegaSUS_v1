@@ -9,6 +9,15 @@ sparse+low-rank precision estimator receives a valid PSD input.
 
 Variables whose coverage or pairwise overlap is too small are dropped (degenerate
 columns), and the surviving index is returned so edges map back to variable names.
+
+§V.4 streaming sufficient statistics (scope boundary): the pairwise moments (``M@M.T``,
+``X0@M.T``, ``X0@X0.T``) are the ``XᵀX``/``Xᵀy`` accumulators §V.4 names, computed here over an
+in-RAM ``(features × cells)`` matrix. This is exact and fits at the national determinant scale
+(``p·(K+1)`` features × ``S·T`` cells is bounded, and the §II.10 envelope guard *refuses* rather
+than OOMs when a configuration would not fit). An **out-of-core** accumulation (streaming the same
+BLAS products over ``scan_parquet`` row-groups so the cell matrix never fully materializes) is the
+beyond-RAM extension of §V.4 — the moment algebra above is already in the streamable form; only the
+driver would change. It is not needed for the current national runs and is a documented ceiling.
 """
 
 from __future__ import annotations

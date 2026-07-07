@@ -53,6 +53,7 @@ def _prepare_ldo_inputs(
     exposure=None,
     exposure_field_by_variable=None,
     measured_quantity_by_variable=None,
+    field_weights=None,
 ) -> tuple[LDOField | None, GaussianField]:
     """Return ``(raw_field, gaussian_field)``. The raw (pre-gaussianized) LDOField is
     kept for causal orientation — LiNGAM cannot identify direction on gaussianized
@@ -63,6 +64,7 @@ def _prepare_ldo_inputs(
     margin (extensive counts modelled net of exposure), overriding an explicit ``exposure``."""
     if isinstance(source, CommonPanel):
         raw = assemble_ldo_tensor(source, keep_variables=keep_variables,
+                                  field_weights=field_weights,
                                   exposure_field_by_variable=exposure_field_by_variable,
                                   measured_quantity_by_variable=measured_quantity_by_variable)
         exp = raw.exposure if raw.exposure is not None else exposure
@@ -121,6 +123,7 @@ def run_ldo(
     exposure=None,
     exposure_field_by_variable=None,
     measured_quantity_by_variable=None,
+    field_weights: dict | None = None,
     float32_bulk: bool | str = "auto",
     spatial_field_dir: str | None = None,
     max_spatial_fields: int = 24,
@@ -135,7 +138,8 @@ def run_ldo(
     """
     raw_field, gf = _prepare_ldo_inputs(source, seed=seed, keep_variables=keep_variables,
                                         exposure=exposure, exposure_field_by_variable=exposure_field_by_variable,
-                                        measured_quantity_by_variable=measured_quantity_by_variable)
+                                        measured_quantity_by_variable=measured_quantity_by_variable,
+                                        field_weights=field_weights)
     p, S, T = gf.shape
 
     requested_K = K
@@ -381,10 +385,22 @@ def run_ldo(
     try:
         if lagged.lag0_precision is not None and gf.shape[1] > 1:
             from pegasus.ldo.kron import joint_logdet, kronecker_from_ldo
-            _op = kronecker_from_ldo(lagged.lag0_precision, gf.space_ids, kappa=kappa, tau=K + 1)
+            # Estimate the temporal factor's AR(1) φ from the data (mean lag-1 autocorrelation over
+            # time, pooled across variables/space) instead of a hardcoded 0.5, so the separable
+            # temporal precision reflects the panel's actual persistence.
+            _phi = 0.5
+            _za, _zb = gf.Z[:, :, :-1], gf.Z[:, :, 1:]
+            _m = np.isfinite(_za) & np.isfinite(_zb)
+            if int(_m.sum()) > 10:
+                _a = _za[_m] - _za[_m].mean()
+                _b = _zb[_m] - _zb[_m].mean()
+                _den = float(np.sqrt((_a @ _a) * (_b @ _b)))
+                if _den > 0:
+                    _phi = float(np.clip((_a @ _b) / _den, -0.95, 0.95))
+            _op = kronecker_from_ldo(lagged.lag0_precision, gf.space_ids, kappa=kappa, phi=_phi, tau=K + 1)
             _ld, _method = joint_logdet(_op, seed=seed)
             kronecker_report = {
-                "joint_logdet": _ld, "space_logdet_method": _method,
+                "joint_logdet": _ld, "space_logdet_method": _method, "temporal_ar1_phi": _phi,
                 "dim": _op.dim, "p": _op.p, "S": _op.S, "tau": _op.tau,
             }
     except Exception:
@@ -407,6 +423,9 @@ def run_ldo(
         "n_selected": sum(1 for r in records if r.certification_status == "selected"),
         "residual_scan_error": _residual_error,
         "envelope_bytes": envelope_bytes,
+        # §3.12.3/§II.3: number of variables whose reliability weight W was scaled by the Q-tensor
+        # state (n_eff / denom_fragility / provenance_risk) — uncertain fields down-weighted, not exact.
+        "n_state_weighted": len(field_weights) if field_weights else 0,
         # §V.1/§V.4 precision policy: the ADMM bulk dtype actually used, plus whether an
         # ill-conditioned covariance forced a float32→float64 escalation (self-correcting).
         "precision_policy": {
@@ -482,6 +501,7 @@ def run_ldo_multiresolution(
     exposure=None,
     exposure_field_by_variable=None,
     measured_quantity_by_variable=None,
+    field_weights: dict | None = None,
     **ldo_kwargs,
 ) -> LDORun:
     """§II.7 / RES-01 coarse→fine LDO on a panel/field source — a drop-in for :func:`run_ldo`.
@@ -505,6 +525,7 @@ def run_ldo_multiresolution(
         source, seed=seed, keep_variables=keep_variables, exposure=exposure,
         exposure_field_by_variable=exposure_field_by_variable,
         measured_quantity_by_variable=measured_quantity_by_variable,
+        field_weights=field_weights,
     )
     coarse = coarsen_field_spatial(fine, level=coarse_level)
     ck = coarse_K if coarse_K is not None else max(1, min(K, 4))

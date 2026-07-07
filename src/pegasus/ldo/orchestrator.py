@@ -277,6 +277,28 @@ def run_ldo(
             for r in records
         ]
 
+    # §III.8 conjuncts 3 & 4 (certgates): regularization-path agreement (an edge present at only a
+    # single λ₁ is a threshold artefact) + latent-vs-lag separability (§IX.2: a directed lag whose
+    # endpoints share a contemporaneous latent factor may be a phase-offset artefact). Annotate as
+    # warnings; certify_link downgrades a promoted edge that fails either. Path agreement costs a
+    # small λ-grid refit, so it is skipped when there is no directed/contemporaneous edge to gate.
+    from pegasus.ldo.certgates import (
+        apply_certification_gates,
+        latent_vs_lag_confounds,
+        regularization_path_agreement,
+    )
+    _latent_flags = latent_vs_lag_confounds(lagged)
+    _path_agreement = None
+    if any(r.edge_type in ("lagged_directed", "contemporaneous") for r in records):
+        try:
+            from pegasus.ldo.certgates import _edge_keys
+            _path_agreement = regularization_path_agreement(
+                gf, K=K, fit_kwargs=fit_kwargs, base_lambda1=lambda1, base_keys=_edge_keys(lagged))
+        except Exception:
+            _path_agreement = None
+    records = apply_certification_gates(
+        records, path_agreement=_path_agreement, latent_flags=_latent_flags)
+
     records = certify_links(records, policy=certification_policy)
 
     # Rung-1 causal orientation (§IV): direct contemporaneous edges by non-Gaussian
@@ -389,6 +411,11 @@ def run_ldo(
         "n_rung0": sum(1 for r in records if (r.causal_rung or 0) == 0),
         "n_rung1": sum(1 for r in records if r.causal_rung == 1),
         "n_rung2": sum(1 for r in records if r.causal_rung == 2),
+        # §III.8 conjuncts 3 & 4: edges downgraded for regularization-path disagreement (single-λ
+        # artefact) or a latent-vs-lag confound (§IX.2 phase-offset shared-wave artefact).
+        "n_path_disagreement": sum(1 for r in records
+                                   if any(w.startswith("low_regularization_path_agreement") for w in r.warnings)),
+        "n_latent_lag_confound": sum(1 for r in records if "possible_latent_lag_confound" in r.warnings),
         # §III.5: number of variables modelled with the count-with-exposure (Poisson-offset)
         # margin rather than the plain rank margin (extensive counts net of exposure).
         "count_exposure_variables": (

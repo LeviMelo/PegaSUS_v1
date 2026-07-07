@@ -40,6 +40,14 @@ def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = 
     if "lowrank_unconverged_descriptive_only" in record.warnings:
         return replace(record, certification_status="descriptive")
 
+    # §III.8 conjuncts (certgates.py): an edge that survives only a single λ operating point
+    # (regularization-path disagreement) or a directed lag whose endpoints share a latent factor
+    # (latent-vs-lag confound, §IX.2) is not a certifiable discovery — surface descriptive.
+    if any(w.startswith("low_regularization_path_agreement") for w in record.warnings):
+        return replace(record, certification_status="descriptive")
+    if "possible_latent_lag_confound" in record.warnings:
+        return replace(record, certification_status="descriptive")
+
     if record.edge_type == "mechanical_overlap":
         # Shared-code correlation is known structure, never an epidemiological discovery (§5.3).
         return replace(record, certification_status="descriptive")

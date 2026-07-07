@@ -429,6 +429,17 @@ def run_ldo_multiresolution(
     base = mr.fine.diagnostics if mr.fine is not None else mr.coarse.diagnostics
     diagnostics = dict(base)
     diagnostics["multiresolution"] = mr.diagnostics
+    # §VIII.2(3): surface the typed coverage manifest (searched + explicitly-unsearched pairs +
+    # the stated sparsity-of-truth assumption + the §VIII.2(2) random-audit false-negative rate)
+    # so the honesty record reaches the run bundle, not just the coarse-pass diagnostics.
+    if mr.coverage_manifest is not None:
+        cm = mr.coverage_manifest
+        diagnostics["coverage_manifest_mr"] = {
+            "searched": cm.searched,
+            "unsearched": cm.unsearched,
+            "sparsity_of_truth_assumption": cm.sparsity_of_truth_assumption,
+            "random_audit_false_negative_rate": cm.random_audit_false_negative_rate,
+        }
     return LDORun(link_records=mr.link_records, variables=fine.variables, diagnostics=diagnostics)
 
 

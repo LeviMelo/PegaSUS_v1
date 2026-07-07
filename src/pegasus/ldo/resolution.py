@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from pegasus.ldo.exhaustiveness import CoverageManifest, should_drill_down
 from pegasus.ldo.margins import GaussianField
 from pegasus.ldo.orchestrator import LDORun, run_ldo
 from pegasus.ldo.records import LinkRecord
@@ -31,6 +32,7 @@ class MultiResolutionRun:
     link_records: list[LinkRecord]
     candidates: list[tuple[str, str]]
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    coverage_manifest: CoverageManifest | None = None    # §VIII.2 typed searched/unsearched record
 
 
 def restrict_variables(field: GaussianField, variables: tuple[str, ...]) -> GaussianField:
@@ -86,31 +88,76 @@ def coarsen_field_spatial(field: GaussianField, *, level: int = 2) -> GaussianFi
 _LINK_EDGE_TYPES = {"lagged_directed", "contemporaneous", "nonlinear_residual", "latent_shared"}
 
 
-def _sensitivity_screen(run: LDORun, *, sensitivity_threshold: float = 0.05) -> list[tuple[str, str]]:
+def _subgroup_effect_vectors(field: GaussianField) -> np.ndarray:
+    """Per-spatial-unit within-unit effect of every variable pair — the ``(p, p, S)`` tensor
+    whose ``[i, j, :]`` slice is the subgroup-effect vector for pair ``(i, j)`` (§VIII.2(1)).
+
+    The effect in unit ``s`` is the within-unit correlation of variables ``i`` and ``j`` over
+    time. A pair whose per-unit effects have opposite signs (Simpson/cancellation) has a pooled
+    mean ≈ 0 but a high spread here; a pair strong in one unit only (sparsity dilution) has a
+    high max here. These are exactly the signals the pooled aggregate hides.
+    """
+    Z = np.asarray(field.Z, dtype=np.float64)      # (p, S, T)
+    p, S, T = Z.shape
+    Zc = np.where(np.isfinite(Z), Z, np.nan)
+    mean = np.nanmean(Zc, axis=2, keepdims=True)
+    std = np.nanstd(Zc, axis=2, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        Zs = (Zc - mean) / np.where(std > 1e-9, std, np.nan)
+    Zs = np.where(np.isfinite(Zs), Zs, 0.0)         # unit/var with no variance → 0 contribution
+    eff = np.einsum("ist,jst->ijs", Zs, Zs) / max(T - 1, 1)   # (p, p, S) per-unit correlations
+    return eff
+
+
+def _sensitivity_screen(
+    run: LDORun, field: GaussianField, *,
+    het_threshold: float = 0.15, max_threshold: float = 0.30, weight_floor: float = 0.05,
+) -> tuple[list[tuple[str, str]], dict[tuple[str, str], str]]:
     """§VIII.2(1): screen on SENSITIVITY, not the aggregate-certified TEST.
 
-    The coarse pass is a recall-tuned FILTER, not a test: drill down on any pair with a
-    non-trivial signal — certified ``selected`` OR ``|weight|`` above a low threshold OR any
-    stability recurrence — so a sub-threshold-but-real edge (e.g. a cancellation edge whose
-    pooled effect is near zero but whose subgroup signal is strong) is not pruned before the
-    fine pass can look. Using the certified test here would silently drop exactly those.
+    The coarse pass is a recall-tuned FILTER, not a test. A pair is drilled to fine grain when
+    EITHER (a) its per-spatial-unit effect vector fires ``should_drill_down`` — subgroup
+    heterogeneity (cancellation) OR max-subgroup (localized) signal, the statistics designed to
+    fire on what aggregation hides — OR (b) it already carries a pooled coarse signal (certified
+    ``selected`` / ``|weight| ≥ floor`` / any stability recurrence). The subgroup limb is the fix
+    for the anticonservative pooled-mean gate: a cancellation edge whose pooled effect ≈ 0 is now
+    kept. Returns ``(pairs, reason_by_pair)``.
     """
+    variables = list(field.variables)
+    idx = {v: i for i, v in enumerate(variables)}
+    eff = _subgroup_effect_vectors(field) if field.Z.shape[1] > 1 else None
     pairs: list[tuple[str, str]] = []
+    reasons: dict[tuple[str, str], str] = {}
     seen: set[tuple[str, str]] = set()
+
+    # (a) subgroup-heterogeneity / max-subgroup drill over EVERY pair (the recall filter).
+    if eff is not None:
+        for i in range(len(variables)):
+            for j in range(i + 1, len(variables)):
+                drill, reason = should_drill_down(
+                    eff[i, j], het_threshold=het_threshold, max_threshold=max_threshold)
+                if drill:
+                    key = (variables[i], variables[j])
+                    seen.add(key)
+                    pairs.append(key)
+                    reasons[key] = f"subgroup:{reason}"
+
+    # (b) union with any pooled coarse signal, so a clearly-selected edge is never dropped.
     for r in run.link_records:
         if r.edge_type not in _LINK_EDGE_TYPES:
             continue
-        sensitive = (
+        pooled = (
             r.certification_status == "selected"
-            or abs(r.weight or 0.0) >= sensitivity_threshold
+            or abs(r.weight or 0.0) >= weight_floor
             or (r.stability or 0.0) > 0.0
         )
-        if sensitive:
+        if pooled:
             key = (r.source_var, r.target_var)
             if key not in seen:
                 seen.add(key)
                 pairs.append(key)
-    return pairs
+                reasons[key] = "pooled_coarse_signal"
+    return pairs, reasons
 
 
 def _random_deep_audit(
@@ -156,13 +203,32 @@ def run_multiresolution_ldo(
     bounded-exhaustiveness remedy: a sensitivity screen (not the certified test) selects
     candidates, and a random deep audit of pruned variables measures the false-negative rate."""
     coarse = run_ldo(coarse_field, K=coarse_K, seed=seed, **ldo_kwargs)
-    candidates = _sensitivity_screen(coarse, sensitivity_threshold=sensitivity_threshold)  # §VIII.2(1)
+    candidates, reasons = _sensitivity_screen(coarse, coarse_field)  # §VIII.2(1) subgroup screen
     coarse_vars = list(coarse_field.variables)
+    coarse_res = str(getattr(coarse_field, "resolution", "coarse"))
+    fine_res = str(getattr(fine_field, "resolution", "fine"))
+
+    # §VIII.2(3) typed coverage manifest: every drilled pair is a SEARCHED region (with the
+    # sensitivity reason it fired); every screened-out pair is an explicit UNSEARCHED region
+    # (with the reason it was pruned) — never a silent gap. The sparsity-of-truth assumption is
+    # a STATED string on the manifest, not a hidden bool.
+    manifest = CoverageManifest()
+    cand_set = set(candidates)
+    for i, a in enumerate(coarse_vars):
+        for b in coarse_vars[i + 1:]:
+            key = (a, b)
+            if key in cand_set:
+                manifest.mark_searched(region=f"{a}~{b}", resolution=fine_res)
+            else:
+                manifest.mark_unsearched(region=f"{a}~{b}", resolution=fine_res,
+                                         reason="below_sensitivity_thresholds(subgroup+pooled)")
 
     if not candidates:
         return MultiResolutionRun(
             coarse=coarse, fine=None, link_records=coarse.link_records, candidates=[],
-            diagnostics={"candidates": 0, "reason": "no_coarse_candidates"},
+            diagnostics={"candidates": 0, "reason": "no_coarse_candidates",
+                         "sensitivity_screen": "subgroup_heterogeneity_or_max_or_pooled"},
+            coverage_manifest=manifest,
         )
 
     candidate_vars = tuple(dict.fromkeys([v for pair in candidates for v in pair]))
@@ -183,6 +249,7 @@ def run_multiresolution_ldo(
         fine_field, pruned_vars=pruned_vars, fine_K=fine_K, seed=seed + 200,
         n_audit_vars=n_audit_vars, **ldo_kwargs,
     )
+    manifest.random_audit_false_negative_rate = audit.get("false_negative_rate")
 
     return MultiResolutionRun(
         coarse=coarse,
@@ -192,13 +259,15 @@ def run_multiresolution_ldo(
         diagnostics={
             "candidates": len(candidates),
             "candidate_vars": list(candidate_vars),
+            "candidate_reasons": {f"{a}~{b}": reasons.get((a, b)) for (a, b) in candidates},
             "n_pruned_vars": len(pruned_vars),
             "coarse_selected": coarse.diagnostics.get("n_selected"),
             "fine_selected": fine.diagnostics.get("n_selected"),
-            # §VIII.2(1) recall-tuned screen + §VIII.2(2) empirical false-negative measurement
-            "sensitivity_screen": "recall_tuned_signal_or_stability",
+            # §VIII.2(1) subgroup sensitivity screen + §VIII.2(2) empirical false-negative measurement
+            "sensitivity_screen": "subgroup_heterogeneity_or_max_or_pooled",
             "random_deep_audit": audit,
         },
+        coverage_manifest=manifest,
     )
 
 

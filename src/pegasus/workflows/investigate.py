@@ -233,12 +233,19 @@ def run_investigate(
     # national determinant run's compute is unchanged; a caller can force True/False.
     _pv = panel.values
     _cells = 0
+    _S = 0
     if "municipality_cod6" in _pv.columns:
-        _S = _pv["municipality_cod6"].n_unique()
+        _S = int(_pv["municipality_cod6"].n_unique())
         _T = _pv["year"].n_unique() if "year" in _pv.columns else 1
-        _cells = int(_S) * int(_T)
+        _cells = _S * int(_T)
     if multiresolution == "auto":
-        use_mr = resolution != "year" or _cells > 300_000
+        # Run the two-pass coarse→fine LDO (and thus the §VIII.2 bounded-exhaustiveness audit —
+        # subgroup sensitivity screen + random deep audit + coverage manifest) on any NATIONAL-
+        # SCALE run, not only sub-annual grains. The flagship national determinant run is
+        # municipality×year (~139k cells) — previously below the 300k gate, so the whole
+        # exhaustiveness apparatus was inert exactly where it matters. Gate on the spatial extent
+        # (S) so a small single-state run stays single-pass.
+        use_mr = resolution != "year" or _cells > 300_000 or _S > 1000
     else:
         use_mr = bool(multiresolution)
 

@@ -1,4 +1,15 @@
-"""Exact and approximate HSIC kernels with empirical structured nulls."""
+"""Exact and approximate HSIC kernels with empirical structured nulls.
+
+This module is the HSIC **foundation**: the shared statistic primitives (``_bandwidth``,
+``_np_rff_features``, ``_np_nystrom_features``) and a generic reference scanner
+(``run_hsic_scan`` / ``numpy_kernel_hsic_permutation_test``, exercised by the HSIC foundation +
+acceptance tests). The LIVE LDO residual scan (:mod:`pegasus.ldo.residual_scan`) does NOT call
+the generic scanner: it reuses these core primitives but reimplements the pairing/permutation
+loop because it needs capabilities the generic scanner does not provide — panel-aware structured
+nulls (§6.8), a per-variable representation cache (score every pair without rebuilding kernels),
+and §II.7 multi-resolution coarsening. The two are therefore an intentional
+foundation-vs-specialization split, not accidental duplication.
+"""
 
 from __future__ import annotations
 
@@ -15,29 +26,6 @@ from pegasus.compute.torch_backend import torch_runtime
 from pegasus.compute.random import torch_generator
 
 HSICMode = Literal["exact", "nystrom", "rff", "disabled", "cuda_unavailable_abort"]
-
-
-def hsic_formula_contract() -> dict[str, Any]:
-    return {
-        "inputs": {
-            "X": {"shape": "[n, d_x]", "dtype": "float64", "missing": "mutually_observed_only"},
-            "E": {"shape": "[n, d_e]", "dtype": "float64", "meaning": "outcome residuals"},
-            "support": "ordered support metadata required by the selected null strategy",
-        },
-        "outputs": {
-            "statistic": "biased centered-kernel HSIC or feature cross-covariance norm",
-            "p_value": "(1 + null exceedances) / (1 + executed permutations)",
-            "diagnostics": "bandwidth, approximation rank/features, seed, device, null moments",
-        },
-        "epsilon_stabilization": "bandwidth and Nyström eigenvalues clamp at 1e-9 and 1e-8",
-        "warnings": ["hsic_disabled_insufficient_support", "hsic_approximation_diagnostics_emitted"],
-        "failure_modes": [
-            "constant_support",
-            "missing_null_support_metadata",
-            "cuda_required_unavailable",
-            "standard_or_deep_in_sample_residuals",
-        ],
-    }
 
 
 @dataclass(frozen=True)
@@ -221,47 +209,6 @@ def _np_feature_hsic(x_features: "Any", y_features: "Any") -> float:
     yc = y_features - y_features.mean(axis=0, keepdims=True)
     cross = xc.T @ yc / max(n - 1, 1)
     return float((cross * cross).sum())
-
-
-def hsic_point_statistic(*, covariate: list[float], residuals: list[float], seed: int, budget: str = "standard") -> float:
-    """HSIC statistic only (no permutation null) — for bootstrap replicate scoring (§6.6.2)."""
-    statistic, _null, _diag = numpy_kernel_hsic_permutation_test(
-        covariate=covariate, residuals=residuals, permutations=1, seed=seed, budget=budget,
-    )
-    return float(statistic)
-
-
-def bootstrap_adjusted_hsic(
-    *,
-    covariate: list[float],
-    residual_replicates: "Any",
-    seed: int,
-    budget: str = "deep",
-    epsilon: float = 1e-9,
-) -> dict[str, Any]:
-    """Bootstrap-adjusted nonlinear score (MSD §6.6.2): D* = E_b[D_b] / (SD_b[D_b] + ε).
-
-    ``residual_replicates`` is a (B, n) array of parametric-bootstrap residual vectors
-    (from ``glm.bootstrap_deviance_residual_replicates``). Each yields D_b = HSIC(X, e^(b)).
-    """
-    import numpy as np
-
-    reps = np.asarray(residual_replicates, dtype=float)
-    if reps.ndim != 2 or reps.shape[0] == 0:
-        return {"bootstrap_count": 0, "d_star": None, "mean_hsic": None, "sd_hsic": None, "residual_uncertainty": None}
-    d_values: list[float] = []
-    for b in range(reps.shape[0]):
-        d_values.append(hsic_point_statistic(covariate=covariate, residuals=[float(v) for v in reps[b]], seed=seed + b, budget=budget))
-    arr = np.asarray(d_values, dtype=float)
-    mean_d = float(np.mean(arr))
-    sd_d = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
-    return {
-        "bootstrap_count": int(reps.shape[0]),
-        "mean_hsic": mean_d,
-        "sd_hsic": sd_d,
-        "d_star": mean_d / (sd_d + epsilon),
-        "residual_uncertainty": sd_d,
-    }
 
 
 def numpy_kernel_hsic_permutation_test(

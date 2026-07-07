@@ -266,11 +266,19 @@ def _acquire_datasus(
 
     # Overlap the CPU/I-O-heavy combine+normalize across systems (polars releases the
     # GIL during scan/sink). ``pool.map`` preserves ``systems`` order in the result.
+    # Cap concurrency at 2, not len(systems): each system's batched decode already
+    # saturates the BLAS/polars thread pool (the work is CPU-bound), so 4-way only
+    # multiplies peak RAM (the per-system batch working sets stack — SIH ~1.7GB +
+    # CNES ~4.9GB) without a throughput gain. 2-way keeps some I/O-overlap benefit at
+    # roughly half the memory ceiling. Override with PEGASUS_DATASUS_NORMALIZE_PARALLEL.
     if len(usable_systems) <= 1:
         return [_combine_normalize_one(system) for system in usable_systems]
+    import os
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=len(usable_systems), thread_name_prefix="datasus-normalize") as pool:
+    max_workers = min(int(os.environ.get("PEGASUS_DATASUS_NORMALIZE_PARALLEL", "2")), len(usable_systems))
+    max_workers = max(1, max_workers)
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="datasus-normalize") as pool:
         return list(pool.map(_combine_normalize_one, usable_systems))
 
 

@@ -111,9 +111,20 @@ def _count_tensor(field: FieldNode, source: Path, cache: "SourceScanCache | None
                 # field (SIM/SINASC/SIH carry age_years / maternal_age_years), NOT a
                 # category-code crosswalk (MSD §3.7.4). Bucket to the canonical age_N
                 # basis so the count joins the single-year population denominator.
+                # Native-expression form of age_group_for_years (registries.demographic_axis):
+                # None->TOTAL, non-int/<0->UNKNOWN, >=100->age_100_plus, else age_N. Replaces a
+                # per-row Python map_elements that (over tens of millions of national SIM/SIH/
+                # SINASC event rows per age-stratified count) forced one GIL-bound call per row.
+                # cast(Int64) truncates toward zero exactly like Python int(); the null/negative
+                # routing matches, and for numeric age columns (age_years/maternal_age_years) the
+                # only UNKNOWN source is years<0, so this is bit-identical on the live path.
+                _age_int = pl.col(raw_column).cast(pl.Int64, strict=False)
                 lf = lf.with_columns(
-                    pl.col(raw_column)
-                    .map_elements(age_group_for_years, return_dtype=pl.Utf8)
+                    pl.when(pl.col(raw_column).is_null()).then(pl.lit(TOTAL))
+                    .when(_age_int.is_null()).then(pl.lit(UNKNOWN))
+                    .when(_age_int < 0).then(pl.lit(UNKNOWN))
+                    .when(_age_int >= 100).then(pl.lit("age_100_plus"))
+                    .otherwise(pl.concat_str([pl.lit("age_"), _age_int.cast(pl.Utf8)]))
                     .alias(axis_name)
                 ).filter(~pl.col(axis_name).is_in([TOTAL, UNKNOWN]))
                 keys = [*keys, axis_name]

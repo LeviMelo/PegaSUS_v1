@@ -340,11 +340,13 @@ def _q_row(
         "computed_at": _now(),
         "q_schema_version": "1.0",
     }
-    # The value vector the PIRS design matrix consumes. Without this the executor's
-    # real per-field tensors never reached PIRS and every design matrix blocked.
-    if vector is not None:
-        row["value_vector_json"] = _json(vector)
-        row["values_json"] = row["value_vector_json"]
+    # NOTE: the per-field value vector is NOT inlined into Q_tensor. It used to be
+    # serialized here (value_vector_json + a duplicate values_json) for the retired
+    # PIRS design-matrix path; both columns are absent from Q_TENSOR_SCHEMA and read
+    # nowhere, so at national scale they were order-of-GB of duplicated JSON text held
+    # in the q_rows list and written to Q_tensor.parquet for no consumer. The live LDO
+    # path reconstructs vectors from the materialized per-field parquet tensors +
+    # support_index.parquet, never from Q_tensor.
     return row
 
 
@@ -587,6 +589,15 @@ def attach_autonomous_efg_to_run(
     # A field that claims a materialized path but whose tensor cannot be read or
     # aligned is NOT silently dropped — it emits a warning so the gap is visible
     # rather than masquerading as a field that simply has no data.
+    # Read each tensor PROJECTED to only the columns the panel index + alignment consume
+    # (panel keys + value) and pre-reduce to one row per support cell. The raw materialized
+    # tensor is a streaming-aggregated executor output that can still be millions of rows
+    # wide with redundant field_id/field_name/operator string columns broadcast per row; at
+    # national scale holding ALL of them in one dict was low-tens-GB. Projecting+reducing at
+    # read time keeps peak at the reduced (year, municipality, value) frames — one row per
+    # cell — which is exactly what _build_panel_index (.select(keys).unique()) and
+    # _align_vector (group_by(keys).agg(value.mean())) collapse to, so the result is
+    # bit-identical (the pre-reduce is idempotent with _align_vector's own group_by).
     field_tensors: dict[str, pl.DataFrame] = {}
     tensor_warning_rows: list[dict[str, Any]] = []
     fields_by_id_for_warn = {field.id: field for field in efg.fields}
@@ -598,7 +609,16 @@ def attach_autonomous_efg_to_run(
             tensor_warning_rows.append(_tensor_warning_row(field, "materialized_field_tensor_path_missing"))
             continue
         try:
-            field_tensors[field.id] = pl.read_parquet(tensor_path)
+            lf = pl.scan_parquet(tensor_path)
+            cols = lf.collect_schema().names()
+            keys = [k for k in _PANEL_KEYS if k in cols]
+            select_cols = keys + ([VALUE_COLUMN] if VALUE_COLUMN in cols else [])
+            if not select_cols:
+                continue  # no panel keys and no value: inert for the panel/align path
+            reduced = lf.select(select_cols).collect()
+            if keys and VALUE_COLUMN in reduced.columns:
+                reduced = reduced.group_by(keys).agg(pl.col(VALUE_COLUMN).mean().alias(VALUE_COLUMN))
+            field_tensors[field.id] = reduced
         except Exception as exc:
             tensor_warning_rows.append(_tensor_warning_row(field, f"tensor_read_failed:{type(exc).__name__}"))
     panel_index = _build_panel_index(field_tensors)

@@ -21,7 +21,7 @@ import numpy as np
 
 from pegasus.ldo.assemble import LDOField, assemble_ldo_tensor
 from pegasus.ldo.certify import LDOCertificationPolicy, certify_links
-from pegasus.ldo.envelope import assert_within_envelope
+from pegasus.ldo.envelope import ScaleExceedsEnvelopeError, assert_within_envelope
 from pegasus.ldo.edges import (
     annotate_disease_provenance,
     stability_select,
@@ -227,7 +227,12 @@ def run_ldo(
                 scan_residual_nonlinear_edges(gf, lag0, budget=budget, seed=seed + 2)
             )
             _residual_error = None
-        except Exception as exc:  # residual scan is additive; never fail the run
+        except ScaleExceedsEnvelopeError:
+            # §II.10 / §V.1: a compute-envelope refusal is a LOUD, typed refusal — it must
+            # propagate, not be silently downgraded to a diagnostic string (that would let a
+            # national run quietly skip the scan it cannot afford instead of refusing).
+            raise
+        except Exception as exc:  # a genuine scan bug is additive; the backbone edges still stand
             _residual_error = f"{type(exc).__name__}:{exc}"
     else:
         _residual_error = None

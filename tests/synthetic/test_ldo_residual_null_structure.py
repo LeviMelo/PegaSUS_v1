@@ -22,10 +22,12 @@ from pegasus.ldo.residual_scan import scan_residual_nonlinear_edges
 
 
 def _clustered_independent_field(*, single_block: bool):
-    """p=3 variables over 60 munis (across 6 UFs) x 4 years. Vars 0 and 1 share a
-    strong UF-level mean but are otherwise independent (independent given UF)."""
+    """p=3 variables over 120 munis (across 6 UFs) x 4 years. Vars 0 and 1 share a
+    strong UF-level mean but are otherwise independent (independent given UF). Sized so the
+    complete-case sample clears the §6.7 power gate (n_eff ≥ 100) and the scan genuinely runs —
+    a smaller panel would trip the underpowered skip and the null structure would go untested."""
     rng = np.random.default_rng(11)
-    n_uf, per_uf, T = 6, 10, 4
+    n_uf, per_uf, T = 6, 20, 4
     S = n_uf * per_uf
     uf_of_muni = np.repeat(np.arange(n_uf), per_uf)
     uf_effect0 = rng.standard_normal(n_uf) * 2.0

@@ -38,6 +38,13 @@ from pegasus.ldo.nulls import (
 )
 from pegasus.ldo.records import LinkRecord
 
+
+class ResidualScanUnderpowered(RuntimeError):
+    """Raised when the complete-case residual sample is too small to run a verified scan.
+
+    A typed skip (not a bug): the run RECORDS it in ``residual_scan_error`` rather than the scan
+    silently returning no edges (which reads as 'scanned, found nothing'). §6.7 power gate."""
+
 import math
 
 _MIN_N_EFF = 100
@@ -237,13 +244,35 @@ def scan_residual_nonlinear_edges(
     alpha: float = 0.1,
 ) -> list[LinkRecord]:
     """Detect nonlinear residual dependence the linear backbone missed."""
-    p, S, T = field.shape
-    Z = field.Z.reshape(p, S * T)
-    # Complete-case cells (all variables observed) for a shared residual sample.
+    p_all, S, T = field.shape
+    Z_all = field.Z.reshape(p_all, S * T)
+    # §III.6 shared residual sample needs cells where the modelled variables are jointly
+    # observed. Requiring ALL p variables observed lets a few sparse national context variables
+    # collapse the shared sample to nothing — a SILENT no-op (the old ``return []``). Instead,
+    # trim the sparsest variables until the complete-case sample is powered, keeping the full set
+    # whenever it already is (no behaviour change on dense panels). If even the trimmed set is
+    # underpowered, RAISE a typed skip so the run RECORDS it (via ``residual_scan_error``) rather
+    # than silently returning no edges.
+    observed_full = np.isfinite(Z_all).all(axis=0)
+    kept = np.arange(p_all)
+    if int(observed_full.sum()) < _MIN_N_EFF and p_all > 2:
+        order = np.argsort(-np.isfinite(Z_all).mean(axis=1))  # most-covered variables first
+        for cut in range(p_all, 1, -1):
+            sub = np.sort(order[:cut])
+            if int(np.isfinite(Z_all[sub]).all(axis=0).sum()) >= _MIN_N_EFF:
+                kept = sub
+                break
+    variables = [field.variables[k] for k in kept]
+    p = len(kept)
+    precision = np.asarray(precision)[np.ix_(kept, kept)]
+    Z = Z_all[kept]
     observed = np.isfinite(Z).all(axis=0)
     n_eff = int(observed.sum())
     if n_eff < _MIN_N_EFF:
-        return []  # §6.7 gate: underpowered → no verified nonlinear scan
+        raise ResidualScanUnderpowered(
+            f"residual_scan_underpowered: complete-case n_eff={n_eff} < {_MIN_N_EFF} over "
+            f"{p} covered variables (§6.7 power gate); nonlinear residual scan skipped."
+        )
     Zc = Z[:, observed]
     Zc = np.where(np.isfinite(Zc), Zc, 0.0)
     E = joint_model_residuals(Zc, precision)
@@ -292,6 +321,14 @@ def scan_residual_nonlinear_edges(
         strata = uf_of_cell.tolist()
     else:
         strata = [f"{u}|{b}" for u, b in zip(uf_of_cell.tolist(), bucket_of_cell.tolist())]
+    # The executed null is a restricted permutation WITHIN (spatial-block × temporal-bucket)
+    # strata: it preserves both the spatial-block dependence and the temporal/seasonal bucket
+    # (a monthly cell only permutes to a same-month cell in its block — so it IS season-
+    # preserving by construction). This is the null MSD-III §III.6 was amended to endorse.
+    # CRITICAL (§III.6/§6.8 provenance): ``null_strategy`` names the permutation that ACTUALLY
+    # RAN — never the regime's designated circular-shift generator, which (a) is not what
+    # executes here and (b) cannot even be applied to the ragged complete-case sample. The named
+    # ``nulls.py`` generators remain available for a dense-panel entry point.
     if n_spatial_blocks >= 2 or n_temporal_blocks >= 2:
         rng = _random.Random(seed)
         perm_list: list[list[int]] | None = [
@@ -299,7 +336,10 @@ def scan_residual_nonlinear_edges(
                                   n=n, support={"uf_strata": strata}, rng=rng)
             for _ in range(permutations)
         ]
-        null_strategy = f"{regime.null_strategy}|within_block_time_swap"
+        null_strategy = (
+            "restricted_within_spatial_block_swap" if within_block_only
+            else "restricted_within_spatial_block_temporal_bucket_swap"
+        ) + f"[regime:{panel_type}]"
     else:
         perm_list = None  # no spatial/temporal structure → iid fallback
         null_strategy = "iid_permutation"
@@ -341,8 +381,8 @@ def scan_residual_nonlinear_edges(
         if qv is not None and qv <= alpha:
             records.append(
                 LinkRecord(
-                    source_var=field.variables[i],
-                    target_var=field.variables[j],
+                    source_var=variables[i],
+                    target_var=variables[j],
                     edge_type="nonlinear_residual",
                     weight=float(stat),
                     uncertainty=float(qv),
@@ -355,4 +395,4 @@ def scan_residual_nonlinear_edges(
     return records
 
 
-__all__ = ["ResidualEdge", "joint_model_residuals", "scan_residual_nonlinear_edges"]
+__all__ = ["ResidualEdge", "ResidualScanUnderpowered", "joint_model_residuals", "scan_residual_nonlinear_edges"]

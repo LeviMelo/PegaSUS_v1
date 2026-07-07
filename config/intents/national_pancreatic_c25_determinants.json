@@ -1,7 +1,7 @@
 {
   "budget": "standard",
   "context_policy": ["actual_source_state_panel", "include_cnes_sih"],
-  "exclude_systems": [],
+  "exclude_systems": ["CNES-ST"],
   "execution_scale": "national",
   "execution_stage": "investigate",
   "force_selectors": [],

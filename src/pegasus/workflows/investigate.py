@@ -115,6 +115,43 @@ def disease_variable_meta(
     return meta
 
 
+def measured_quantity_refs(run_dir, keep_variables=None) -> dict[str, str]:
+    """``{field_id: sidecar_path}`` for RN fields that emitted a §II.3 MeasuredQuantity sidecar.
+
+    Read from ``V_fields`` (a ``measured_quantity_ref`` column or the field's ``support_json``).
+    Enables the §III.5 count-with-exposure margin on real runs: the LDO consumes the raw count
+    + exposure from the sidecar instead of the pre-divided rate. Empty when no RN field emitted
+    one (LDO behaviour unchanged)."""
+    path = Path(run_dir) / "V_fields.parquet"
+    if not path.exists():
+        return {}
+    vf = pl.read_parquet(path)
+    if "field_id" not in vf.columns:
+        return {}
+    cols = ["field_id"]
+    if "measured_quantity_ref" in vf.columns:
+        cols.append("measured_quantity_ref")
+    if "support_json" in vf.columns:
+        cols.append("support_json")
+    out: dict[str, str] = {}
+    for row in vf.select(cols).iter_rows(named=True):
+        fid = str(row["field_id"])
+        if keep_variables is not None and fid not in keep_variables:
+            continue
+        ref = row.get("measured_quantity_ref")
+        if not ref and "support_json" in row:
+            support = _loads(row.get("support_json")) or {}
+            ref = support.get("measured_quantity_ref") if isinstance(support, dict) else None
+        if not ref:
+            continue
+        p = Path(ref)
+        if not p.is_absolute():
+            p = Path(run_dir) / p
+        if p.exists():
+            out[fid] = str(p)
+    return out
+
+
 def _disease_graph_from_meta(variable_meta: dict[str, dict]):
     """A variable-keyed structural DiseaseGraph over the code-bearing variables, or None.
 
@@ -176,9 +213,17 @@ def run_investigate(
     if disease_graph is None and variable_meta is not None:
         disease_graph = _disease_graph_from_meta(variable_meta)
 
+    # §III.5 count-with-exposure: hand the LDO the RN fields' MeasuredQuantity sidecars so it
+    # models raw count + exposure (offset) rather than the pre-divided rate. Empty on runs
+    # without RN sidecars → no behaviour change.
+    mq_by_var = ldo_kwargs.pop("measured_quantity_by_variable", None)
+    if mq_by_var is None:
+        mq_by_var = measured_quantity_refs(run_dir, keep_variables) or None
+
     ldo_run = run_ldo(
         panel, K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables,
-        variable_meta=variable_meta, disease_graph=disease_graph, **ldo_kwargs,
+        variable_meta=variable_meta, disease_graph=disease_graph,
+        measured_quantity_by_variable=mq_by_var, **ldo_kwargs,
     )
 
     # Record the disease-axis wiring so a run's diagnostics show whether the L_D prior /

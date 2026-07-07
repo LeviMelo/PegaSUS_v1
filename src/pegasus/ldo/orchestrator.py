@@ -52,6 +52,7 @@ def _prepare_ldo_inputs(
     keep_variables: set[str] | frozenset[str] | None = None,
     exposure=None,
     exposure_field_by_variable=None,
+    measured_quantity_by_variable=None,
 ) -> tuple[LDOField | None, GaussianField]:
     """Return ``(raw_field, gaussian_field)``. The raw (pre-gaussianized) LDOField is
     kept for causal orientation — LiNGAM cannot identify direction on gaussianized
@@ -62,7 +63,8 @@ def _prepare_ldo_inputs(
     margin (extensive counts modelled net of exposure), overriding an explicit ``exposure``."""
     if isinstance(source, CommonPanel):
         raw = assemble_ldo_tensor(source, keep_variables=keep_variables,
-                                  exposure_field_by_variable=exposure_field_by_variable)
+                                  exposure_field_by_variable=exposure_field_by_variable,
+                                  measured_quantity_by_variable=measured_quantity_by_variable)
         exp = raw.exposure if raw.exposure is not None else exposure
         return raw, gaussianize_field(raw, seed=seed, exposure=exp)
     if isinstance(source, LDOField):
@@ -117,6 +119,7 @@ def run_ldo(
     variable_meta: dict[str, dict] | None = None,
     exposure=None,
     exposure_field_by_variable=None,
+    measured_quantity_by_variable=None,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass.
 
@@ -125,7 +128,8 @@ def run_ldo(
     links survive. Absent it, the estimator is the plain scalar-penalty LVGLASSO.
     """
     raw_field, gf = _prepare_ldo_inputs(source, seed=seed, keep_variables=keep_variables,
-                                        exposure=exposure, exposure_field_by_variable=exposure_field_by_variable)
+                                        exposure=exposure, exposure_field_by_variable=exposure_field_by_variable,
+                                        measured_quantity_by_variable=measured_quantity_by_variable)
     p, S, T = gf.shape
 
     requested_K = K

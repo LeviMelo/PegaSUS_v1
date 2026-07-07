@@ -10,12 +10,42 @@ tensor ``W`` drawn from the panel's provenance state (and, when available, the
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
 
 import numpy as np
 import polars as pl
 
 from pegasus.she.panel import CommonPanel
+
+
+def _load_measured_quantity_tensors(sidecar_path, *, time_col, s_index, t_index, shape):
+    """Load an EFG MeasuredQuantity sidecar (§II.3) and aggregate its count+exposure to the
+    panel's (municipality_cod6, time) cells. Returns ``((S,T) count, (S,T) exposure)`` or
+    ``(None, None)`` if the sidecar is absent/malformed."""
+    path = Path(sidecar_path)
+    if not path.exists():
+        return None, None
+    from pegasus.efg.measured_quantity import EXPOSURE_COLUMN, NUMERATOR_COLUMN
+    try:
+        mq = pl.read_parquet(path)
+    except Exception:
+        return None, None
+    need = {NUMERATOR_COLUMN, EXPOSURE_COLUMN, "municipality_cod6", time_col}
+    if not need <= set(mq.columns):
+        return None, None
+    agg = mq.group_by(["municipality_cod6", time_col]).agg(
+        pl.col(NUMERATOR_COLUMN).sum().alias("_c"), pl.col(EXPOSURE_COLUMN).sum().alias("_e")
+    )
+    si = agg["municipality_cod6"].cast(pl.Utf8).replace_strict(s_index, default=-1).to_numpy()
+    ti = agg[time_col].cast(pl.Int64).replace_strict(t_index, default=-1).to_numpy()
+    ok = (si >= 0) & (ti >= 0)
+    S, T = shape
+    count = np.full((S, T), np.nan, dtype=np.float64)
+    expo = np.full((S, T), np.nan, dtype=np.float64)
+    count[si[ok], ti[ok]] = agg["_c"].cast(pl.Float64).to_numpy()[ok]
+    expo[si[ok], ti[ok]] = agg["_e"].cast(pl.Float64).to_numpy()[ok]
+    return count, expo
 
 # Provenance state → default reliability weight.
 _STATE_WEIGHT: dict[str, float] = {
@@ -58,6 +88,7 @@ def assemble_ldo_tensor(
     field_weights: Mapping[str, float] | None = None,
     keep_variables: set[str] | frozenset[str] | None = None,
     exposure_field_by_variable: Mapping[str, str] | None = None,
+    measured_quantity_by_variable: Mapping[str, str] | None = None,
 ) -> LDOField:
     """Assemble ``X`` and ``W`` from a compiled CommonPanel.
 
@@ -140,21 +171,38 @@ def assemble_ldo_tensor(
     # A NaN value can never carry positive weight.
     W[np.isnan(X)] = 0.0
 
-    # §III.5 count-with-exposure: build the per-variable denominator tensor for the count
-    # variables whose exposure field is declared. The exposure field is any numeric panel
-    # column (typically the population denominator) — it need not itself be a kept variable.
+    # §III.5 count-with-exposure. Two sources of the per-variable denominator tensor:
+    #   (a) exposure_field_by_variable: the denominator is another numeric panel column.
+    #   (b) measured_quantity_by_variable: the EFG's {field}.measured_quantity.parquet sidecar
+    #       (numerator_count + exposure, §II.3). Preferred — it carries the RAW count, so X for
+    #       that variable is OVERRIDDEN with the count (not the pre-divided rate) and the margin
+    #       models count net of exposure directly. Sidecars are aggregated to the panel cell.
     exposure = None
-    if exposure_field_by_variable:
+    if exposure_field_by_variable or measured_quantity_by_variable:
         exposure = np.full((p, S, T), np.nan, dtype=np.float64)
-        for var, exp_field in exposure_field_by_variable.items():
+        for var, exp_field in (exposure_field_by_variable or {}).items():
             vi = var_index.get(var)
             if vi is None or exp_field not in values.columns:
                 continue
             evals = values[exp_field].cast(pl.Float64).to_numpy()
             ok = valid_cell & np.isfinite(evals)
             exposure[vi, si_arr0[ok], ti_arr0[ok]] = evals[ok]
+        for var, sidecar_path in (measured_quantity_by_variable or {}).items():
+            vi = var_index.get(var)
+            if vi is None:
+                continue
+            cnt, exp = _load_measured_quantity_tensors(
+                sidecar_path, time_col=time_col, s_index=s_index, t_index=t_index, shape=(S, T)
+            )
+            if cnt is None:
+                continue
+            X[vi] = cnt        # override the rate with the raw count (§II.3 count+exposure)
+            exposure[vi] = exp
+            W[vi] = np.where(np.isfinite(X[vi]) & (exp > 0), 1.0, 0.0)
         if not np.isfinite(exposure).any():
             exposure = None
+    if exposure is not None:
+        W[np.isnan(X)] = 0.0
     return LDOField(variables=variables, space_ids=space_ids, time_ids=time_ids,
                     X=X, W=W, resolution=panel.resolution, exposure=exposure)
 

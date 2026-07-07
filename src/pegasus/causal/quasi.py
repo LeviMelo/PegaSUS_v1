@@ -91,7 +91,30 @@ def difference_in_differences(
     return DiDResult(effect=tc - cc, treated_change=tc, control_change=cc)
 
 
-def escalate_rung2_its(records, series_by_var, *, min_level_t: float = 3.0):
+def negative_control_break_fraction(
+    series_by_var, shock_index: int, *, exclude: set[str], min_level_t: float = 3.0,
+) -> tuple[float, int]:
+    """§IV negative-control outcomes: the fraction of NEGATIVE-CONTROL series (every variable
+    except the edge's endpoints) that ALSO show a significant level change at the SAME ``shock_index``.
+
+    A genuine interruption effect is *specific* to the outcome; if many unrelated series jump at the
+    same time, the break is a **common shock** (a confounder affecting everything), not the edge's
+    effect — so the ITS attribution should be vetoed. Returns ``(fraction, n_tested)``."""
+    controls = [v for v in series_by_var if v not in exclude]
+    n_break = n_tested = 0
+    for v in controls:
+        s = np.asarray(series_by_var[v], dtype=float)
+        s = s[np.isfinite(s)]
+        if s.size < 10 or not (1 <= shock_index < s.size - 1):
+            continue
+        n_tested += 1
+        if abs(interrupted_time_series(s, shock_index).level_t) >= min_level_t:
+            n_break += 1
+    return (float(n_break) / n_tested if n_tested else 0.0), n_tested
+
+
+def escalate_rung2_its(records, series_by_var, *, min_level_t: float = 3.0,
+                       nc_veto_fraction: float = 0.5, nc_min_controls: int = 3):
     """Rung-2 quasi-experimental escalation (§IV): for each already-directed (Rung-1) edge
     whose TARGET series has a detected structural break, run an interrupted-time-series at the
     break; if the level change is significant (``|level_t| ≥ min_level_t``) promote the edge to
@@ -125,10 +148,24 @@ def escalate_rung2_its(records, series_by_var, *, min_level_t: float = 3.0):
         if abs(its.level_t) < min_level_t:
             out.append(r)
             continue
+        # §IV negative-control veto: if the break also fires on many unrelated series it is a
+        # common shock, not this edge's effect — do NOT promote to Rung 2; keep Rung 1 + record.
+        nc_frac, nc_n = negative_control_break_fraction(
+            series_by_var, brk, exclude={r.source_var, r.target_var}, min_level_t=min_level_t)
+        if nc_n >= nc_min_controls and nc_frac >= nc_veto_fraction:
+            out.append(_replace(
+                r, warnings=r.warnings + (
+                    f"rung2_vetoed_negative_control_common_shock:{nc_frac:.2f}",
+                    f"rung2_its_shock_t{brk}"),
+            ))
+            continue
         out.append(_replace(
             r, causal_rung=2,
-            causal_assumptions=tuple(dict.fromkeys(r.causal_assumptions + ("interrupted_time_series",))),
-            warnings=r.warnings + (f"rung2_its_shock_t{brk}", f"rung2_its_level_t_{its.level_t:.2f}"),
+            causal_assumptions=tuple(dict.fromkeys(
+                r.causal_assumptions + ("interrupted_time_series", "negative_control_outcomes"))),
+            warnings=r.warnings + (
+                f"rung2_its_shock_t{brk}", f"rung2_its_level_t_{its.level_t:.2f}",
+                f"rung2_negative_control_clear:{nc_frac:.2f}"),
         ))
     return out
 
@@ -136,4 +173,5 @@ def escalate_rung2_its(records, series_by_var, *, min_level_t: float = 3.0):
 __all__ = [
     "ITSResult", "interrupted_time_series", "detect_structural_break",
     "DiDResult", "difference_in_differences", "escalate_rung2_its",
+    "negative_control_break_fraction",
 ]

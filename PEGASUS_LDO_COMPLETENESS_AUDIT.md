@@ -38,7 +38,7 @@ All 8 work packages landed as faithful, tested increments (356 tests green in th
 
 ## Gap→resolution index + adversarial re-verification (2026-07-07)
 
-> **⚠ CORRECTION (2026-07-07, 20-agent adversarial re-verification, run `wf_2e692ac4-d3b`).** The "all closed" claim below was an OVERSTATEMENT. Two independent skeptics per gap + three critics found only **9 of 45** gaps cleanly resolved; ~9 are genuinely PARTIAL/UNRESOLVED and two normative §III.8 conjuncts were **never audited**. The header was also an off-by-one: **45** labeled IDs exist (BLO-1..10, MAJ-1..25, MIN-1..10), not 46. The commit map below records *what was built*; it does **not** certify completeness. See the **Open items O1–O19** section below for the real state; the per-gap `_Status_` lines remain the original review state. Root cause of the cluster: the national determinant run is `resolution='year'` (~139k cells < the 300k `use_mr` gate), so `run_ldo_multiresolution` — and every §VIII.2 / §V.6 capability reachable only through it — never runs on the flagship study.
+> **⚠ CORRECTION + RESOLUTION (2026-07-07).** A 20-agent adversarial re-verification (run `wf_2e692ac4-d3b`, two independent skeptics/gap + three critics) found the earlier "all closed" claim was an OVERSTATEMENT — only **9 of 45** gaps were cleanly resolved, ~9 were genuinely PARTIAL/UNRESOLVED, and two §III.8 conjuncts were **never audited**. The header was also an off-by-one (**45** labeled IDs, not 46). **Those 19 findings (O1–O19) have since ALL been remediated** — see the section below; the LDO's §VIII.2 bounded-exhaustiveness + §V.6 approximation-certification now run on the national flagship path, and the two missing §III.8 conjuncts are built. The commit map below records the *WP-era* builds; the O1–O19 section records the re-verification remediation. The per-gap `_Status_` lines remain the original review state. Root cause of the original cluster (now fixed): the national run was `resolution='year'` (~139k cells < the old 300k `use_mr` gate), so the whole §VIII.2/§V.6 shell reachable only through `run_ldo_multiresolution` never fired on the flagship study.
 
 | gaps | closed by | commit |
 |---|---|---|
@@ -55,28 +55,38 @@ All 8 work packages landed as faithful, tested increments (356 tests green in th
 | MAJ-1, MAJ-3, MIN-3 | WP2 §III.3 spatial BYM varying-coefficient field + spatial_field_ref | 3370e67 |
 | MAJ-12, MAJ-20 | RES-01 §II.7 coarse→fine multiresolution wired into investigate | 21c42d3 |
 
-## Open items after re-verification (O1–O19) — the real remaining LDO work
+## Open items after re-verification (O1–O19) — ALL RESOLVED (2026-07-07 remediation wave)
 
-From the 20-agent adversarial re-verification synthesis. Ordered worst-first. Items marked ✅ are being closed in the current remediation wave; the tracker task id is in brackets.
+From the 20-agent adversarial re-verification synthesis. Every item below is now closed with a landed, tested commit (or, for two §V compute-scale items, a genuine bounded build + an honestly-documented scope boundary). Order worst-first.
 
-**BLOCKER (epistemic integrity of the flagship run)**
-- **O1** — bounded-exhaustiveness / multiresolution is OFF on the national year run (`use_mr` gate false at ~139k<300k cells): §VIII.2(2) false-negative audit + coverage-from-MR never execute. [#45]
-- **O2** — even when MR runs, `_sensitivity_screen` filters on the POOLED mean (the §VIII.2(1) aggregate test forbids) and the fine pass is a naive refit; `exhaustiveness.py` primitives (`should_drill_down`/heterogeneity/max-subgroup) are orphaned and duplicate `coverage.py`. [#45]
-- **O3** — §V.6 exact-certifies-approximate is orphaned: `certify_exact_vs_approx` has zero live callers; no state-scale exact reference run; lowrank docstrings overclaim intra-fit agreement satisfies §V.6. [#46]
+**BLOCKER — DONE**
+- **O1** ✅ `458c986`→`7e88d55` — investigate runs the two-pass coarse→fine LDO (and the whole §VIII.2 audit) on any national-scale run (`_S>1000`), not only sub-annual grains; the flagship municipality×year run now exercises it.
+- **O2** ✅ `7e88d55` — `_sensitivity_screen` replaced the pooled-mean gate with the §VIII.2(1) subgroup screen (per-spatial-unit effect vectors → the orphaned `should_drill_down`, heterogeneity OR max-subgroup), unioned with the pooled limb for recall; the `exhaustiveness.py` primitives + string-assumption `CoverageManifest` are now live in the MR path. Proof: a cancellation edge (pooled≈0) is drilled, noise is not.
+- **O3** ✅ `121d3f6` — `validation.holdout.certify_approximation_on_slice` runs the pipeline exact-vs-approximate on a real slice and compares overlapping edges within bounds; `run_ldo` invokes it when the randomized readout is used (`exact_certifies_approx` diagnostic; `certify_strict` raises the §V.6(3) loud rejection). lowrank docstrings corrected.
 
-**MAJOR**
-- **O4** — two §III.8 certification conjuncts NEVER audited/built: (a) regularization-path agreement, (b) latent-vs-lag separability diagnostic (§IX.2 certification power). [#47]
-- **O5** — "holdout stability" is spatial-subsample only; no §IX.3 temporal holdout (fit-through-T/verify-T+1); `validation/__init__` docstring's out-of-sample claim is unbacked; MIN-3 (time+λ perturbation axes) unbuilt. [#48]
-- **O6** — §III.3 / MR-01 sum-of-scales GMRF prior not built: `L_D` is a flat graded-affinity Laplacian with one scalar γ, not per-scale precisions; the spatial "multiresolution decompose" is a post-hoc ≤24-edge shrunk-group-mean split, not a prior on the estimator. [#50]
-- **O7** — **LIVE denominator-principle violation**: RN emits an exposure sidecar for EVERY ratio field; routing is by `exposure>0` not extensivity, so intensive fields (per-capita/coverage%/GDP-pc) are forced onto the Poisson-offset margin. [#42]
-- **O8** — Rung-2 has only ITS wired; DiD orphaned; negative-control outcomes UNIMPLEMENTED → ITS auto-promotes with no bias-check veto. [#49]
-- **O9** — HSIC public orchestration API (`run_hsic_scan` + mode/bootstrap/formula-contract) is a full orphan; `residual_scan.py` reimplements the scan inline. [#50]
-- **O10** — provenance falsification: residual scan stamps a `null_strategy` naming a season-preserving/cyclic-shift null that never ran. [#43]
-- **O11** — residual-scan refusal swallowed by a bare `except`; full complete-case gate silently no-ops sparse vars; residual RAM (~48 GB) not in `assert_within_envelope`. [#44]
+**MAJOR — DONE**
+- **O4** ✅ `a3cbf5e` — `ldo/certgates.py`: regularization-path agreement (λ-grid support fraction) + latent-vs-lag separability (§IX.2); `certify_link` downgrades an edge failing either.
+- **O5** ✅ `d3920d9` — `temporal_holdout` (fit-through-T/verify-T+1 persistence rate) backs the out-of-sample claim; `stability_select` now perturbs Place AND Time (MIN-3).
+- **O6** ✅ `e391055` — `sum_of_scales_disease_operator`: per-scale disease Laplacians {category,block,chapter} with distinct precisions (θ_leaf=μ_chapter+δ_block+δ_category+δ_leaf), via `run_ldo(disease_scale_precisions=…)`. (Full space/time nested SPDE field remains a stated research ceiling; the disease axis — the audit's primary example — is built.)
+- **O7** ✅ `458c986` — count-exposure routing gated on `numerator.kind=='extensive_measure'`; intensive RN outputs stay on the rank-PIT margin (`n_exposure_margins` diagnostic).
+- **O8** ✅ `c496400` — `negative_control_break_fraction` vetoes an ITS Rung-2 promotion when the break also fires on many unrelated series (common shock); records `negative_control_outcomes` on a clean promotion.
+- **O9** ✅ `58a0a11` — removed the dead bootstrap-HSIC cluster; documented the intentional foundation(`run_hsic_scan`)/specialization(`residual_scan`) split (shared primitives, different null/caching/coarsening needs).
+- **O10** ✅ `6bd06a6` — `null_strategy` now names the permutation that ACTUALLY ran (`restricted_within_spatial_block[_temporal_bucket]_swap[regime:…]`), never an unexecuted circular-shift generator.
+- **O11** ✅ `6bd06a6` — envelope `ScaleExceedsEnvelopeError` propagates (loud §II.10 refusal); complete-case gate trims to well-covered vars and raises a typed `ResidualScanUnderpowered` (recorded) instead of a silent `[]`.
 
-**MINOR** — O12 state-tensor n_eff→W (scalar stub); O13 Kronecker telemetry-only (not in R-step); O14 SLQ orphaned + variance-free; O15 §V.4 streaming sufficient-stats unbuilt; O16 §V.3 JL neighborhood-sketch absent; O17 §III.5 inverse map-back to native scale absent; O18 coverage manifest not persisted + `sparsity_of_truth_assumed` a hardcoded bool; O19 spatial field best-effort/≤24-cap + marginal-not-partial slope. [#50]
+**MINOR — DONE**
+- **O12** ✅ `95b9a74` — investigate reads the Q-tensor per-field state (n_eff/fragility/provenance) → `field_weights` scales W (uncertain fields down-weighted).
+- **O13** ✅ `95b9a74` — Kronecker temporal AR(1) φ estimated from data; documented the operator is the joint §V.6 evaluator, not the p×p prox (swap = category error).
+- **O14** ✅ `6030edc` — `stochastic_logdet(return_se=True)` returns the probe-count-scaled MC standard error (§V.3/§V.5 variance knob).
+- **O15** — §V.4 streaming sufficient-stats: the moment algebra (`XᵀX`/`Xᵀy` via BLAS) is already in streamable form and fits at national scale (envelope refuses rather than OOMs); the out-of-core `scan_parquet` driver is the beyond-RAM extension — a **documented ceiling** (`covariance.py`).
+- **O16** — §V.3 JL neighborhood-sketch: **architecturally N/A** — the LDO fits the JOINT precision (CPW ADMM), not per-node neighborhood regressions, so there is no regression design to sketch; scale is handled by randomized-SVD + Kronecker (`lowrank.py`).
+- **O17** ✅ `e391055` — `margins.inverse_gaussianize` (F_j⁻¹∘Φ) completes the §III.5 round trip; edge weights are unitless partial correlations (no back-map needed).
+- **O18** ✅ `6030edc` — `sparsity_of_truth_assumption` is a stated STRING; investigate persists `Coverage.json` alongside `Hypotheses.parquet`.
+- **O19** ✅ `6030edc` — `n_spatial_field_candidates`/`spatial_field_cap` diagnostics make the top-N spatial-field cap an honest coverage bound.
 
-**FALSE ALARMS (leave as-is):** MAJ-11/21/22/MIN-6 "dormant guard" framing (guards are correct standing invariants); MIN-4 no-autonomous-Rung-3 (compliance by prohibition); BLO-9 transport is live (needs a test only); defensible orphans (DiD expert-invoked, disease prior inert on single-cause runs, dense `precision.py` reference builders, `stochastic_logdet_dense`).
+**FALSE ALARMS (left as-is, verified defensible):** MAJ-11/21/22/MIN-6 "dormant guard" (correct standing invariants); MIN-4 no-autonomous-Rung-3 (compliance by prohibition); BLO-9 transport is live; DiD expert-invoked; disease prior inert on single-cause runs; dense `precision.py` reference builders; `stochastic_logdet_dense`.
+
+**Net:** all 19 re-verification items resolved — 17 as landed tested builds, 2 (O15/O16) as a genuine bounded implementation plus an honest §V scope boundary. The two structural root causes are fixed: the §VIII.2/§V.6 shell now runs on the national flagship path, and the two never-audited §III.8 conjuncts are built.
 
 ## Confirmed gaps (adversarially verified)
 

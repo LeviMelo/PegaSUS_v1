@@ -31,7 +31,11 @@ from pegasus.ldo.hsic import (
     _np_rff_features,
 )
 from pegasus.ldo.margins import GaussianField
-from pegasus.ldo.nulls import generate_null_indices
+from pegasus.ldo.nulls import (
+    descriptive_only_when_insufficient_blocks,
+    generate_null_indices,
+    select_null_regime,
+)
 from pegasus.ldo.records import LinkRecord
 
 import math
@@ -172,6 +176,57 @@ def _pair_stat_and_null(
     return stat, null
 
 
+def _infer_panel_type(field: GaussianField) -> str:
+    """Map the field geometry+cadence to a §6.8 null-registry panel type.
+
+    Monthly cadence with whole 12-month years → ``monthly_seasonal_panel``; a single time
+    slice → ``cross_sectional_census``; otherwise a multi-period municipal panel →
+    ``annual_municipal_panel`` (facility-stock/sparse-stratified regimes are declared by the
+    caller, not inferred from a standard space×time panel)."""
+    T = int(field.shape[2])
+    res = str(getattr(field, "resolution", "") or "").lower()
+    if T <= 1:
+        return "cross_sectional_census"
+    if "month" in res and T >= 12 and T % 12 == 0:
+        return "monthly_seasonal_panel"
+    return "annual_municipal_panel"
+
+
+def _temporal_bucket(time_of_cell: np.ndarray, panel_type: str) -> np.ndarray:
+    """Per-cell temporal-stratum label. Season (month) for monthly panels so a null swap
+    preserves seasonality; exact time index for annual panels; a single bucket for a
+    cross-section. The null permutes only WITHIN (spatial-block × this bucket)."""
+    if panel_type == "monthly_seasonal_panel":
+        return np.array([str(int(t) % 12) for t in time_of_cell])
+    if panel_type == "cross_sectional_census":
+        return np.array(["0"] * len(time_of_cell))
+    return np.array([str(int(t)) for t in time_of_cell])
+
+
+def _coarsen_residuals(
+    E: np.ndarray, uf_of_cell: np.ndarray, bucket_of_cell: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
+    """§II.7 multi-resolution: aggregate observed cells into (spatial-block × temporal-bucket)
+    groups and average the residual within each, so the §III.6 HSIC layer runs at a coarser
+    grain when the fine-cell kernel cache would exceed the memory budget (rather than being
+    silently skipped). Returns the coarse residual (p×G), one spatial-block label per coarse
+    cell, and a resolution note. At the coarse grain the null is a within-spatial-block swap."""
+    keys = np.array([f"{u}|{b}" for u, b in zip(uf_of_cell.tolist(), bucket_of_cell.tolist())])
+    groups = sorted(set(keys.tolist()))
+    gpos = {g: i for i, g in enumerate(groups)}
+    p = E.shape[0]
+    E_coarse = np.zeros((p, len(groups)), dtype=np.float64)
+    counts = np.zeros(len(groups), dtype=np.float64)
+    uf_coarse = np.empty(len(groups), dtype=object)
+    for cell, key in enumerate(keys.tolist()):
+        g = gpos[key]
+        E_coarse[:, g] += E[:, cell]
+        counts[g] += 1.0
+        uf_coarse[g] = key.split("|", 1)[0]
+    E_coarse /= np.maximum(counts, 1.0)
+    return E_coarse, uf_coarse.astype(str), np.array(groups), "coarsened_spatialblock_x_timebucket"
+
+
 def scan_residual_nonlinear_edges(
     field: GaussianField,
     precision: np.ndarray,
@@ -193,82 +248,94 @@ def scan_residual_nonlinear_edges(
     Zc = np.where(np.isfinite(Zc), Zc, 0.0)
     E = joint_model_residuals(Zc, precision)
 
-    # Structured null (§6.8): the residuals retain spatial autocorrelation, so an iid
-    # permutation null is anticonservative — two variables that merely co-cluster in
-    # space (both high in the Northeast) test as dependent. Permute within spatial
-    # blocks (UF = first 2 digits of the municipality id of each cell's space unit);
-    # this breaks cross-variable dependence while preserving spatial-block identity,
-    # testing dependence *beyond* shared clustering. Reuse the same structural
+    # §6.8 panel-aware STRUCTURED null. The residuals retain BOTH spatial autocorrelation and
+    # temporal/seasonal structure, so an iid — or spatial-only — permutation is anticonservative
+    # (variables that merely co-cluster in space AND/OR co-vary seasonally test as dependent).
+    # Select the null regime from the panel support (nulls.NULL_REGIMES) and permute cells only
+    # WITHIN their (spatial-block × temporal-bucket) stratum, preserving both dependences so
+    # HSIC tests structure BEYOND shared spatio-temporal clustering. Reuse the same structural
     # permutations across pairs (the null is structural, not data-dependent).
+    panel_type = _infer_panel_type(field)
+    regime = select_null_regime(panel_type)
+    permutations = int(regime.permutations)
     observed_idx = np.where(observed)[0]
-    space_of_cell = (observed_idx // T).tolist()
-    uf_labels = [
+    uf_of_cell = np.array([
         str(field.space_ids[s])[:2] if s < len(field.space_ids) else "00"
-        for s in space_of_cell
-    ]
-    n_spatial_blocks = len(set(uf_labels))
-    if n_spatial_blocks >= 2:
+        for s in (observed_idx // T)
+    ])
+    bucket_of_cell = _temporal_bucket(observed_idx % T, panel_type)
+
+    # §II.7 multi-resolution continuation: if the fine-cell HSIC representation cache would
+    # exceed the memory budget, COARSEN to (spatial-block × temporal-bucket) groups (averaging
+    # the residual) so the §III.6 layer runs at a coarser grain instead of being skipped; the
+    # coarse null is then a within-spatial-block swap. Only if even the coarsest grain does not
+    # fit do we refuse (§II.10 refuse-don't-degrade).
+    scan_resolution = str(getattr(field, "resolution", "cell"))
+    within_block_only = False
+    if estimate_residual_scan_bytes(p=p, n_eff=E.shape[1], budget=budget) > _residual_scan_memory_budget():
+        E, uf_of_cell, bucket_of_cell, scan_resolution = _coarsen_residuals(E, uf_of_cell, bucket_of_cell)
+        within_block_only = True  # coarse cells are one-per-(block,bucket): swap within block
+        if estimate_residual_scan_bytes(p=p, n_eff=E.shape[1], budget=budget) > _residual_scan_memory_budget():
+            raise ScaleExceedsEnvelopeError(
+                "residual_hsic_scan_exceeds_memory: even the coarsest (spatial-block × temporal-"
+                f"bucket) grain (n={E.shape[1]}, p={p}) exceeds the available-memory budget; "
+                "nonlinear residual edges not computed (§II.7/§II.10)."
+            )
+
+    n = int(E.shape[1])
+    n_spatial_blocks = len(set(uf_of_cell.tolist()))
+    n_temporal_blocks = len(set(bucket_of_cell.tolist()))
+    # Fine grain: swap within (spatial-block × temporal-bucket) — preserves both. Coarse grain:
+    # one cell per (block,bucket), so swap within spatial-block (across buckets) — preserves the
+    # spatial block, tests beyond it.
+    if within_block_only:
+        strata = uf_of_cell.tolist()
+    else:
+        strata = [f"{u}|{b}" for u, b in zip(uf_of_cell.tolist(), bucket_of_cell.tolist())]
+    if n_spatial_blocks >= 2 or n_temporal_blocks >= 2:
         rng = _random.Random(seed)
         perm_list: list[list[int]] | None = [
-            generate_null_indices(
-                strategy="restricted_intra_uf_spatial_swap",
-                n=n_eff, support={"uf_strata": uf_labels}, rng=rng,
-            )
+            generate_null_indices(strategy="restricted_intra_uf_spatial_swap",
+                                  n=n, support={"uf_strata": strata}, rng=rng)
             for _ in range(permutations)
         ]
-        null_strategy = "restricted_intra_uf_spatial_swap"
+        null_strategy = f"{regime.null_strategy}|within_block_time_swap"
     else:
-        perm_list = None  # no spatial structure (single block) → iid fallback
+        perm_list = None  # no spatial/temporal structure → iid fallback
         null_strategy = "iid_permutation"
-    # §6.8/§6.9: certify a discovery only with enough spatial blocks for a valid null;
-    # otherwise the edge is reported descriptive (surfaced, not certified).
-    sufficient_blocks = n_spatial_blocks >= _MIN_NULL_BLOCKS
 
-    # §II.10 refuse-don't-degrade: the per-variable representation cache below retains
-    # p × 2 dense kernels/feature-maps and is the single largest LDO allocation (absent
-    # from the fit-path envelope, envelope.estimate_ldo_bytes). At national n_eff it can be
-    # tens-to-hundreds of GB; attempting it thrashes swap then raises MemoryError. Pre-check
-    # against the actually-available RAM and refuse with a clear reason (the orchestrator
-    # catches this into a residual-scan diagnostic — the nonlinear layer is honestly reported
-    # as not-computed-at-this-scale rather than silently OOM-dropped after a long thrash).
-    _scan_bytes = estimate_residual_scan_bytes(p=p, n_eff=n_eff, budget=budget)
-    if _scan_bytes > _residual_scan_memory_budget():
-        raise ScaleExceedsEnvelopeError(
-            "residual_hsic_scan_exceeds_memory: estimated "
-            f"{_scan_bytes / 1024**3:.1f} GB HSIC representation cache "
-            f"(p={p}, n_eff={n_eff}, budget={budget}) exceeds the available-memory budget; "
-            "nonlinear residual edges not computed at this scale (§II.7 multi-resolution / "
-            "§II.10 refuse-don't-degrade)."
-        )
+    # §6.8 descriptive gate (the DISJUNCTION): fewer than five spatial OR five temporal blocks
+    # → no valid structured null → surface descriptive, do not certify.
+    sufficient_blocks = not descriptive_only_when_insufficient_blocks(
+        spatial_blocks=n_spatial_blocks, temporal_blocks=n_temporal_blocks
+    )
 
-    # Precompute each variable's HSIC representation ONCE (O(p) builds), then score every
-    # pair from the cache. The old loop re-derived per-variable kernels/features inside
-    # each of the p²/2 pairwise calls — an O(p²) rebuild of a per-variable object — and
-    # re-ran the 2048-sample bandwidth per side per pair. This is bit-identical to
-    # ``numpy_kernel_hsic_permutation_test`` (verified against it in tests): same seed
-    # regimes, kernels, centering, feature maps, and the same shared permutation set.
+    # Precompute each variable's HSIC representation ONCE (O(p) builds), then score every pair
+    # from the cache (bit-identical to numpy_kernel_hsic_permutation_test: same seeds, kernels,
+    # centering, feature maps, shared permutation set).
     mode, reprs = _build_var_reprs(E, seed=seed, kernel="rbf", budget=budget, max_exact=5000)
 
-    # Resolve the shared permutation set once (structural, or the iid fallback the pairwise
-    # call would have drawn from `seed` — identical across pairs, so drawn a single time).
     if perm_list is not None:
-        perms: list[np.ndarray] | None = [
-            np.asarray(pm, dtype=int) for pm in perm_list if len(pm) == n_eff
-        ]
+        perms: list[np.ndarray] | None = [np.asarray(pm, dtype=int) for pm in perm_list if len(pm) == n]
     else:
         _rng = np.random.default_rng(seed)
-        perms = [_rng.permutation(n_eff) for _ in range(max(int(permutations), 1))]
+        perms = [_rng.permutation(n) for _ in range(max(permutations, 1))]
 
     pairs: list[tuple[int, int]] = [(i, j) for i in range(p) for j in range(i + 1, p)]
     stats: list[float] = []
     pvals: list[float] = []
     for i, j in pairs:
-        stat, null_arr = _pair_stat_and_null(reprs[i], reprs[j], mode=mode, n=n_eff, perms=perms)
+        stat, null_arr = _pair_stat_and_null(reprs[i], reprs[j], mode=mode, n=n, perms=perms)
         pval = float((1 + int((null_arr >= stat).sum())) / (1 + null_arr.size)) if null_arr.size else 1.0
         stats.append(stat)
         pvals.append(pval)
 
-    qvals = correct_p_values(pvals, method="BH").q_values if pvals else []
+    # §6.9 FDR: the panel-support-selected method (BY for cross-fitted annual/monthly panels,
+    # BH for cross-sectional, Storey-q for facility stock), not a hardcoded BH.
+    qvals = correct_p_values(pvals, method=regime.fdr_method).q_values if pvals else []
+    edge_warnings: tuple[str, ...] = (f"panel_type:{panel_type}", *regime.warnings)
+    if within_block_only:
+        edge_warnings = (*edge_warnings, f"multiresolution_coarsened:{scan_resolution}")
     records: list[LinkRecord] = []
     for (i, j), stat, pv, qv in zip(pairs, stats, pvals, qvals):
         if qv is not None and qv <= alpha:
@@ -280,8 +347,9 @@ def scan_residual_nonlinear_edges(
                     weight=float(stat),
                     uncertainty=float(qv),
                     null_strategy=null_strategy,
-                    fdr_method="benjamini_hochberg",
+                    fdr_method=regime.fdr_method,
                     certification_status="selected" if sufficient_blocks else "descriptive",
+                    warnings=edge_warnings,
                 )
             )
     return records

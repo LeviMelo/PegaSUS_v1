@@ -58,25 +58,78 @@ def test_structured_null_suppresses_spurious_spatially_clustered_edge():
     field = _clustered_independent_field(single_block=False)
     precision = np.eye(3)  # residuals ≈ standardized fields
     records = scan_residual_nonlinear_edges(field, precision, permutations=300, seed=0)
-    assert all(r.null_strategy == "restricted_intra_uf_spatial_swap" for r in records), \
+    # §6.8 panel-aware null: an annual municipal panel selects the spatial-block × time-bucket
+    # structured swap, never iid.
+    assert all(r.null_strategy != "iid_permutation" for r in records), \
         f"expected structured null, got {[r.null_strategy for r in records]}"
     # the spurious A-B pair (independent given UF, only co-clustered in space) is not even
-    # significant under the within-UF null — its shared spatial mean is preserved in the null
+    # significant under the within-block null — its shared spatial mean is preserved in the null
     assert ("A", "B") not in _all_pairs(records), \
         "structured null still flagged the spatially-confounded A-B edge (anticonservative)"
 
 
-def test_iid_fallback_flags_spurious_edge_and_gate_blocks_certification():
-    """Collapsing every muni into one UF forces the iid fallback: the same spurious A-B
-    co-clustering now *is* found significant (anticonservative) — but the insufficient-
-    spatial-block gate refuses to certify it as `selected`. Both guards are exercised."""
-    field = _clustered_independent_field(single_block=True)
+def test_single_spatial_block_uses_temporal_null_but_gate_blocks_certification():
+    """One (mislabeled) spatial block over multiple years: there is still TEMPORAL structure,
+    so the §6.8 selection uses the panel's structured null (not iid) — a strict improvement over
+    the old spatial-only fallback. The spatial blocks are invalid for the spatial confound, so
+    the same spurious A-B pair is found but the disjunctive block gate (< 5 spatial OR temporal
+    blocks) refuses to certify it `selected`."""
+    field = _clustered_independent_field(single_block=True)  # T=4 → temporal blocks exist
     precision = np.eye(3)
     records = scan_residual_nonlinear_edges(field, precision, permutations=300, seed=0)
-    assert all(r.null_strategy == "iid_permutation" for r in records)
-    # iid null finds the spatially-confounded edge "significant" (the anticonservativeness)
-    assert ("A", "B") in _all_pairs(records)
+    assert records and all(r.null_strategy != "iid_permutation" for r in records), \
+        "with temporal structure the null must be the panel-aware structured null, not iid"
+    assert ("A", "B") in _all_pairs(records)  # spatial confound not broken (blocks invalid)
     ab = next(r for r in records if tuple(sorted((r.source_var, r.target_var))) == ("A", "B"))
-    # ...but a single spatial block is an invalid null, so it is not certified selected
     assert ab.certification_status == "descriptive", \
-        "single-block iid null must not certify a discovery as selected"
+        "< 5 spatial blocks is an invalid spatial null → must not certify a discovery as selected"
+
+
+def test_true_iid_fallback_when_no_spatial_or_temporal_structure():
+    """A single spatial block AND a single time slice (a degenerate cross-section) has no
+    block structure on either axis, so the scan honestly falls back to the iid permutation."""
+    field = _clustered_independent_field(single_block=True)
+    # collapse to one time slice → n_temporal_blocks == 1 as well
+    field = GaussianField(
+        variables=field.variables, space_ids=field.space_ids, time_ids=(0,),
+        Z=field.Z[:, :, :1], W=field.W[:, :, :1], resolution="year",
+    )
+    records = scan_residual_nonlinear_edges(field, precision=np.eye(3), permutations=300, seed=0)
+    assert all(r.null_strategy == "iid_permutation" for r in records)
+
+
+def test_multiresolution_coarsening_delivers_the_layer_instead_of_refusing(monkeypatch):
+    """§II.7/§III.6: when the fine-cell HSIC cache would exceed the memory budget, the scan
+    COARSENS to (spatial-block × time-bucket) groups and runs there — the nonlinear layer is
+    delivered at a coarser grain (marked in the record warnings), not silently skipped. The
+    coarse pass detects COARSE-grain structure, so a group-level nonlinear dependence (each
+    UF×year group has a latent g with mean_A≈g, mean_B≈g²) is planted and must survive the
+    aggregation (fine-grain structure is left for fine refinement, per §II.7)."""
+    import pegasus.ldo.residual_scan as rs
+
+    rng = np.random.default_rng(3)
+    n_uf, per_uf, T = 8, 20, 8
+    S = n_uf * per_uf
+    uf_of_muni = np.repeat(np.arange(n_uf), per_uf)
+    Z = np.empty((3, S, T))
+    for u in range(n_uf):
+        munis = np.where(uf_of_muni == u)[0]
+        for t in range(T):
+            g = rng.standard_normal()  # per (UF, year) group latent
+            Z[0, munis, t] = g + 0.15 * rng.standard_normal(len(munis))       # mean_A ≈ g
+            Z[1, munis, t] = g**2 + 0.15 * rng.standard_normal(len(munis))    # mean_B ≈ g² (nonlinear)
+            Z[2, munis, t] = rng.standard_normal(len(munis))
+    field = GaussianField(
+        variables=("A", "B", "N"),
+        space_ids=tuple(f"{27 + uf_of_muni[s]}{s:05d}"[:7] for s in range(S)),
+        time_ids=tuple(range(T)), Z=Z, W=np.ones_like(Z), resolution="year",
+    )
+    # Force the fine scan to exceed the budget so the coarsening branch runs, but leave the
+    # coarse (n = n_uf × T ≈ 64 groups) scan comfortably under it.
+    monkeypatch.setattr(rs, "_residual_scan_memory_budget", lambda: 40_000_000)  # 40 MB
+
+    records = scan_residual_nonlinear_edges(field, np.eye(3), permutations=200, seed=0)
+    # the layer RAN (did not refuse) and every emitted edge is tagged as coarsened
+    assert records, "coarsened scan returned no edges — the planted A-B dependence was lost"
+    assert all(any(w.startswith("multiresolution_coarsened") for w in r.warnings) for r in records)
+    assert ("A", "B") in _all_pairs(records)

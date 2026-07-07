@@ -15,6 +15,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import json
+
 import polars as pl
 
 from pegasus.core.hashing import sha256_file
@@ -73,7 +75,7 @@ def _resolve_ufs(intent: UserIntent) -> list[str]:
 
 
 def _combine_national_artifacts(
-    per_uf_artifacts: list[SourceArtifact], *, data_root: Path
+    per_uf_artifacts: list[SourceArtifact], *, data_root: Path, years: str | None = None
 ) -> list[SourceArtifact]:
     """Combine per-UF source artifacts into one national artifact per (system, role).
 
@@ -98,6 +100,11 @@ def _combine_national_artifacts(
         except Exception:
             # sink not available for this frame shape → eager concat fallback
             pl.concat([pl.read_parquet(p) for p in paths], how="diagonal_relaxed").write_parquet(out, compression="zstd")
+        # Window sidecar (T1.1): record the years the national artifact was built for so the warm
+        # cache can never reuse it for a different (e.g. wider) window and silently truncate.
+        if years is not None:
+            out.with_suffix(".window.json").write_text(
+                json.dumps({"years": str(years), "systems": [system]}), encoding="utf-8")
         return inspect_source_artifact(
             path=out, source_system=system, artifact_role=role,
             provenance_mode="materialized_external", source_manifest_hash=sha256_file(out),
@@ -139,17 +146,28 @@ def _acquire_sidra_for_uf(
     return arts, len(ctx)
 
 
-def _national_datasus_cached(systems: list[str], data_root: Path) -> list[SourceArtifact] | None:
+def _national_datasus_cached(systems: list[str], years: str, data_root: Path) -> list[SourceArtifact] | None:
     """Inspected national DATASUS artifacts iff EVERY requested system already has its
-    combined national ``processed_events`` file (§V.7(3): don't re-materialize a cached
-    layer). Lets a national re-run skip the per-UF re-acquire+normalize+combine entirely —
-    the dominant cost of a warm run (per-UF SIM re-normalize was ~20min / ~19GB). Returns
-    ``None`` (do the full per-UF acquire) if any system's national artifact is missing."""
+    combined national ``processed_events`` file **for the requested ``years`` window** (§V.7(3):
+    don't re-materialize a cached layer). Lets a national re-run skip the per-UF
+    re-acquire+normalize+combine entirely — the dominant warm-run cost (~20min / ~19GB per UF).
+
+    WINDOW-SAFE (fail-closed): the national artifact path carries no year token, so warm reuse is
+    gated on a ``.window.json`` sidecar recording the exact ``years`` the artifact was built for. A
+    missing sidecar or a different window returns ``None`` (full re-acquire) — a 2000-2024 request
+    must NOT silently reuse a 2000-2020 artifact and report success on truncated data."""
     arts: list[SourceArtifact] = []
     for system in systems:
         out = data_root / "normalized" / "national" / f"{system}__processed_events.parquet"
-        if not out.exists():
+        sidecar = out.with_suffix(".window.json")
+        if not out.exists() or not sidecar.exists():
             return None
+        try:
+            cached_years = str(json.loads(sidecar.read_text(encoding="utf-8")).get("years"))
+        except Exception:
+            return None
+        if cached_years != str(years):
+            return None  # window mismatch → do not reuse a differently-scoped artifact
         arts.append(
             inspect_source_artifact(
                 path=out, source_system=system, artifact_role="processed_events",
@@ -178,7 +196,7 @@ def _acquire_national(
     per_uf_sidra: list[SourceArtifact] = []
     compendium_summary: dict[str, Any] = {"status": "national_per_uf_combined", "artifact_count": 0}
 
-    datasus_cached = _national_datasus_cached(systems, data_root) if systems else []
+    datasus_cached = _national_datasus_cached(systems, years, data_root) if systems else []
     if datasus_cached is None:
         for uf in ufs:
             per_uf_datasus.extend(
@@ -207,7 +225,7 @@ def _acquire_national(
         per_uf_sidra.extend(arts)
         compendium_summary["artifact_count"] += ctx_count
 
-    datasus_national = datasus_cached if datasus_cached else _combine_national_artifacts(per_uf_datasus, data_root=data_root)
+    datasus_national = datasus_cached if datasus_cached else _combine_national_artifacts(per_uf_datasus, data_root=data_root, years=years)
     if datasus_cached:
         compendium_summary["datasus"] = "national_artifacts_cache_hit"
     sidra_national = _combine_national_artifacts(per_uf_sidra, data_root=data_root)

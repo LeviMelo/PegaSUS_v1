@@ -143,6 +143,39 @@ These came from reading the actual math in `margins.py`, `covariance.py`, `lowra
 - **recommendation:** treat `η` as a nuisance with wide uncertainty (or marginalize it), and do not let its point estimate silently shape the denominator without an uncertainty band.
 - **risk_if_ignored:** the denominator inherits a fabricated migration structure as if observed.
 
+### A20 · `DIRECT-QT-01` — HIGH — the Moran's-I effective-n correction uses 1-D cell-ORDER contiguity, not geography
+- **kind:** statistical_validity_risk
+- **detail:** `_moran_contiguity` computes Moran's I treating cells adjacent in the FLATTENED tensor ordering as spatial neighbours (`w_ij=1` iff `|i−j|=1`). But cell order is lexical cod6 (or panel order), which has NO relation to geographic contiguity — municipality 270430 and 270431 can be hundreds of km apart. So this Moran's I measures autocorrelation along an arbitrary 1-D chain, not space. It is honestly warning-tagged a "proxy," but it then DEFLATES the effective-n (`_moran_corrected_n_eff`), so the effective sample size — the very quantity A13 says should (but doesn't) drive the LDO edge SE — is corrected by a meaningless statistic. The REAL adjacency exists (`structural_cod6_adjacency`, used by the LDO GMRF) and is simply not passed here.
+- **evidence:** `q_tensor.py:116-144` chain contiguity; `q_tensor.py:208-209` used as the deflation input.
+- **recommendation:** compute Moran's I with the real municipality adjacency (share the `SpatialWeightGraph` the LDO already builds); this is also a modularization win (one spatial graph, many consumers).
+- **risk_if_ignored:** the effective-df / design-effect correction is garbage; combined with A13 (it isn't even used), the whole spatial-autocorrelation accounting is non-functional.
+
+### A21 · `DIRECT-QT-02` — MEDIUM/HIGH — Kish `(Σw)²/Σw²` misapplied to outcome counts, not survey weights
+- **kind:** msd_theoretical_fragility / statistical_validity_risk
+- **detail:** The Kish effective-n `(Σw)²/Σw²` is the effective size under unequal SAMPLING weights (a design-effect for weighted surveys). Here `weights = denom_values or values` — the DENOMINATOR or the outcome COUNTS themselves. Feeding event counts to the Kish formula conflates "concentration of the outcome" with "effective sample size for a rate," which are different. A rate estimated over 5,570 municipalities where one has 10⁶ population is not "effectively fewer observations" in the Kish survey sense. The correct effective-n for a spatially-clustered rate is `n / DEFF` with `DEFF = 1 + (m̄−1)·ρ` (intra-cluster correlation), not the Kish weight-concentration formula.
+- **evidence:** `q_tensor.py:147-162`, `q_tensor.py:217`.
+- **recommendation:** define effective-n via a design-effect from the estimated spatial ICC (Moran-based, on the real graph per A20); reserve Kish for genuinely weighted estimators. Reconcile with the MSD-I §3.12.3 definition.
+- **risk_if_ignored:** the effective-n — hence every downstream power gate and (should-be) SE — has no clear statistical meaning.
+
+### A22 · `DIRECT-QT-03` — HIGH — `compute_q_state`/`classify_q_state` are orphaned; declared field state never re-derived from n_eff
+- **kind:** implementation_gap
+- **detail:** The live compile path (`compile_attach._q_row`) computes n_eff via `_kish_effective_n`+`_moran_corrected_n_eff` directly and passes `field.state` through UNCHANGED — it never calls `compute_q_state`/`classify_q_state`. So the threshold logic (n_eff≥100→verified, ≥30→fragile, else quarantined_descriptive) NEVER runs: a count with n_eff≪100 can remain `verified`. The Q-tensor's own state machine is dead code, and the certification-relevant field state is unbacked by the computed diagnostics. (This is the T2.6 modularization item, confirmed at the math level.)
+- **evidence:** `q_tensor.py:34-49`, `178-227` orphaned; `compile_attach.py:337` passes `field.state` unchanged.
+- **recommendation:** route `_q_row` through `compute_q_state`, re-derive `field.state`, delete the duplicated `_vector_diagnostics`/`_moran_*` in compile_attach (one implementation).
+- **risk_if_ignored:** field reliability labels (which gate dashboard-safety and downstream trust) are declared, not measured.
+
+### A23 · `DIRECT-QT-04` — MEDIUM — q-state thresholds and provenance-risk are uncalibrated ordinal magic numbers with hard cliffs
+- **kind:** msd_theoretical_fragility
+- **detail:** `classify_q_state` cliffs at n_eff 100/30, denom_fragility 0.05/0.20, missingness 0.10, risk 0.5; `provenance_risk` assigns hand-picked 0.0–1.0 by tag. n_eff=99→fragile vs 100→verified is a discontinuity with no calibration. These drive trust/gating decisions as if principled.
+- **evidence:** `q_tensor.py:45-49`, `17-31`.
+- **recommendation:** replace hard cliffs with a continuous reliability score (or at least document the thresholds' empirical basis); treat provenance_risk as a documented prior, not a probability.
+- **risk_if_ignored:** trust classification is brittle at the boundaries and not defensible.
+
+---
+
+## Cross-cutting theme (lead) — THE UNCERTAINTY PIPELINE IS DISCONNECTED FROM THE INFERENCE PIPELINE
+A1 + A13 + A20 + A21 + A22 together are ONE systemic architectural failure, and the clearest evidence for the user's objective-2 concern (no clear module/data-contract boundaries): the EFG/§3.12 layer computes a rich per-field/per-cell uncertainty state (provenance weight `W`, Kish/Moran-corrected `n_eff`, `denom_fragility`, `provenance_risk`, the state classification) — and the LDO inference layer **consumes almost none of it**: the covariance is unweighted (A1), the edge SE uses the raw cell count (A13), the effective-n it would use is itself mis-computed (A20/A21), and the state classification never runs (A22). The two subsystems have no enforced data contract tying "uncertainty produced" to "uncertainty consumed." **This should become a first-class, tested interface** (an `ObservationReliability` contract that the estimator is REQUIRED to consume) — it is simultaneously a statistical-validity fix and a modularization redesign.
+
 *(Lead's direct reading continues; the modularization + GPU thrusts follow in their own ledgers. Workflow findings append to Part B.)*
 
 ---

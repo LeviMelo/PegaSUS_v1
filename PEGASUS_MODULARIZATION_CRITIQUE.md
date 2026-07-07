@@ -106,3 +106,725 @@ Objective 2: the codebase has repeatedly proven to carry redundant, orphaned, or
 - evidence: src/pegasus/workflows/pipeline.py:117, compile.py:33, report/race_bridge.py:18 (three _load_intent variants) plus stage_plan.py:89 _intent_value.
 - recommendation: Add one load_user_intent(path) -> tuple[dict, UserIntent] to pegasus.core.schemas (or a workflows/_intent.py) with the ValidationError→typed-error wrap, and have all four callers import it. stage_plan's dict-or-model tolerance should then be unnecessary because callers always pass a validated UserIntent.
 - risk: The compile variant maps ValidationError to a helpful ValueError; the pipeline/race-bridge variants let raw pydantic errors escape. The same malformed intent yields different failure surfaces depending on entrypoint, and a schema-validation tightening must be applied in four places or one path silently accepts an invalid intent.
+
+
+## Full modularization/consolidation/API-boundary audit (resume wn2qaxhcx — 88 findings, 77 new)
+
+*Independent agents; LDO-B01 reproduces A1/M6 (inert reliability tensor W) with matching line refs — convergent confirmation. Verbatim below.*
+
+
+### ldo-boundaries
+
+**`LDO-B01` — HIGH — missing_data_contract** — Reliability tensor W is produced and threaded through every type but ignored by the estimator (missing ObservationReliability contract)
+- detail: assemble.py builds a per-cell reliability weight tensor W (p,S,T) in [0,1] from provenance state (assemble.py:137-172, _STATE_WEIGHT down-weights broadcast=0.5, domain_scalar=0.25, bounded=0.4). It is stored on LDOField.W (assemble.py:69) and GaussianField.W (margins.py:34), propagated verbatim by gaussianize_field (margins.py:142), resolution.py:46/84, and sliced in edges.py:46. But the actual estimator NEVER reads it: fit_contemporaneous_precision(field,...) (precision.py:101) does `samples = field.Z.reshape(p, S*T)` and calls pairwise_correlation(samples) (covariance.py:48) — an UNWEIGHTED moment accumulation (M@M.T, X0@M.T, X0@X0.T at covariance.py:83-86). whitened_lagged_correlation (covariance.py:151) likewise takes only Z. So a reconstructed/broadcast cell (W=0.25) contributes identically to a directly-observed cell (W=1). The margins.py:8 docstring even says 'Reliability weights W propagate unchanged' — i.e. by design they are passive cargo. There is no typed ObservationReliability interface enforcing that a covariance estimator consume W; it is shared as an untyped ndarray field that the consumer silently drops.
+- evidence: precision.py:118 `samples = field.Z.reshape(p, S*T)` (W never referenced); covariance.py:48-109 pairwise_correlation has no weight arg; margins.py:8 'Reliability weights W propagate unchanged'; edges.py:46 slices field.W but nothing downstream reads it
+- recommendation: Introduce an ObservationReliability contract: give pairwise_correlation / whitened_lagged_correlation an explicit `weights: np.ndarray|None` parameter and compute weighted pairwise moments (n_ab = W_a @ W_b.T etc.), and have fit_contemporaneous_precision / fit_lagged_links pass field.W. Or, if unweighted is intended, DELETE W from LDOField/GaussianField and assemble.py entirely rather than carrying a lie. Consolidate into covariance.py as the single weighted-moment site.
+- risk_if_ignored: Silent failure of the core epistemic guarantee: reconstructed/broadcast/bounded cells drive edge discovery with full weight, so a partial correlation can be manufactured entirely from imputed demographic broadcasts and reported as a certified discovery, with diagnostics ('n_state_weighted') falsely implying the weighting took effect.
+
+**`LDO-B03` — HIGH — duplication** — residual_scan.py reimplements the HSIC doubly-centered kernel and forks the exact/RFF/Nystrom math already in hsic.py
+- detail: residual_scan.py:94-108 defines _centered_kernel with a comment 'Doubly-centered kernel matrix H K H (matches hsic.py exact path)', and _build_var_reprs (residual_scan.py:111-145) rebuilds bandwidths, RFF and Nystrom features 'Reproduces numpy_kernel_hsic_permutation_test bit-for-bit'. This is the SAME computation numpy_kernel_hsic_permutation_test (hsic.py:214) already performs. The only production consumer of HSIC forked the algorithm for a caching fast-path instead of the canonical function providing that path. Two independent implementations of the identical Gaussian/Matern/linear centered-kernel + feature-map math must now be kept bit-identical by hand.
+- evidence: residual_scan.py:95 'matches hsic.py exact path'; residual_scan.py:90-91 'Reproduces numpy_kernel_hsic_permutation_test bit-for-bit'; hsic.py:214 numpy_kernel_hsic_permutation_test is the canonical version
+- recommendation: Push the per-variable representation cache INTO hsic.py as the public API (e.g. hsic.build_representations + hsic.pairwise_hsic_from_reprs) and have residual_scan call it, deleting residual_scan._centered_kernel/_build_var_reprs. Single kernel implementation in hsic.py.
+- risk_if_ignored: Any fix to bandwidth/kernel/centering in hsic.py silently diverges from the residual scan, so the certified p-values on the residual (nonlinear) edges quietly stop matching the module they claim to reproduce — a correctness drift with no test to catch it.
+
+**`LDO-B09` — HIGH — god_module_decomposition** — orchestrator.run_ldo is a ~390-line god-function stitching 14 subsystems with inline imports and inline math
+- detail: run_ldo (orchestrator.py:97-490) is a single function that sequentially performs: input prep, adaptive-K, float32 policy, envelope guard, disease-prior assembly, lagged fit, adaptive-precision controller, exact-certifies-approx, temporal holdout, stability select, link readout, disease provenance, residual scan, convergence gate, certgates, certify, LiNGAM orientation, Rung-2 ITS, spatial BYM fields, promotion backstop, Kronecker telemetry, and a ~80-line diagnostics dict. It uses ~15 function-local imports (orchestrator.py:154,168,207,229-230,245,303,327,338,352,376,387,412) and inlines AR(1) phi estimation math (orchestrator.py:391-400) that belongs in kron.py. Stage sequencing, policy decisions, and numerics are all fused with no per-stage boundary.
+- evidence: orchestrator.py:97-490 single run_ldo; inline `_phi` AR(1) estimation orchestrator.py:391-400; 15 local imports scattered through the body
+- recommendation: Decompose into a typed pipeline of stage functions (prepare→fit→certify→orient→escalate→telemetry) each taking/returning a typed intermediate, with the AR(1) phi estimation moved into kron.py. run_ldo becomes a thin driver; imports move to module top.
+- risk_if_ignored: No stage can be tested or reused in isolation; every change touches the same 390-line function, and the diagnostics dict silently diverges from what stages actually ran (a stage that raises inside a bare try/except leaves a stale diagnostic).
+
+**`LDO-B02` — MEDIUM — missing_data_contract** — W producer under-fills the contract: docstring promises §3.12 n_eff but assemble.py only maps a fixed provenance-to-weight lookup
+- detail: assemble.py:5-7 states W is 'drawn from the panel's provenance state (and, when available, the §3.12 state tensor's n_eff)'. The implementation maps manifest.state through the static _STATE_WEIGHT dict (assemble.py:51-60, 153) — a per-state constant. n_eff, denom_fragility, and provenance_risk (the actual §3.12.3 uncertainty quantities) never enter W. So even the produced W is a coarse categorical proxy, not the continuous reliability the contract claims.
+- evidence: assemble.py:51-60 `_STATE_WEIGHT` static dict; assemble.py:153 `replace_strict(_STATE_WEIGHT, default=0.0)`; docstring assemble.py:5-7 claims n_eff usage that no code implements
+- recommendation: Either wire the §3.12 Q-tensor n_eff/denom_fragility into a continuous W at assemble time (one function, e.g. build_reliability_tensor(panel, q_tensor)), or correct the docstring to admit W is a provenance-state proxy only. Pair with LDO-B01 so the contract is both fully produced and consumed.
+- risk_if_ignored: The one place that could carry real per-cell uncertainty degrades it to 8 discrete buckets; downstream weighting (once wired) would still be blind to Kish-effective-sample-size differences, misrepresenting reliability.
+
+**`LDO-B04` — MEDIUM — layering_violation** — residual_scan reaches into hsic.py private helpers (_bandwidth, _np_rff_features, _np_nystrom_features)
+- detail: residual_scan.py:28-32 imports the underscore-private symbols `_bandwidth`, `_np_nystrom_features`, `_np_rff_features` directly from hsic.py. These are the real cross-module dependency, while hsic.py's PUBLIC API (run_hsic_scan, numpy_kernel_hsic_permutation_test, select_hsic_mode, linear_hsic_statistic, permutation_p_value) has zero production callers. The module boundary is inverted: the public surface is dead in production and the private internals are the load-bearing contract.
+- evidence: residual_scan.py:28-32 `from pegasus.ldo.hsic import (_bandwidth, _np_nystrom_features, _np_rff_features)`; grep shows run_hsic_scan/select_hsic_mode/linear_hsic_statistic referenced only from tests
+- recommendation: Promote the genuinely-shared primitives to a public HSIC kernel API (rename without underscore, add to hsic.__all__) and route residual_scan through them; remove the test-only public entrypoints that no production path uses (or wire them as the real entrypoint). Establish one public HSIC boundary.
+- risk_if_ignored: Private helpers can be renamed/refactored freely by convention, silently breaking the residual scan; and the untested public API rots, so nobody can tell which HSIC entrypoint is authoritative.
+
+**`LDO-B05` — MEDIUM — orphan_deadcode** — inverse_gaussianize (the §III.5 native-scale back-map) has zero callers
+- detail: margins.py:66 inverse_gaussianize implements the inverse copula map F_j^{-1}(Phi(z)) — the '§III.5 mapped back' round-trip to native units — and is exported in margins.__all__ (margins.py:149). grep across src+tests finds no caller: the only reference is its own __all__ entry. The native-scale readout it is supposed to enable (predicted count, counterfactual level) is never produced anywhere in the LDO.
+- evidence: grep 'inverse_gaussianize' returns only margins.py:149 (__all__) and the def; no src or test caller
+- recommendation: Either wire it into the readout path that produces native-scale predictions/counterfactuals, or delete it and its __all__ export. If §III.5 native readout is genuinely required, this orphan signals the feature is unbuilt.
+- risk_if_ignored: A documented capability (native-scale interpretability) silently does not exist; readers of the code/docs believe the round-trip is available when no path invokes it.
+
+**`LDO-B06` — MEDIUM — orphan_deadcode** — Difference-in-differences (DiDResult, difference_in_differences) is dead in the causal ladder — only ITS is wired
+- detail: quasi.py:77-91 defines DiDResult and difference_in_differences and exports both (quasi.py:175). But the Rung-2 auto-escalation escalate_rung2_its (quasi.py:116) only runs interrupted_time_series + negative_control_break_fraction; difference_in_differences is never called in src or tests. The DiD estimator advertised by the causal module is not actually invoked by the ladder.
+- evidence: grep 'difference_in_differences' / 'DiDResult' → only quasi.py (def + __all__); escalate_rung2_its at quasi.py:116-171 calls interrupted_time_series and negative_control_break_fraction only
+- recommendation: Wire difference_in_differences into escalate_rung2_its for edges with an identifiable control/treatment split, or drop DiDResult/difference_in_differences from quasi.py and its __all__. Consolidate the Rung-2 estimators behind one escalation entrypoint that actually reaches every exported estimator.
+- risk_if_ignored: Silent capability gap: the causal ladder claims a DiD rung it never executes, so 'Rung-2 quasi-experimental' output is ITS-only despite the code implying a broader escalation.
+
+**`LDO-B08` — MEDIUM — duplication** — Graph Laplacian L = D - W is hand-rolled at four independent sites with no shared helper
+- detail: The combinatorial Laplacian `diag(row-sums) - A` is re-implemented separately in disease_prior.py:73 (disease_laplacian_matrix), disease_prior.py:79 (a second variant), lowrank.py:319 (_lag_chain_laplacian), and geo/spatial_graph.py:113 — four copies of the same 2-line math, each with its own clipping/symmetry conventions. There is no single laplacian(A) utility, so each site can drift (e.g. weighted vs unweighted, self-loop handling).
+- evidence: disease_prior.py:73 `np.diag(W.sum(axis=1)) - W`; disease_prior.py:79 `np.diag(A.sum(axis=1)) - A`; lowrank.py:319 `np.diag(W.sum(axis=1)) - W`; geo/spatial_graph.py:113 comment 'L = D - W'
+- recommendation: Add one `combinatorial_laplacian(A)` primitive (e.g. in geo/spatial_graph.py or a small linalg util) and call it from all four sites; the GMRF prior, disease prior, and lag-chain prior then share one definition.
+- risk_if_ignored: The three regularization operators (spatial L_W, disease L_D, lag-chain L) can silently disagree on normalization/self-loop handling, making the combined penalty subtly non-comparable across axes with no single place to audit.
+
+**`LDO-B07` — LOW — orphan_deadcode** — build_spatial_precision (dense GMRF) is a production orphan superseded by build_spatial_precision_sparse
+- detail: precision.py:44 build_spatial_precision is exported at the top of ldo.__init__ (__init__.py:5,42) as a headline symbol, but every PRODUCTION call site uses build_spatial_precision_sparse (kron.py:167, lags.py:113, spatial_field.py:93) — and the dense version itself just wraps the sparse one and .toarray()s it (precision.py:51). Its only non-self references are in tests. It densifies an SxS matrix that at national S is exactly what the sparse path exists to avoid.
+- evidence: precision.py:51 `return build_spatial_precision_sparse(...).toarray()`; callers of dense form are only tests (test_ldo_spatial_whitening.py); all src callers use _sparse
+- recommendation: Demote build_spatial_precision to a private/test helper (or delete and inline .toarray() in the tests), and keep build_spatial_precision_sparse as the single public spatial-precision constructor in the ldo API surface.
+- risk_if_ignored: A dense O(S^2) constructor sits in the public API inviting an accidental national-scale call that OOMs; the two-constructor surface obscures which is canonical.
+
+**`LDO-B10` — LOW — layering_violation** — orchestrator imports certgates._edge_keys (a private symbol) across the module boundary
+- detail: orchestrator.py:312 does `from pegasus.ldo.certgates import _edge_keys` to feed base_keys into regularization_path_agreement. Reaching a sibling module's underscore-private helper couples the orchestrator to certgates' internals; the same _edge_keys is also the internal building block of regularization_path_agreement (certgates.py:51), so the orchestrator is duplicating the key-extraction the callee could do itself.
+- evidence: orchestrator.py:312 `from pegasus.ldo.certgates import _edge_keys`; certgates.py:26 def _edge_keys; certgates.py:51 uses it internally
+- recommendation: Have regularization_path_agreement accept the `lagged` fit and derive base_keys internally (it already calls _edge_keys on refits), removing the private cross-module import from the orchestrator. Keep _edge_keys private to certgates.
+- risk_if_ignored: The orchestrator breaks if certgates renames its private helper; the boundary between orchestration and the certification-gate internals is not enforced.
+
+**`LDO-B11` — LOW — orphan_deadcode** — dispersion_screen exported from exhaustiveness but never used, even internally
+- detail: exhaustiveness.py:39 dispersion_screen is exported (exhaustiveness.py:84) but the drill-down decision should_drill_down (exhaustiveness.py:46) only consults heterogeneity_screen and max_subgroup_screen (exhaustiveness.py:55-56). dispersion_screen has no caller in src or tests — the count-dispersion criterion for drilling deeper is defined and advertised but wired into nothing.
+- evidence: exhaustiveness.py:39 def dispersion_screen; exhaustiveness.py:55-56 should_drill_down uses only het + max; grep finds no other reference than __all__
+- recommendation: Either incorporate dispersion_screen into should_drill_down's decision (it is the count-overdispersion signal) or remove it and its export.
+- risk_if_ignored: The bounded-exhaustiveness drill-down silently ignores overdispersion as a refinement trigger, so heterogeneous count structure that only shows as dispersion is never drilled — a false-negative in the coverage guarantee.
+
+**`LDO-B12` — LOW — orphan_deadcode** — pirs/spatial.py Moran-based spatial-effect selector is orphaned relative to the live LDO
+- detail: pirs/spatial.py defines select_spatial_effect_mode / SpatialEffectSelection driven by moran_i (pirs/spatial.py:24-44), but no module outside the pirs/ package imports pegasus.pirs (grep for 'pegasus.pirs' outside pirs/ returns nothing). The live LDO does its own spatial handling via precision.build_spatial_precision_sparse and ldo/spatial_field.py; the Moran-gated selector is stranded legacy PIRS logic parallel to, but disconnected from, the LDO spatial path — an instance of the Moran's-I duplication pattern living outside the wired estimator.
+- evidence: grep 'pegasus.pirs' outside pirs/ → no hits; pirs/spatial.py:24 select_spatial_effect_mode gated on moran_i; LDO spatial path is precision.py + spatial_field.py
+- recommendation: If Moran-gated spatial-mode selection is still desired, fold it into ldo/spatial_field.py (the live effect-modification surface) as the single spatial-effect decision; otherwise delete the orphaned pirs/spatial.py selector with the rest of the retired PIRS slice-zoo.
+- risk_if_ignored: A second, disconnected spatial-decision implementation persists as apparent capability; future maintainers may wire or trust it, reintroducing the Moran duplication the refactor aimed to eliminate.
+
+
+### efg-decomposition
+
+**`EFG-01` — HIGH — orphan_deadcode** — q_tensor.compute_q_state / classify_q_state / provenance_risk are the declared canonical Q-tensor but have ZERO production callers
+- detail: q_tensor.py presents itself as the single source of truth for the MSD §3.12 Q-state (compute_q_state at line 178, classify_q_state at 34 with the n_eff>=100/denom_fragility<0.05 thresholds, provenance_risk at 17). A full-repo grep for these three symbols returns hits ONLY inside q_tensor.py plus tests/ (test_efg_q_tensor.py, test_qtensor_kish_neff.py, test_efg_contracts.py). No src/ module calls them. The live compile path (compile_attach._q_row, line 289) instead re-derives every Q field by hand and reads a pre-set field.state, never invoking classify_q_state's thresholds.
+- evidence: grep 'compute_q_state|classify_q_state|provenance_risk(' over src → only q_tensor.py self-references; callers only in tests/. compile_attach._q_row line 329 recomputes provenance_risk inline as '0.0 if "official"... else 0.5' rather than calling q_tensor.provenance_risk.
+- recommendation: Make compile_attach._q_row call q_tensor.compute_q_state (passing the aligned vector/denominator) so the QState schema, provenance_risk ladder, and classify_q_state thresholds are the ONE computed path; delete the hand-rolled dict-building in _q_row. Alternatively delete q_tensor.py's compute/classify if the live inline logic is authoritative — but do not keep both.
+- risk_if_ignored: The 'canonical' verified/fragile/quarantined thresholds (n_eff>=100 etc.) are tested green but never run on real data; the actual dashboard-safety gate is set by unrelated inline rules, so a field the spec would quarantine can ship as verified with no test catching the divergence.
+
+**`EFG-02` — HIGH — duplication** — Three independent, divergent FieldState classifiers for the same verified/fragile/quarantined decision
+- detail: The same q-state decision is implemented three ways: (1) q_tensor.classify_q_state (n_eff/denom_fragility/missingness/risk thresholds, orphaned per EFG-01); (2) materialize.materialize_candidate_field line 225: state = 'fragile' if warnings or missing_rate>0.5 else 'verified'; (3) materialize sets bare literals state='verified' at lines 334, 613 and a mode branch at 520. None of the materialize paths consult classify_q_state. compile_attach._q_row then emits the state verbatim from field.state without reclassifying.
+- evidence: materialize.py:225 inline rule; materialize.py:334/520/613 literal state='verified'; q_tensor.py:34 classify_q_state (unused); compile_attach.py:337 'state': field.state.value passthrough.
+- recommendation: Collapse to one classifier: have every field-producing site (materialize + any RN/bridge kernel that sets state) call q_tensor.classify_q_state with the real support metrics. Remove the literal 'verified' defaults and the ad-hoc missing_rate>0.5 rule.
+- risk_if_ignored: Fields are declared 'verified' at materialization by fiat (literal string), so the reliability gate is effectively bypassed; a source column with catastrophic n_eff or Moran autocorrelation can silently reach the LDO/dashboard as trustworthy.
+
+**`EFG-07` — HIGH — missing_data_contract** — FieldNode.support/axes are untyped dict; producers flatten typed candidates into stringly-keyed dicts and consumers re-probe ~15 alias keys to recover them
+- detail: core/schemas.py FieldNode declares support: dict and axes: dict (lines 114-115) — no schema. materialize.support_from_substrate_candidate (171) flattens the typed SubstrateFieldCandidate into keys like artifact_path/column/time_column. Downstream executor/support.py then guesses those back: _source_path (139) probes field.path, artifact_path, source_path, events_path, sidra_facts_path, path; _source_column (153) probes column, value_column, source_column, canonical_field, raw_field; _declared_axis_column (169) probes ~8 axis aliases. There are 136 support.get(...) probes across efg/. The typed→untyped→re-guess round-trip is the whole seam.
+- evidence: schemas.py:114 'support: dict'; materialize.py:171 producer; executor/support.py:141-166 alias-probing consumers; 136 '.support.get(' occurrences in efg/.
+- recommendation: Introduce a typed FieldSupport pydantic/dataclass (source_path, source_column, time_column, geography_column, n_events, n_denom, denom_fragility, moran_i, ...) as the enforced contract on FieldNode. Have materialize populate it and executor/compile_attach read typed attributes, deleting the alias-probing helpers.
+- risk_if_ignored: A producer that writes a source path under a key no consumer probes yields a field that silently materializes empty / falls to the else-branch executor path with no error; the untyped contract makes every rename a silent break.
+
+**`EFG-08` — HIGH — god_module_decomposition** — executor/kernels.py (838 LOC) crams 10 unrelated tensor-computation kinds into one file dispatched by operator string
+- detail: kernels.py holds count (_count_tensor 76), functional (_functional_tensor 205), sum/source-field (235/257), RN ratio (_compute_rn_ratio 324), race-bridge (_compute_race_bridge_tensor 491 + helpers 419-468), generic bridge (_compute_bridge_tensor 584), sidra-population (645), sidra-context (667), sidra-demographic (709), and population-solver (775) tensors — each a distinct subsystem with its own math. run.py dispatches them via a string if/elif ladder (op.upper()=='RN', op=='sidra_population_total_anchor', op.startswith('Bridge')...) at run.py:114-138.
+- evidence: kernels.py 838 lines, defs listed at grep of ^def; run.py:115-138 stringly-typed dispatch ladder.
+- recommendation: Split kernels.py into a package (kernels/count.py, kernels/ratio.py, kernels/bridge.py, kernels/sidra.py, kernels/population.py) and replace run.py's if/elif ladder with a typed operator→kernel registry dict keyed by a FieldOperator enum, so a new operator registers one entry instead of editing a ladder.
+- risk_if_ignored: The 838-LOC file is a merge-conflict and cognitive bottleneck; the string ladder means a mistyped/renamed operator silently falls to the else _execute_non_rn branch and produces a wrong tensor with no dispatch error.
+
+**`EFG-03` — MEDIUM — duplication** — Moran's I implemented twice with different weight models (ordering-contiguity in q_tensor vs geography-adjacency in compile_attach)
+- detail: q_tensor._moran_contiguity (line 116) computes Moran's I over 1-D rook/chain contiguity of tensor cell order (a proxy, W=2(n-1)). compile_attach._moran_i_for_group (line 115) + _moran_i_adjacency (136) compute a geography-aware Moran's I over a real municipality adjacency dict, per-year-weighted. Two full implementations of the same statistic with divergent neighbour definitions; the q_tensor one is only reachable via the orphaned compute_q_state (EFG-01), so its result never ships, yet it is maintained and tested.
+- evidence: q_tensor.py:116 _moran_contiguity ('ordering proxy, not geography-aware'); compile_attach.py:115 _moran_i_for_group / :136 _moran_i_adjacency (adjacency-based). compile_attach imports only _kish_effective_n and _moran_corrected_n_eff from q_tensor (line 18) — NOT the Moran computation.
+- recommendation: Move a single Moran's I into a shared module (e.g. geo.spatial_graph or a new efg.diagnostics) that takes an optional adjacency and falls back to ordering-contiguity, and have both q_tensor and compile_attach call it. Delete _moran_contiguity's duplicate body.
+- risk_if_ignored: Two Moran implementations drift; a fix to the geography-aware version (the live one) silently leaves the proxy wrong, and the honesty warning 'moran_i_ordering_contiguity_proxy' vs the adjacency path diverge in provenance.
+
+**`EFG-04` — MEDIUM — duplication** — cv / temporal_roughness / spatial_entropy each implemented twice (list-based in q_tensor, panel-based in compile_attach)
+- detail: q_tensor defines _cv (80), _temporal_roughness (92), _spatial_entropy (101) over plain float lists. compile_attach re-defines _temporal_roughness (83) and _spatial_entropy (98) over polars panels, and inlines the CV formula again inside _vector_diagnostics (line 243-244: var = sum((v-mean)**2)/(n_obs-1)). Same three diagnostics, two codebases, subtly different (q_tensor uses numpy ddof=1; compile_attach uses hand-rolled loops).
+- evidence: q_tensor.py:80/92/101; compile_attach.py:83/98 and inline CV at :243. Both compute Σ(x-x̄)²/(n-1) coefficient of variation and normalized spatial entropy independently.
+- recommendation: Extract cv/temporal_roughness/spatial_entropy into one diagnostics module operating on the aligned vector (+optional panel keys) and delete both duplicate sets. The panel-aware variant can wrap the vector variant after alignment.
+- risk_if_ignored: Numeric drift between the tested (q_tensor) and shipped (compile_attach) diagnostics; a spec fix applied to one leaves the other stale, and the Q_tensor.parquet reports metrics that don't match the contract-tested definitions.
+
+**`EFG-05` — MEDIUM — orphan_deadcode** — efg materialization-manifest write/attach chain is a parallel path reachable only from CLI, disjoint from the live build_efg path
+- detail: Two entry points consume the same substrate manifest divergently. build_efg.py (line 216) calls load_substrate_bundle_for_efg directly. A whole separate chain — build_efg_materialization_manifest (144) → write_efg_materialization_manifest (158) → attach_efg_materialization_summary_to_run (172), plus efg_materialization_summary (102) and substrate_bundle_from_manifest (75) — is wired only through workflows/construct/efg_materialize.py, which itself is called only from two cli.py commands (efg_materialize_substrate_manifest at cli.py:567). The live compile/build pipeline never touches it.
+- evidence: grep across src: build/write/attach_efg_materialization_* referenced only in efg_materialize.py; efg_materialize.py referenced only in cli.py:567/574/588. build_efg.py uses load_substrate_bundle_for_efg but none of the manifest-summary functions.
+- recommendation: Either fold materialization-summary emission into the live attach_autonomous_efg_to_run bundle path (single materialization contract), or explicitly demote this to a documented standalone CLI utility. Consolidate efg_materialization_summary with materialize.SubstrateMaterializationResult.as_manifest which computes overlapping counts.
+- risk_if_ignored: A second, CLI-only materialization summary can silently diverge from what the real pipeline produces; consumers reading the manifest get counts/exclusions that never reflect an actual run.
+
+**`EFG-06` — MEDIUM — orphan_deadcode** — materialize.materialized_field_nodes and compile_attach._moran_proxy are pure orphans
+- detail: materialize.materialized_field_nodes (public, line 665) has no src caller — referenced only in tests/integration/test_slice14a. compile_attach._moran_proxy (line 212) is self-documented 'Deprecated placeholder kept only for import stability' with body 'del vector,panel; return None' and has zero callers anywhere (only its own def).
+- evidence: grep materialized_field_nodes over src → only materialize.py def + one integration test; grep _moran_proxy over src → only its def at compile_attach.py:212.
+- recommendation: Delete _moran_proxy outright (nothing imports it, so the 'import stability' rationale is false). Delete materialized_field_nodes or, if the test asserts a real contract, route the live path through it instead of duplicating node-building.
+- risk_if_ignored: Dead public API accretes; the test on materialized_field_nodes passes green while the production path uses a different code route, so the test guards nothing real (silent-failure risk the project explicitly flags).
+
+**`EFG-09` — MEDIUM — god_module_decomposition** — compile_attach.py (674 LOC) mixes execution orchestration, full Q-tensor recomputation, ~10 row serializers, and run-bundle attachment
+- detail: compile_attach.py owns four distinct concerns: (a) it drives execute_efg_result; (b) it recomputes the entire Q-tensor (Moran/n_eff/cv/entropy/roughness via _vector_diagnostics 230, duplicating q_tensor per EFG-01/03/04); (c) it defines ~10 table serializers (_v_row 265, _q_row 289, _edge_row 353, _warning_rows 365, _tensor_warning_row 381, _dictionary_row 395, _failed_row 415, _quarantined_row 432, _race_bridge_summary_rows 442, _population_diagnostics_rows 466); (d) it writes the run bundle (attach_autonomous_efg_to_run 533). 36 *_row/_rows references.
+- evidence: compile_attach.py defs at grep; imports OutputBundleManager + execute_efg_result + storage.write_table (lines 16-22). Q-diagnostics span 83-262, serializers 265-488, attach 533.
+- recommendation: Extract the diagnostics block (83-262) into the shared efg diagnostics module from EFG-03/04, extract the row serializers into an output-schema module (they define parquet table shapes, an output concern), leaving compile_attach as a thin orchestrator that calls execute → diagnostics → serialize → bundle.
+- risk_if_ignored: The module's diagnostics half silently diverges from q_tensor; its serializer half couples the EFG cluster to output-table schemas, so a schema change forces edits in the executor cluster and vice versa.
+
+**`EFG-10` — MEDIUM — god_module_decomposition** — dag/spine.py _build_efg_base is a single ~560-line function building the entire graph
+- detail: dag/spine.py:102 _build_efg_base runs from line 102 to ~664 (the file's only other top-level items are the EFGResult dataclass at 44 and a thin build_efg wrapper at 664). All node creation, edge derivation, race-bridge appending, alignment (4 align_fields call sites at 423/491/530/560), precompression, and domain-summary assembly live in one function body.
+- evidence: spine.py grep: only _build_efg_base (102), EFGResult (44), build_efg (664); align_fields invoked 4x within the single function.
+- recommendation: Decompose _build_efg_base into named stages (materialize_nodes → derive_ratios → append_race_bridges → align → precompress → summarize), each testable in isolation, orchestrated by a short driver. Helpers already partly exist in dag/helpers.py — pull the inline logic out to join them.
+- risk_if_ignored: A 560-line function is untestable at the seam level and hides ordering bugs (e.g. an alignment that must precede precompression); any change risks unrelated regressions across the whole graph build.
+
+**`EFG-11` — MEDIUM — scattered_logic** — n_eff (Kish + Moran correction) is centralized but the surrounding diagnostic assembly is copy-pasted between q_tensor.compute_q_state and compile_attach._vector_diagnostics
+- detail: The primitive n_eff pieces (_kish_effective_n, _moran_corrected_n_eff) ARE shared — compile_attach imports them from q_tensor (line 18), a good consolidation. But the assembly logic that selects weights, computes Moran, and calls the correction is duplicated: q_tensor.compute_q_state:203-220 (weights = denom_values if denom_values else values; n_eff = _moran_corrected_n_eff(_kish_effective_n(weights), moran_i)) and compile_attach._vector_diagnostics:252-253 (_kish = _kish_effective_n(observed); n_eff = _moran_corrected_n_eff(_kish or n_obs, moran_i)). Same recipe, two bodies, differing weight-selection (denominator-aware vs observed-only).
+- evidence: q_tensor.py:217-218 vs compile_attach.py:252-253; shared primitives imported at compile_attach.py:18. The comment block compile_attach.py:224-227 documents the old local n_eff was removed but the assembly recipe itself was re-inlined, not shared.
+- recommendation: Promote the full 'compute n_eff from a vector (+optional denominator) and adjacency' recipe into one function in q_tensor (e.g. effective_sample_size(values, denom, moran_i)) and call it from both compute_q_state and _vector_diagnostics. The weight-selection divergence (denom-aware vs observed-only) is itself a latent bug to reconcile.
+- risk_if_ignored: The live path (compile_attach) ignores the denominator when choosing Kish weights while the orphaned canonical path uses it; for rate/proportion fields the shipped n_eff is computed on the wrong weights (§3.12.3 says denominator), understating spatial-autocorrelation deflation with no test flagging it.
+
+
+### denominators/reconstruction (population solver backends)
+
+**`RD-01` — HIGH — orphan_deadcode** — Three registered population-solver backends (ADMM, block-coordinate, state-space) are unreachable dead code
+- detail: solve_population_admm (sparse_admm.py:77), solve_population_block_coordinate (block_coordinate.py:20) and solve_population_state_space_smoother (state_space.py:154) are each dispatched by solve_population_tensor_problem (solvers.py:35-47) ONLY when a solver_id maps to backend prefixes 'sparse_block_coordinate'/'sparse_admm'/'state_space_smoother'. But the sole live caller is the orchestrator (orchestrator.py:461 solve_population_tensor_blocked and :721), which slices localities to <2M cells and re-selects with solver_id=None. select_population_solver(mode,None) returns the FIRST 'active' spec in POPULATION_SOLVERS insertion order (registries/population.py:159-163) = projected_gradient_small for both modes; the n_cells>threshold sort (line 160-161) never fires because blocks are sub-threshold. No production caller ever passes sparse_block_coordinate_*, sim_informed_sparse_admm_v1, or state_space_smoother_reduced_v1. All three are pure-Python-list implementations (per-element list comprehensions over problem.n_cells, e.g. sparse_admm.py:116-140, block_coordinate.py:44-62) that would be catastrophically slow at national scale if they ever were selected.
+- evidence: solvers.py:29-48 dispatch; registries/population.py:159-163 select-first-active; orchestrator.py:461,721 only callers pass solver.solver_id which is always projected_gradient_small; grep shows sim_informed_sparse_admm_v1/sparse_block_coordinate_v1/state_space_smoother_reduced_v1 selected nowhere outside their own defs
+- recommendation: Either delete sparse_admm.py, block_coordinate.py, state_space.py (smoother) and their registry specs, OR wire the n_cells-based selection so the sparse backend is genuinely chosen for the un-blocked national path. Collapse solver dispatch into a single registry->backend table with a test asserting every registered active backend is reachable by select_population_solver.
+- risk_if_ignored: Registry advertises four solver bands (max_cells up to 250M) as 'active'; a future caller trusting the registry could select a backend that has never run at scale, silently taking a pure-Python path that hangs or a smoother that was never validated. Dead backends also rot (see RD-06 state_space None-check bug).
+
+
+### denominators/reconstruction (projection operators)
+
+**`RD-02` — HIGH — duplication** — The population projection operator is implemented twice (pure-Python and numpy) for population, migration, and simplex
+- detail: Every constraint-projection primitive exists in two parallel copies in projected_gradient.py: population projection _project_population (line 42, Python lists + nested s/t loops) vs _np_project_population (line 174, numpy reshape); simplex _simplex_projection (line 22, sorted-list) vs _simplex_project_rows (line 151, vectorized Duchi); migration _project_migration (line 103) vs _np_project_migration (line 188). The two population/simplex copies must stay bit-compatible (both claim Duchi/Held simplex) or the fast and slow paths diverge, yet nothing enforces it. The Python copies survive ONLY to serve the three orphaned solvers (RD-01) plus a rare hard-anchor/migration-total fallback (_fast_projection_supported, line 139); the live SIDRA build always hits the numpy path.
+- evidence: projected_gradient.py:22 vs 151 (simplex), :42 vs 174 (population), :103 vs 188 (migration); _np_project_population used at :340,366; _project_population reused by block_coordinate.py:43, sparse_admm.py:127, state_space.py:212
+- recommendation: Make the numpy projections the single source of truth. Delete the Python-list _project_population/_project_migration/_simplex_projection/_bounded_sum_projection once RD-01 orphans are removed; keep the numpy versions in one projections.py module. If a hard-anchor path is still needed, implement it once in numpy behind the same function.
+- risk_if_ignored: A change to the closure/simplex math must be made in two places; miss one and the fast path (production) and slow path (tests/fallback) silently disagree, so a passing test on the Python path certifies behavior the national run never executes.
+
+
+### denominators/reconstruction (CTR kernel)
+
+**`RD-03` — HIGH — orphan_deadcode** — The CTR 'unification' kernel is orphaned for its two headline instances and its certification gate
+- detail: denominators/reconstruction/__init__.py exports a full CTR API (CTRProblem, solve_ctr, evaluate_ctr, population_ctr_instance, age_bin_disaggregation_instance, certify_ctr, assert_ctr_verified_promotion_allowed, CTRCertification*), advertised as the object that unifies the population tensor, age-bin disaggregation, and ST-DFM (problem.py:1-15). Grep shows NOBODY imports from that __init__. The only live CTR use is migration.py importing solve_ctr from .problem and migration_flow_instance/net_flow_operator from .instances directly. population_ctr_instance (instances.py:104) and age_bin_disaggregation_instance (instances.py:135) have zero callers; certify_ctr / assert_ctr_verified_promotion_allowed / the whole certify.py have zero callers. The 'population tensor is the canonical CTR instance' claim is theater: the real population path is solve_population_tensor_blocked, never solve_ctr(population_ctr_instance).
+- evidence: grep: no importer of `from pegasus.denominators.reconstruction import`; population_ctr_instance/age_bin_disaggregation_instance/certify_ctr/CTRCertification* all zero external callers; migration.py:35,34 import from .problem/.instances directly bypassing __init__
+- recommendation: Either wire population through the CTR kernel (so there is one solver contract) or drop the unification pretense: keep only migration_flow_instance + net_flow_operator + the generic solve_ctr, delete population_ctr_instance, age_bin_disaggregation_instance, and the entire orphaned certify.py, and shrink __init__ to the exports migration.py actually uses.
+- risk_if_ignored: A large 'canonical kernel' that the canonical case does not use invites drift: the population loss (loss.py) and the CTR native wrapper can diverge with no test catching it, and readers trust a unification that is not load-bearing.
+
+
+### denominators/reconstruction/certify.py vs she/stdfm/certification.py
+
+**`RD-04` — HIGH — missing_api_boundary** — CTR certification is a parallel copy of ST-DFM certification, unenforced, so reconstructed tensors reach substrate uncertified
+- detail: certify.py builds CTRCertificationPolicy/Row/certify_ctr as a near-clone of STDFMCertificationPolicy/Row/certify_stdfm_metrics (same verified/fragile MAPE + variance-ratio + stability gate, same 'dashboard_safe only if verified and uncertainty_declared', same B_reconstructed substrate class). It even imports STDFMCertificationPolicy (certify.py:19) to 'reuse thresholds'. But certify_ctr has zero callers, so the §II.3.1/§10 abort it promises ('reconstructed tensor promoted to verified without holdout certification or propagated uncertainty') is never actually run on the population tensor output. The population build emits DenominatorContract state directly (schema.py:126 official_sidra_anchor_contract) with no CTR certification.
+- evidence: certify.py:19 imports she.stdfm policy; certify_ctr/assert_ctr_verified_promotion_allowed zero callers (grep); parallel structure to she/stdfm/certification.py:42-102 (STDFMCertificationPolicy/certify_stdfm_metrics)
+- recommendation: Collapse to one certification contract: a single reconstruction-certification module parameterized by policy (STDFM and CTR share it), and actually invoke it at the point reconstructed tensors are promoted (orchestrator emission). If CTR certification is not meant to gate population output, delete certify.py rather than leave a dormant unenforced gate.
+- risk_if_ignored: The audited symptom exactly: a built certification gate that never fires means reconstructed population denominators can be promoted dashboard-safe without the holdout/uncertainty check the architecture mandates — a silent correctness/compliance failure.
+
+
+### denominators/reconstruction (private-symbol coupling)
+
+**`RD-05` — MEDIUM — layering_violation** — Orphaned solvers reach into projected_gradient's private projection/init helpers across module boundaries
+- detail: block_coordinate.py:10-16, sparse_admm.py:14-20 and state_space.py:11 import the underscore-private helpers _initial_population, _migration_bounds, _project_migration, _project_population, _project_migration from projected_gradient.py. Underscore names are the module's private surface, yet three sibling modules depend on them, so projected_gradient cannot refactor its internals without breaking the (already-orphaned) siblings. There is no typed 'projection service' interface; the coupling is by convention through privates.
+- evidence: block_coordinate.py:10-16 and sparse_admm.py:14-20 both `from ...projected_gradient import (_initial_population,_migration_bounds,_project_migration,_project_population)`; state_space.py:11 imports _initial_population,_project_population
+- recommendation: Extract the projection + warm-start primitives into a public projections.py module with a small typed API (project_population, project_migration, initial_population, migration_bounds) and have every solver depend on that, not on another solver's privates. (Naturally resolved if RD-01/RD-02 delete the orphan solvers and de-duplicate the projectors.)
+- risk_if_ignored: Any cleanup of projected_gradient's internals silently breaks importers that a grep for public API would miss; the private-import web is exactly the 'no clear module boundary' pattern the audit targets.
+
+
+### denominators/reconstruction/state_space.py
+
+**`RD-06` — MEDIUM — orphan_deadcode** — State-space smoother carries a stale None-anchor check after schema switched anchors to NaN numpy arrays
+- detail: schema.py __post_init__ (line 80-92) now normalizes anchors to a numpy float array where absent = NaN (was None). state_space.py _measurement (line 114-118) still guards `if value is None or not math.isfinite(value)` — the `value is None` branch is dead because a numpy array element is never None. This is harmless only because the isfinite check catches NaN, but it is a symptom of the orphan drifting from the live data contract; the whole smoother (RD-01) was never re-validated after the tuple->numpy schema change.
+- evidence: schema.py:85 anchors stored via _to_f64_array (None->NaN); state_space.py:115-117 `if value is None or not math.isfinite(value)`; build_population_state_space:85 already switched to math.isfinite on numpy elements, _measurement did not
+- recommendation: When RD-01 is resolved (delete or wire the smoother), drop the None check. If kept, align _measurement with the numpy/NaN contract and add a single test that exercises it against a schema-constructed problem so drift is caught.
+- risk_if_ignored: Confirms orphaned backends silently diverge from the current data contract; if the smoother were ever selected, subtle mismatches between its assumptions and the NaN-sentinel schema could mis-handle missing anchors.
+
+
+### denominators/reconstruction (schema/telemetry patterns)
+
+**`RD-07` — MEDIUM — duplication** — Solver-telemetry + as_manifest boilerplate is duplicated across the population and ST-DFM schemas
+- detail: PopulationSolverTelemetry (schema.py:102) and STDFMSolverTelemetry (she/stdfm/schema.py:45) are near-identical dataclasses (converged, iterations, initial/final objective, relative_objective_change, objective_terms) each with a hand-written as_manifest that just dict-copies its own fields. The same as_manifest-dict-copy pattern is re-implemented on PopulationTensorDiagnostics (schema.py:197), PopulationTensorResult (schema.py:241), STDFMInputSchema/OutputSchema (she/stdfm/schema.py:97,128), SparsePopulationPlan (sparse_admm.py:32), PopulationStateSpace (state_space.py:33). Every new field must be added in two places (the field and its manifest key), a well-known drift source.
+- evidence: schema.py:102-123 PopulationSolverTelemetry.as_manifest vs she/stdfm/schema.py:45-70 STDFMSolverTelemetry.as_manifest — same fields, parallel manifest copies
+- recommendation: Introduce one SolverTelemetry base (or a generic as_manifest via dataclasses.asdict/field introspection) shared by both reconstruction subsystems, and a single manifest-serialization helper so as_manifest is not re-hand-written per dataclass.
+- risk_if_ignored: Add a telemetry field and forget one manifest copy: the run manifest silently omits it, and diagnostics comparisons between the two solver families are apples-to-oranges.
+
+
+### denominators/reconstruction (exported orphans)
+
+**`RD-08` — LOW — orphan_deadcode** — Public helpers dense_national_abort_check, _ilr_np, iter_coordinates are exported/retained with zero callers
+- detail: dense_national_abort_check (solvers.py:51) is in solvers.py __all__ (line 204) but has zero callers. _ilr_np (loss.py:104) is a self-described 'back-compat wrapper' with zero callers (superseded by _ilr_coords). iter_coordinates (state_space.py:71) has zero callers. These are silent-failure surface: exported names imply a supported API that nothing exercises.
+- evidence: grep: dense_national_abort_check only its own def + __all__; _ilr_np only its own def; iter_coordinates only its own def
+- recommendation: Delete _ilr_np and iter_coordinates; drop dense_national_abort_check from __all__ and remove it (assert_dense_population_tensor_allowed is the real entry). Add a lightweight vulture/__all__-coverage check for this package.
+- risk_if_ignored: Exported-but-dead helpers accrete; each is a future maintainer's trap (looks like API, isn't tested) and inflates the surface the audit is trying to shrink.
+
+
+### denominators/population/build/orchestrator.py
+
+**`RD-09` — MEDIUM — god_module_decomposition** — orchestrator.py is a 782-line module with two ~500-line build functions holding solver-selection, problem-assembly, projection, and result-emission
+- detail: orchestrator.py (782 LOC) contains solve_population_tensor_from_sidra_strata (line 122, ~500 lines) and solve_population_tensor_from_sidra_anchor (line 661). The strata builder inlines: problem construction (line 432), solver selection (447), the informative/data-poor branch that reimplements the closure-simplex projection by importing projected_gradient privates _fast_projection_supported/_np_project_population/_project_population (line 468-484), blocked solve invocation, telemetry->uncertainty mapping, and PopulationTensorResult assembly (607). The rest of build/ was already decomposed into closure.py/priors.py/flows.py/strata.py/layer1.py, so this remaining megazord is the leftover concentration.
+- evidence: wc -l orchestrator.py = 782 (next largest build file is priors.py at 358); orchestrator.py:122 and :661 are the only two top-level functions; :468-484 imports solver privates to redo projection inline
+- recommendation: Extract: (a) problem-assembly into build/problem_assembly.py, (b) the data-poor closed-form projection branch into layer1.py (it already owns Layer-1), (c) result/telemetry emission into a build/result.py. Leave orchestrator as a thin sequencer calling the decomposed steps, matching the rest of build/.
+- risk_if_ignored: The one function that both selects the solver and re-implements projection inline is where the RD-02/RD-05 coupling leaks into the caller; concentrating four responsibilities here is exactly the 'no clear bounded step' the mathematical architecture implies should be clean.
+
+
+### denominators/reconstruction + she/reconstruction docstrings
+
+**`RD-10` — LOW — naming_inconsistency** — Stale she.reconstruction path references after the package was moved to denominators.reconstruction
+- detail: The package was relocated from pegasus.she.reconstruction to pegasus.denominators.reconstruction (denominators/__init__.py:6-7 says so), and she/reconstruction no longer exists. But live docstrings still point at the dead path: problem.py:12 and instances.py:5 say the native evaluator delegates to `she.reconstruction.loss.evaluate_population_loss` (actual: denominators.reconstruction.loss); fields.py:10-11 references the `she.reconstruction` block-coordinate/ADMM solvers. A reader (or grep-based tool) following these lands on a nonexistent module.
+- evidence: grep she.reconstruction: denominators/reconstruction/problem.py:12, instances.py:5, denominators/__init__.py:7, denominators/population/fields.py:10; `ls src/pegasus/she/reconstruction` -> No such file
+- recommendation: Update the three docstrings to denominators.reconstruction (or delete the fields.py reference to solvers that RD-01 removes). Cheap, but it removes a false pointer to a module that was deleted.
+- risk_if_ignored: Docs assert a data-flow (she.reconstruction) that no longer exists, misleading both humans and any provenance/lineage tooling that parses these module references.
+
+
+### denominators/reconstruction/sparse_admm.py
+
+**`RD-11` — LOW — orphan_deadcode** — plan_sparse_population_solver / SparsePopulationPlan / memory preflight are reachable only through the orphaned sparse solvers
+- detail: plan_sparse_population_solver (sparse_admm.py:41), SparsePopulationPlan (:25), and the preflight_memory call chain exist to gate the sparse backends by RAM. Since solve_sparse_population and solve_population_admm are themselves orphaned (RD-01), this entire memory-preflight/state-space-plan apparatus is transitively dead: build_population_state_space (state_space.py:81) is invoked only from plan_sparse_population_solver. The live blocked solver (solvers.py:111) does its own memory bounding via block sizing, so the plan layer is redundant.
+- evidence: plan_sparse_population_solver/SparsePopulationPlan have no callers outside sparse_admm.py (grep); build_population_state_space called only at sparse_admm.py:48; solve_sparse_population/solve_population_admm orphaned per RD-01
+- recommendation: Remove the plan+preflight+state-space-index apparatus together with the sparse solvers, or, if a memory-planned sparse path is genuinely wanted at national scale, wire it into select_population_solver and delete the redundant block-sizing OR keep both with one shared memory-budget contract.
+- risk_if_ignored: A whole memory-safety subsystem sits dead beside the live block-sizing one; two competing 'don't blow up RAM' mechanisms with no shared contract is the scattered-logic pattern, and the dead one gives false assurance that sparse solves are memory-guarded.
+
+
+### datasus/normalize
+
+**`AH-01` — HIGH — duplication** — _clean/_digits/_stable_hash/_read_table quartet copy-pasted across 4 normalizers with divergent null-token sets
+- detail: The scalar helper quartet is re-implemented verbatim in cnes.py (lines 27-50), sih.py (57-80), sinasc.py (27-50), and sim.py (87-102). _read_table is a pure 1-line pass-through to primitives.read_raw_table in all four. _stable_hash is byte-identical json.dumps+sha256 in all four. The canonical vectorized home already exists (primitives.Cols.clean/.digits and read_raw_table). Worse, the copies have SILENTLY DIVERGED: sih/cnes _clean null on {NA,NAN,NULL,NONE} (uppercased), sinasc _clean nulls {nan,none,null} (lowercased, no NA), sim _clean_str nulls {NA,NAN,NULL} (no NONE). primitives._NULL_TOKENS is the intended canonical set {'',NA,NAN,NULL,NONE}.
+- evidence: cnes.py:27-50; sih.py:57-80; sinasc.py:27-50; sim.py:87-102; primitives.py:150 (_NULL_TOKENS), 190-198 (clean/digits), 37-54 (read_raw_table)
+- recommendation: Delete all four private quartets. Route the record-oracle paths (_*_record functions) through a single pegasus.datasus.normalize.primitives scalar module (add scalar clean/digits/stable_hash mirroring _NULL_TOKENS) so record oracles and vectorized Cols share ONE null-token contract; _read_table calls become direct read_raw_table calls.
+- risk_if_ignored: Two records with a 'NA' vs 'nan' cell already normalize to different values depending on which system's oracle runs; a future edit to the null set in one file leaves three stale copies, corrupting missingness (§2.3) silently and breaking the vectorized-vs-oracle equivalence guarantee the module docstring claims.
+
+**`AH-04` — MEDIUM — orphan_deadcode** — Record-oracle path (normalize_record + normalize_*_record) has zero production callers
+- detail: records.py normalize_record/normalize_sim_do_record/normalize_sinasc_record (370-439) and the per-system record oracles (normalize_sih_rd_record sih.py:154, normalize_cnes_st_record cnes.py:142, _assemble_sim_do_record sim.py:136) are only re-exported by __init__ and referenced by each other's docstrings. Production runs exclusively call the *_events vectorized functions (pipeline._NORMALIZERS lines 143-148). The record path exists solely as a self-described 'correctness oracle' but no test or runtime path in this cluster invokes it as an equivalence check.
+- evidence: records.py:370-439; __init__.py:16-55; grep shows no non-test, non-self caller of normalize_record/*_record; pipeline.py:143-148 wires only *_events
+- recommendation: Either wire the record oracles into an actual equivalence test/CI gate (their stated purpose) or delete them and the scalar helper quartet that only they use. A dormant oracle with no assertion consuming it is not an oracle.
+- risk_if_ignored: The docstrings claim vectorized decoders are 'pinned against' these oracles, but nothing enforces it — the correctness guarantee is fictional, and the ~500 LOC of record code (plus its divergent _clean copies, AH-01) rots undetected.
+
+
+### datasus (entrypoints)
+
+**`AH-02` — HIGH — duplication** — Two DATASUS acquisition entrypoints re-assemble the same manifest+fetch+parallel loop independently
+- detail: run_datasus_ingest (workflows/acquire/datasus.py:39-93) and MicrodatasusClient (datasus/client_microdatasus.py:35-118) both wrap build_datasus_manifests + fetch_datasus_chunk + write_request_manifest inside their own hand-rolled ThreadPoolExecutor/as_completed loop with their own worker-count clamp. run_datasus_ingest is the CLI path (cli.py:147); MicrodatasusClient is the pipeline path (pipeline.py, sidra_national.py). They diverge in behavior (ingest returns planned/executed/blocked dicts; client returns typed MicrodatasusBatchResult; only the client does round-robin interleaving and per-slot ordering) yet nominally acquire the same data.
+- evidence: workflows/acquire/datasus.py:60-93; client_microdatasus.py:49-118; cli.py:147; pipeline.py:198-201
+- recommendation: Collapse to one acquisition core (MicrodatasusClient is the more complete typed one). Make run_datasus_ingest a thin CLI adapter that constructs a MicrodatasusClient and calls fetch/fetch_systems, translating the typed result to the CLI dict — do not re-implement the pool.
+- risk_if_ignored: CLI and pipeline can acquire DATASUS with different parallelism/interleaving/ordering semantics; a fix to fetch-failure handling or worker bounding applied to one path silently leaves the other wrong, and the CLI's non-interleaved pool can starve slow systems that the pipeline path handles.
+
+
+### workflows/acquire
+
+**`AH-03` — HIGH — scattered_logic** — UF-list resolution duplicated: hardcoded _ALL_UFS tuple + private _resolve_ufs vs canonical geo.uf.ALL_UF_SIGLAS
+- detail: workflows/acquire/datasus.py:20-36 hardcodes a 27-entry _ALL_UFS tuple and a private _resolve_ufs (ALL/BR/* expansion). The canonical authority pegasus.geo.uf.ALL_UF_SIGLAS already exists and is what sidra_national.py:_resolve_ufs (67-74) uses. So there are two UF resolvers and two copies of the 27-UF list, one bypassing the geo layer entirely.
+- evidence: workflows/acquire/datasus.py:20-36; sidra_national.py:67-74; geo/uf.py:49 (ALL_UF_SIGLAS)
+- recommendation: Delete _ALL_UFS and route datasus.py:_resolve_ufs through pegasus.geo.uf (import ALL_UF_SIGLAS for the ALL/BR/* case). Keep exactly one UF authority in geo.uf; every acquire path consumes it.
+- risk_if_ignored: If a UF sigla is ever corrected/added in geo.uf (or a territory changes), the CLI DATASUS path silently acquires the stale hardcoded 27 while the pipeline uses the corrected set — a national run split-brains on which states exist, with no error.
+
+
+### workflows/acquire (SIDRA)
+
+**`AH-05` — HIGH — duplication** — plan_sidra_chunks + extract_chunk_plan acquisition sequence re-assembled in 5 independent sites
+- detail: The SIDRA acquire kernel (plan_sidra_chunks -> write_chunk_plan -> extract_chunk_plan -> write_extraction_log -> inspect artifacts) is hand-wired independently in sidra.py:run_sidra_extract (66-104), ingest_sidra.py:ingest_sidra (16-57), sidra_compendium.py:119-122, and sidra_population.py at 285/440/522 (three times). Each site re-picks concurrency, the cell cap, and error handling separately. There is no single 'acquire one SIDRA request -> artifact' function.
+- evidence: sidra.py:56/88; ingest_sidra.py:28/32; sidra_compendium.py:119/122; sidra_population.py:285/288,440/443,522/525
+- recommendation: Extract one acquire_sidra_request(request, metadata, *, client, work_dir, concurrency) -> SourceArtifact(s) into pegasus.sidra (next to plan/extract) and have all five call sites use it. This is the missing API boundary between 'plan+extract primitives' and 'workflow orchestration'.
+- risk_if_ignored: Five copies of the chunk-cap / concurrency / failure-classification logic drift; a fix (e.g. the probed <50k cell ceiling, or a retry policy) applied to sidra_population is silently absent in sidra_compendium and ingest_sidra, producing partial/failed extractions that report success differently per path.
+
+**`AH-06` — MEDIUM — missing_data_contract** — SIDRA cell-cap 49900 is a magic number duplicated across 4 sites instead of one config contract
+- detail: The per-request cell ceiling appears as an inline literal in ingest_sidra.py:24 (49_900 default arg), sidra.py:59 (49900 fallback), sidra_population.py:88 (_SIDRA_MAX_CELLS_PER_REQUEST=49_900), and plan.py:164 (49900 default). sidra.py reads config('max_cells_per_request',49900) but the other three ignore config and bake the literal. This is a data-contract constant (a live-probed API ceiling per the sidra_population comment) with no single source of truth.
+- evidence: ingest_sidra.py:24; sidra.py:59; sidra_population.py:85-88; plan.py:164
+- recommendation: Define the cell cap once (config/sidra.yaml -> sidra.max_cells_per_request, surfaced via sidra_runtime_config) and have plan_sidra_chunks and every acquire site read that one value; remove the four literals.
+- risk_if_ignored: If SIDRA lowers its cell ceiling, updating config or one literal leaves three call sites over-requesting -> silent HTTP 500/truncated chunks on exactly the population/compendium paths that bypass config, corrupting the acquired panel.
+
+**`AH-07` — MEDIUM — orphan_deadcode** — ingest_sidra() is a public acquisition entrypoint with no production caller (test-only)
+- detail: ingest_sidra.py:ingest_sidra (16-57) is a full SIDRA plan+extract+artifact-manifest+validate entrypoint, but its only caller is tests/unit/test_sidra_extract.py:126. The live pipeline acquires SIDRA through sidra_national.py -> sidra_population/_compendium helpers, never through ingest_sidra. It duplicates AH-05's sequence and also uniquely emits a source-artifact manifest + validation that the real path re-implements elsewhere.
+- evidence: ingest_sidra.py:16-57; only caller tests/unit/test_sidra_extract.py:9,126; sidra_national.py uses sidra_population helpers instead
+- recommendation: Either make ingest_sidra the canonical single-request acquire (fold AH-05's five sites onto it) or delete it and repoint the test at the real acquisition helper. A public entrypoint exercised only by its own test is a silent-divergence trap.
+- risk_if_ignored: The test passes against a code path production never runs, giving false confidence that SIDRA acquisition+validation works while the real (population/compendium) path — which has no equivalent manifest-validation step — can regress undetected.
+
+**`AH-11` — LOW — scattered_logic** — SIDRA metadata-cache warming + client construction scattered across acquire sites instead of a shared acquire context
+- detail: Each SIDRA acquire path constructs its own SidraClient() and decides metadata warming independently: run_sidra_metadata/plan/extract each new a SidraClient (sidra.py:36,87), ingest_sidra takes client or news one (ingest_sidra.py:33), sidra_national warms metadata once then fans out (sidra_national.py:208-215), sidra_population re-fetches metadata per helper. There is no single 'SIDRA acquisition session' object owning the client + warmed metadata cache + concurrency policy.
+- evidence: sidra.py:36,87; ingest_sidra.py:33; sidra_national.py:208-223; sidra_population.py:285,440,522
+- recommendation: Introduce one SidraAcquisitionContext (client + metadata dir + warmed table cache + concurrency) constructed once per run and threaded through the acquire helpers, replacing the per-site SidraClient() news and ad-hoc warm calls.
+- risk_if_ignored: Without a shared session, parallel UF fetches can still race to fetch/write the same table metadata (the sidra_national comment at 206-207 patches this by hand for its 5 tables only); other paths lack that guard and can corrupt the metadata cache under the 6-way UF parallelism.
+
+
+### sources/sidra vs sidra
+
+**`AH-08` — MEDIUM — layering_violation** — Two parallel SIDRA namespaces (pegasus.sidra vs pegasus.sources.sidra) with no boundary between acquire and transform
+- detail: pegasus.sidra/ (api, plan, extract, metadata, normalize, registry, facts...) is the acquire/plan layer; pegasus.sources.sidra/ (projection, pushforward, regime, stitching, sidra_projection, sidra_context, category_maps) is a second SIDRA package for post-acquire transforms. The split is undocumented and asymmetric: sources.sidra is consumed only by she/high_dimensional.py and efg/materialize.py (via lazy imports), not by the acquire workflows, so 'sources' reads as a sibling of 'sidra' rather than a clear downstream layer. sidra/normalize.py and sources/sidra transforms both operate on SIDRA facts.
+- evidence: sources/sidra/__init__.py (7 transform modules); external refs: efg/materialize.py:353, she/high_dimensional.py:7,99; parallel pegasus/sidra/ package
+- recommendation: Either move sources.sidra transforms under pegasus.sidra as a clearly-named sub-layer (pegasus.sidra.transform) or document the acquire(sidra)->transform(sources.sidra) boundary explicitly and make it one-directional. Right now the two-namespace split has no enforced contract.
+- risk_if_ignored: Contributors add SIDRA logic to whichever of the two packages they find first; the projection/pushforward math scatters across both namespaces (AH-09) and no reviewer can tell which is authoritative.
+
+
+### sources/sidra
+
+**`AH-09` — MEDIUM — duplication** — projection.py and sidra_projection.py both implement SIDRA classification projection
+- detail: sources/sidra/projection.py (124 LOC: ClassificationProjectionMatrix, project_classification_to_axis) and sources/sidra/sidra_projection.py (190 LOC: project_and_bound_context_facts) both live in the same package and both do SIDRA category->axis projection. projection.py is explicitly headered 'PANEL-01 pre-build, unwired — do not reap' (line 1) i.e. a known orphan, yet the live path uses sidra_projection.py (imported by sidra_context.py:26). Two projection implementations, one dead, sitting side by side.
+- evidence: projection.py:1 (unwired marker), :14-37 (ClassificationProjectionMatrix); sidra_projection.py:1-190; sidra_context.py:26 imports sidra_projection; test imports projection.py
+- recommendation: Reconcile to one projection module. If PANEL-01 projection.py is genuinely future work, move it out of the acquire cluster (or gate it behind a clearly separate panel package) so the live sidra_projection is the only projection surface here; otherwise merge the identifiable-matrix logic into the live one.
+- risk_if_ignored: A maintainer editing 'the SIDRA projection' picks the wrong (dead) file, or the two implementations bound/round fractional weights differently — the context facts fed to the EFG then depend on which projection got touched last.
+
+
+### datasus (profile/schema_compare)
+
+**`AH-10` — LOW — orphan_deadcode** — run_datasus_profile raw-vs-processed schema-compare audit path is CLI-only, unreachable from the pipeline
+- detail: run_datasus_profile (workflows/acquire/datasus.py:96-135) drives profile_table + compare_profiles to audit raw.rds vs processed schema drift. Its only caller is cli.py:165. The live pipeline never profiles/compares. Moreover the function's own comments note the v4 R bridge no longer writes raw.rds (raw_path.exists() is now usually False, lines 111-121), so the raw-vs-processed comparison branch it exists for is effectively unreachable in normal operation.
+- evidence: workflows/acquire/datasus.py:96-135 (esp. 111-124 raw-absent short-circuit); only caller cli.py:165; pipeline has no profile step
+- recommendation: Decide the audit's fate: if raw.rds is gone by design, drop the raw-vs-processed comparison and keep only the processed profile (or delete run_datasus_profile + datasus/schema_compare.py if nothing consumes the compare artifact). Do not keep a half-dead audit branch keyed on an artifact the bridge stopped emitting.
+- risk_if_ignored: schema_compare.py + compare_profiles are maintained as if load-bearing while their triggering artifact no longer exists; the audit silently reports 'success' with comparison=None, masking that no schema-drift check is actually happening.
+
+
+### registries
+
+**`OR-01` — HIGH — duplication** — Four independent registry-YAML loaders with three divergent entry contracts
+- detail: The same 'load a registry YAML, list its entries, filter to active' operation is implemented four separate times, each returning a different entry type and re-parsing YAML through a different caching primitive: (1) registries/loader.py load_registry_file (lru_cache on path+mtime) feeding semantic.registry_entries/active_entries which return list[dict] (semantic.py:14-24); (2) registries/generic.py load_registry_payload/load_entries/active_entries which return tuple[RegistryEntry,...] with its own inline yaml.safe_load (generic.py:77-128); (3) registries/source_fields.py which loads via core.config.load_yaml behind its own lru_cache (source_fields.py:9,209-212); (4) registries/race_bridge.py:129 _load_registry_payload, a fourth private yaml.safe_load + status handling. RegistryEntry even carries a .get() shim (generic.py:38-42) whose docstring admits it exists so list[dict]-era consumers can treat RegistryEntry uniformly — a band-aid over the fact that the two entry contracts never merged. The is_active admission rule was already de-duplicated (semantic imports generic.is_active) after a documented 'latent gun' where generic used status=='active' and semantic used the graded-active union; the loaders themselves were never unified. This is exactly the tracked-but-open REG-07 item (task #28).
+- evidence: registries/loader.py:10-26; registries/semantic.py:14-24; registries/generic.py:77-128,38-42; registries/source_fields.py:9,200-212; registries/race_bridge.py:129-137
+- recommendation: Collapse all four onto a single typed registry loader module (extend registries.generic.RegistryEntry as the one entry type) exposing load_entries/active_entries/get_entry; make semantic, source_fields, and race_bridge consume it. Delete registries/loader.py and the .get() compatibility shim once callers no longer expect list[dict].
+- risk_if_ignored: The admission-rule divergence was a silent gun that no test caught because the two filters happened to agree on current data. A second such divergence (e.g. one loader honoring registry_missing sentinels, another raising) will again silently drop or mis-admit registry entries — fields get classified with the wrong carrier/decoder and no error surfaces.
+
+
+### output
+
+**`OR-02` — HIGH — missing_data_contract** — Bundle table column contracts redefined in 4+ places with no shared source of truth
+- detail: core/schemas.py defines authoritative Pydantic models (QState:209-240, WarningRecord:243-253, FailedBranch:256-279, FieldNode:95-133) that exactly enumerate every column of Q_tensor / Warnings / FailedBranches / V_fields. But the actual parquet write and validate paths never serialize those models. Instead the identical column list is hand-re-listed independently in: (a) output/schema_seed.py PyArrow schemas Q_TENSOR_SCHEMA:56-83, WARNINGS_SCHEMA:85-94, V_FIELDS_SCHEMA:24-44 etc; (b) output/validate.py REQUIRED_Q_TENSOR_COLUMNS:22, REQUIRED_V_FIELDS_COLUMNS:20, REQUIRED_VARIABLE_DICTIONARY_COLUMNS:24 as bare frozensets; (c) the live producer efg/compile_attach.py _q_row:315-328 building a raw dict keyed 'field_id','n_events',... ; (d) fixture producers output/bundle.py _scaffold_rows:35-62 and output/sinasc_efg_bundle.py _q:38-66. Five copies of the Q_tensor column set. Adding a Q-tensor column means editing five files, and the Pydantic models — the nominal contract — are bypassed entirely on the write side.
+- evidence: core/schemas.py:209-279; output/schema_seed.py:56-94,24-44; output/validate.py:20-24; efg/compile_attach.py:315-328; output/bundle.py:35-62; output/sinasc_efg_bundle.py:38-66
+- recommendation: Make core/schemas.py the single source: derive the PyArrow schemas, the validator's REQUIRED_*_COLUMNS, and the row-normalizers from the Pydantic field sets (e.g. QState.model_fields). Have compile_attach and the fixture writers emit QState/WarningRecord instances (.model_dump()) through one typed serializer instead of hand dicts.
+- risk_if_ignored: A column added to QState but forgotten in schema_seed's PyArrow schema silently drops from every emitted bundle; a column present in the writer but absent from validate.REQUIRED_* passes validation while being semantically unchecked. This is the documented 'fake-green' failure mode: 17 keys present, contract hollow.
+
+**`OR-04` — MEDIUM — orphan_deadcode** — curated_cause_report.py is a ~388-LOC orphan reporter with zero callers
+- detail: workflows/report/curated_cause_report.py exports a full reporting API — build_curated_cause_report:148, render_curated_cause_html:312 (with _sparkline SVG:293), write_curated_cause_report:372, plus CuratedCauseReport/_Bundle dataclasses — but has no caller anywhere in src/, tests/, or studies/. The other four report modules (acceptance, compile_source, dashboard, race_bridge) are all wired into cli.py; this one alone is not. The only grep hits for 'curated_cause' elsewhere are the unrelated 'curated_cause_group' stratifier token in efg/dag/spine.py and operators.py, not this module.
+- evidence: workflows/report/curated_cause_report.py:148,312,372,388; cli.py wires acceptance/compile_source/dashboard/race_bridge but not curated_cause_report; no cross-module references found
+- recommendation: Either wire it into cli.py as a report subcommand (if the HTML curated-cause report is intended output) or delete the module. Do not leave a 388-LOC HTML renderer as dead weight.
+- risk_if_ignored: Silent-failure risk the project explicitly flags for orphans: the module rots against the evolving bundle schema (it reads V_fields/Q_tensor columns) and would crash the first time someone wires it, while masquerading as a working deliverable.
+
+**`OR-05` — MEDIUM — orphan_deadcode** — Fixture-only bundle writers live in production output/ alongside the real writer
+- detail: output/sinasc_efg_bundle.py write_sinasc_fixture_efg_bundle:101 and output/maternal_child_compile_attach.py attach_maternal_child_compile_fields:12 are each referenced ONLY by a single unit test (test_sinasc_maternal_child_fields.py, test_maternal_child_state_attach_contract.py) — no production/cli/workflow caller. They are hardcoded fixture generators (state UF prefix '27' baked in at sinasc_efg_bundle.py:103, all rows stamped 'quarantined_descriptive' with a 'maternal_child_fixture' registry_hash) that build the bundle via hand-written _field/_q/_vd dicts (a 4th/5th copy of the column contract per OR-02) rather than through the real OutputBundleManager path that compile_attach.py uses. They sit in the production output package, not a fixtures/test module.
+- evidence: output/sinasc_efg_bundle.py:101-147 (only caller tests/unit/test_sinasc_maternal_child_fields.py); output/maternal_child_compile_attach.py:12-34 (only caller tests/unit/test_maternal_child_state_attach_contract.py)
+- recommendation: Move both into tests/fixtures/ (or delete if the maternal-child path is meant to flow through the real EFG compile). Production output/ should contain only the canonical OutputBundleManager serialization path, not per-study fixture stampers.
+- risk_if_ignored: Their hand-built row dicts duplicate the bundle column contract and will silently drift from schema_seed/validate; a maintainer may mistake them for the real maternal-child production writer and wire a fixture (all-quarantined, UF=27) into a national run.
+
+**`OR-06` — MEDIUM — duplication** — empty_by_profile warning emission implemented twice (hardcoded vs dynamic) with drift risk
+- detail: The 'emit a declared-empty warning row for every empty non-required first-class key' contract is implemented independently in two places. bundle_manager.py _append_empty_by_profile_warnings:246-282 does it correctly and dynamically: reads run_profile+execution_stage, calls required_nonempty_keys, and tags empty_by_stage vs empty_by_profile. bundle.py create_empty_output_bundle:89-104 re-implements the same loop but hardcodes run_profile='core_vital' into both the warning_id (f'empty_by_profile::core_vital::{key}') and the message, and uses a hardcoded 'required' set literal (bundle.py:90) that is a second copy of PROFILE_NONEMPTY['core_vital'] from output/schemas.py:34. The validator (_empty_by_profile_keys, validate.py:451) then string-matches these warning_ids, so the two producers must stay byte-compatible with each other and with the validator by convention only.
+- evidence: output/bundle.py:89-104,90; output/bundle_manager.py:246-282; output/schemas.py:33-44; output/validate.py:436-476
+- recommendation: Extract one function (in output/schemas.py or a small emitter) that produces the declared-empty warning rows given (run_profile, execution_stage, nonempty-predicate); call it from both create_empty_output_bundle and OutputBundleManager. Delete the hardcoded core_vital 'required' literal in bundle.py and read PROFILE_NONEMPTY.
+- risk_if_ignored: If required_nonempty_keys/PROFILE_NONEMPTY changes, bundle.py's hardcoded copy silently disagrees; the empty bundle it writes then fails (or spuriously passes) the profile-nonempty validator because the warning_ids no longer match what the validator string-searches for.
+
+**`OR-08` — MEDIUM — missing_api_boundary** — OutputBundleManager.set_table accepts untyped list[dict] — no schema enforcement at the ingest boundary
+- detail: The single serialization boundary OutputBundleManager.set_table/append_table (bundle_manager.py:138-154) validates only that the key is a known TABLE_KEY; the rows are untyped list[dict[str,Any]] passed straight into _normalize_rows and written with schema_policy='preserve'. The producer efg/compile_attach.py:648-654 builds v_rows/q_rows/warning_rows as raw dicts and hands them in. There is no point at which a row is checked against QState/WarningRecord/FieldNode before it becomes a parquet column — the typed core/schemas.py models are used inside the EFG engine but dropped at the exact boundary that persists them. Row shape is only checked much later, post-write, by validate.py column-set comparison.
+- evidence: output/bundle_manager.py:138-154,187-194; efg/compile_attach.py:648-654; core/schemas.py QState/WarningRecord unused on this path
+- recommendation: Type the boundary: have set_table/append_table accept (or validate against) the corresponding Pydantic model per key and normalize via model_dump, so a malformed row fails at ingest with a field-level error rather than passing silently to disk.
+- risk_if_ignored: A producer that emits a row missing a column, or with a mistyped value, writes it to parquet unflagged; the defect surfaces only as a downstream validate column-set mismatch (or not at all, if the column happens to exist), far from the buggy producer — the shared-state-through-untyped-objects failure this audit targets.
+
+**`ORPH-05` — MEDIUM — orphan_deadcode** — output/sidra_denominator_anchor.py entry point attach_sidra_population_anchor_to_run has zero src callers (only a test references it)
+- detail: The module output/sidra_denominator_anchor.py wraps 6 private helpers (_append_rows, _get_field_by_name, _population_v_field, _remove_by_values, _uf_year_support_alignment) around the public `attach_sidra_population_anchor_to_run`. That entry point has zero callers in src/pegasus — the only repo reference is tests/unit/test_sidra_denominator_anchor.py. So the SIDRA population-denominator-anchoring computation is a module reachable only from its own test, not from any compile/output pipeline. Its 5 private symbols also all show as zero-cross-module (they're internal to a dead entry point).
+- evidence: grep `attach_sidra_population_anchor_to_run` across src/pegasus excluding the defining file = 0; whole-repo hit only tests/unit/test_sidra_denominator_anchor.py
+- recommendation: Either wire attach_sidra_population_anchor_to_run into the output bundle pipeline (workflows/compile.py or output/bundle_manager.py where denominators are attached) or delete the module if the SIDRA anchor is now handled by output/sidra_denominator_anchor's newer sibling. A test-only entry point is a false-green: the test passes but production never calls it.
+- risk_if_ignored: The SIDRA population anchor either is silently not applied to real runs (denominators come from elsewhere or are missing) while a passing test implies it works, or two anchor paths coexist; reviewers see green coverage and assume the feature is live.
+
+**`OR-07` — LOW — orphan_deadcode** — assert_materialized_external_source_purity has no callers
+- detail: output/source_reality_guard.py exports two public entrypoints. materialized_external_semantic_errors:99 is consumed by validate.py:591. Its sibling assert_materialized_external_source_purity:151 (the raising wrapper) has zero callers in src/ or tests/. It is a public API surface that duplicates the error-collection logic path but is never invoked, so its raise-semantics are untested against real bundles.
+- evidence: output/source_reality_guard.py:99,151; only materialized_external_semantic_errors is referenced (validate.py:591); assert_materialized_external_source_purity has no cross-module caller
+- recommendation: Delete the unused assert_ wrapper, or if a hard-fail purity gate is intended, wire it into the compile/output pipeline. A public raising guard that nothing calls provides no protection.
+- risk_if_ignored: A dead safety gate reads as protection that does not exist; the forbidden-development-source purity check it implements never actually runs unless someone calls the errors-returning variant and inspects the list.
+
+
+### efg/output
+
+**`OR-03` — MEDIUM — duplication** — Moran's I computed by two independent implementations (plus a stale schema field)
+- detail: The Moran's I spatial-autocorrelation statistic has two separate implementations with different weight models: efg/q_tensor.py _moran_contiguity:116-144 (1-D chain/rook contiguity over cell order, W=2(n-1)) and efg/compile_attach.py _moran_i_for_group:115-133 (true municipality-adjacency dict weights). Both hand-roll the same I = (N/W)·Σw_ij(x_i-x̄)(x_j-x̄)/Σ(x_i-x̄)² formula independently. compile_attach's _vector_diagnostics prefers the adjacency version and only falls back conceptually; q_tensor's contiguity version is a separate best-effort proxy. There is no single spatial-statistics module owning Moran's I even though pirs/spatial.py:29-44 also consumes a moran_i threshold and the SpatialWeightGraph subsystem (SPG-01) exists as the natural home.
+- evidence: efg/q_tensor.py:116-144; efg/compile_attach.py:115-133,212-221; pirs/spatial.py:29-44
+- recommendation: Consolidate both into one spatial module (alongside the SpatialWeightGraph laplacian machinery) that computes Moran's I given (values, weight_graph), with chain-contiguity and adjacency as two weight-graph constructors. q_tensor and compile_attach call the one function.
+- risk_if_ignored: The two formulas can silently diverge in edge handling (zero-variance, <3 cells, self-loops); a bug fixed in one is not fixed in the other, so the moran_i column and the n_eff correction derived from it become path-dependent on which producer ran.
+
+
+### geo/spatial_graph
+
+**`GDM-01` — HIGH — orphan_deadcode** — SpatialWeightGraph.view() row_standardized/symmetric/laplacian views and blocks() are orphaned; the declared 'one graph, many views' API has no real consumers
+- detail: spatial_graph.py's module docstring (lines 1-18) declares SpatialWeightGraph as the single source of spatial structure: 'Moran's I -> view("row_standardized"); ICAR/CAR -> view("symmetric")/view("laplacian"); CTR/ST-DFM/LDO prior -> view("laplacian"); HSIC/cross-fit -> blocks(n)'. In reality grep shows .view() is called exactly ONCE (denominators/population/build/flows.py:84, and only with kind="weight"), and .blocks() is called ZERO times anywhere in src. Every advertised consumer bypasses the object: Moran's I re-derives adjacency via structural_cod6_adjacency() and builds its own weights (compile_attach.py:115-162), the GMRF Laplacian is hand-built in ldo/precision.py:54-78 instead of graph.view("laplacian"), and the HSIC/cross-fit block partition uses its own logic instead of blocks(). So four of the five view kinds (binary/symmetric/row_standardized/laplacian) and the entire blocks() method are dead.
+- evidence: grep '\.view(' -> only flows.py:84 (kind=weight); grep '\.blocks(' -> No matches found. spatial_graph.py:41 _VIEWS lists 5 kinds; docstring lines 8-12 promises 5 consumers, none call view()/blocks().
+- recommendation: Either (a) make the advertised consumers actually call graph.view(...)/graph.blocks(...) — route compile_attach Moran through view('row_standardized'), ldo/precision through view('laplacian'), HSIC/cross-fit through blocks() — collapsing the parallel re-derivations into this one object; or (b) delete the orphaned view kinds and blocks() and correct the docstring. Do NOT leave a documented API that nothing calls.
+- risk_if_ignored: Silent-failure: the object claims to be the single spatial-structure authority but the pipeline uses uncontrolled parallel adjacency derivations, so a fix or circularity-guard applied to the SpatialWeightGraph never reaches the code that actually computes Moran/ICAR — the guard is a no-op on the real path.
+
+
+### geo/efg/ldo
+
+**`GDM-02` — HIGH — duplication** — Moran's I / spatial-weight construction implemented at least 3x with divergent semantics, none using the canonical SpatialWeightGraph view
+- detail: The same spatial-autocorrelation computation exists in multiple incompatible forms: (1) efg/q_tensor.py:116 _moran_contiguity — a 1-D chain-contiguity proxy over tensor cell order (NOT geography-aware); (2) efg/compile_attach.py:115 _moran_i_for_group + :136 _moran_i_adjacency — a real municipality-adjacency Moran keyed by cod6 dicts; (3) the canonical geo/spatial_graph.py:108 view('row_standardized') row-standardized weight matrix, which is the declared home for exactly this and is used by neither. The disease-axis analogue compounds it: geo builds L=D-W in view('laplacian') (spatial_graph.py:113-116) while ldo/precision.py:54-78 hand-builds the identical kI+L_W sparse Laplacian from the raw adjacency dict. There is no single 'compute the spatial weight matrix' function.
+- evidence: efg/q_tensor.py:116 def _moran_contiguity; efg/compile_attach.py:115 def _moran_i_for_group, :136 _moran_i_adjacency; geo/spatial_graph.py:108-116 row_standardized+laplacian views (orphaned per GDM-01); ldo/precision.py:62 structural_cod6_adjacency()+manual L_W. Both q_tensor and compile_attach write the same QState.moran_i slot.
+- recommendation: Centralize into one module (extend geo/spatial_graph.py): a single morans_i(values_by_node, graph_view) built on graph.view('row_standardized'), and a single spatial Laplacian accessor. Delete _moran_contiguity, _moran_i_for_group, _moran_i_adjacency and the hand-built L_W in ldo/precision, routing all through the SpatialWeightGraph.
+- risk_if_ignored: The proxy Moran (chain contiguity over arbitrary cell order) and the geography Moran silently disagree and both feed the n_eff §3.12.3 deflation and the §6.3 spatial-mode gate; a municipality with a genuinely clustered outcome can get a proxy Moran near 0, mis-selecting spatial-effect mode and over-counting independent observations, with no signal that two different statistics were blended.
+
+
+### pirs
+
+**`GDM-03` — HIGH — orphan_deadcode** — The entire pirs/ package (schemas, families, spatial, nystrom, rff) has zero production callers — an orphaned inference subsystem shadowed by live re-implementations
+- detail: grep 'pegasus.pirs' across src shows the ONLY importer is pirs/families.py importing pirs/schemas.py — i.e. the package imports itself and nothing else in src imports it. Its public surface (family_for_outcome, is_population_rate_outcome, exposure_offset_source in families.py; select_spatial_effect_mode in spatial.py; FieldCandidate/ModelInput/ModelOutput/ResidualField/PIRSSelectionResult/PIRSDiagnostics in schemas.py; nystrom_diagnostics/rff_diagnostics) is referenced only from tests/ (test_inference_baseline, test_hsic_foundation). Meanwhile the LIVE path re-implements the same concerns elsewhere: ldo/hsic.py has its own _np_nystrom_features/_nystrom_features/_np_rff_features (hsic.py:190,339) duplicating pirs.nystrom/pirs.rff; family selection lives in compute/glm.select_count_family; spatial-mode selection is not run from pirs.spatial. This is the residue of the retired PIRS slice-zoo (memory: Phase B) — the diagnostics/schema shell survived but nothing consumes it.
+- evidence: grep 'pegasus\.pirs|import pirs' src -> only pirs/families.py:6. Test-only importers: tests/contract/test_inference_baseline.py:25-28, tests/unit/test_hsic_foundation.py:13-14. Live duplicate: ldo/hsic.py:190 _np_nystrom_features, :339 _nystrom_features (vs pirs/nystrom.py:28 nystrom_diagnostics).
+- recommendation: Delete the pirs/ package (or the orphaned files: families.py, spatial.py, nystrom.py, rff.py, and the unused half of schemas.py), migrating any still-wanted contract (e.g. ModelFamily literal) into the module that actually uses it. If HSIC approximation diagnostics are wanted, have ldo/hsic.py emit the pirs NystromDiagnostics/RFFDiagnostics manifest instead of maintaining two.
+- risk_if_ignored: ~380 LOC of authoritative-looking typed contracts (ModelInput/ModelOutput/ResidualField) that no runtime path enforces; a future author wires against pirs.schemas believing it is the inference boundary, or 'fixes' family selection in pirs.families while the live path in compute.glm silently ignores it.
+
+
+### disease/variable_grammar
+
+**`GDM-04` — HIGH — orphan_deadcode** — disease/variable_grammar.py is a self-admitted second, unwired §5.1 variable generator (stratify_events/assemble_disease_field have no src callers)
+- detail: variable_grammar.py is the 'richer forward unfolder' (carrier x disease_selector x topology_role, multi-label, _OTHER residual routing) for §5.1 LDO variables. Its own docstring (lines 22-31) states it 'is not currently wired into the live pipeline' and warns 'Do not reintroduce this as a second live generator without a test pinning it against the V_fields path'. grep confirms: stratify_events, assemble_disease_field, and DiseaseStratification have zero callers in src (only self + __all__). The live variable set comes from the EFG sigma_C restriction persisted in V_fields.parquet and read by workflows.investigate. So two full generators of the same §5.1 concept coexist, one dead.
+- evidence: grep stratify_events|assemble_disease_field across src -> only definitions in variable_grammar.py:104,169. Docstring variable_grammar.py:22-31 self-declares unwired + duplicate-generator hazard. Live path: workflows/investigate.py builds variables from variable_meta/V_fields, not this module.
+- recommendation: Decide the single owner of §5.1 variable generation. Either wire variable_grammar as THE compile-time generator (with the pinning test the docstring demands) and delete the ad-hoc V_fields-derived path, or delete variable_grammar's generator functions and keep the EFG path as canonical. Do not ship both.
+- risk_if_ignored: A maintainer improves disease-variable logic (e.g. topology_role handling, _OTHER routing) in variable_grammar and it has zero effect on real runs, or someone wires it in parallel and the LDO receives two divergent variable sets for the same disease axis.
+
+
+### geo/denominators
+
+**`GDM-05` — HIGH — layering_violation** — geo/migration_affinity.py imports UP into denominators, creating a geo<->denominators import cycle broken only by a deferred in-function import
+- detail: geo is the foundational layer that denominators depends on (denominators/population/build imports geo.spatial_graph, geo.migration_affinity). But geo/migration_affinity.py:33 imports from pegasus.denominators.population.migration (MigrationFlowReconstruction) — geo reaching up into denominators. The reverse edge exists too: denominators/population/build/flows.py:28 imports geo.migration_affinity. The only reason this doesn't deadlock at import time is that flows.py hides its geo import inside a function body (line 28, deferred), a classic cycle-hiding smell. The type geo actually needs (MigrationFlowReconstruction, a plain dataclass of node_ids/flows/year) lives in the wrong layer.
+- evidence: geo/migration_affinity.py:33 from pegasus.denominators.population.migration import MigrationFlowReconstruction; denominators/population/build/flows.py:28 (in-function) from pegasus.geo.migration_affinity import build_migration_affinity_graph. Circular: geo->denominators and denominators->geo.
+- recommendation: Move the MigrationFlowReconstruction contract (and reconstruct_migration_flows if it is pure O->D math on adjacency dicts) into geo/ or a neutral shared module, so geo no longer imports denominators; then flows.py can import geo.migration_affinity at module top-level. The affinity-graph builder belongs in geo; the flow reconstruction it consumes should not sit above it.
+- risk_if_ignored: Import order fragility (any attempt to top-level the flows.py import deadlocks), and the layering inversion blocks extracting geo as a standalone foundational package; the deferred import also defeats static analysis of the real dependency graph.
+
+
+### disease/ldo
+
+**`GDM-06` — MEDIUM — duplication** — Disease Laplacian L_D = D - W computed 3x (DiseaseGraph.laplacian, disease_prior.disease_laplacian_matrix, disease_prior._laplacian_from_mask) with two disjoint node keyings
+- detail: The disease graph Laplacian is built in three places: (1) disease/graph.py:146 DiseaseGraph.laplacian() (D-W over the graph's own code/variable nodes, sparse); (2) ldo/disease_prior.py:62 disease_laplacian_matrix() which re-derives W via variable_affinity() and returns np.diag(W.sum)-W (dense, keyed to the LDO variable tuple); (3) ldo/disease_prior.py:76 _laplacian_from_mask() a third D-W for per-scale bands. Crucially the live LDO path uses disease_prior's re-implementation, NOT DiseaseGraph.laplacian() — because graph.laplacian() is keyed by graph node order while the LDO needs it aligned to gf.variables. So DiseaseGraph.laplacian() and its sole caller as_prior() (graph.py:179) are orphaned relative to the estimator.
+- evidence: disease/graph.py:146 laplacian(), :179 as_prior()->laplacian(); grep '\.laplacian()' -> only graph.py:179 internal. ldo/disease_prior.py:62 disease_laplacian_matrix (D-W), :76 _laplacian_from_mask (D-W). orchestrator.py:186 calls disease_laplacian_matrix, never graph.laplacian(). Same triple pattern mirrors the spatial L_W duplication (GDM-02).
+- recommendation: Make DiseaseGraph the single Laplacian source: give it a variable-aligned laplacian(order=variables) (or an align(variables) view) and have disease_prior call it instead of rebuilding W via variable_affinity. Collapse _laplacian_from_mask into the same primitive. Delete the orphaned as_prior/laplacian if not adopted.
+- risk_if_ignored: Three Laplacian builders drift: the circularity guard lives in graph.as_prior() (graph.py:173-179) but the live estimator uses disease_laplacian_matrix which re-checks legality separately (disease_prior.py:43-46) — two guards to keep in sync, and any structural-weight change (e.g. block/chapter weights) must be edited in both _weight_from_info and the band thresholds in hierarchical_disease_laplacians_from_affinity (disease_prior.py:91-95, the 0.99/0.4/0.15 magic numbers duplicating graph.py's 1.0/0.5/0.25).
+
+
+### efg/q_tensor
+
+**`GDM-07` — MEDIUM — missing_data_contract** — moran_i (and cov_S/cov_T/spatial_entropy/temporal_roughness) are threaded through an untyped support: dict[str, Any], letting a proxy value and a geography-aware value silently occupy the same slot
+- detail: The spatial diagnostics that the estimator relies on (moran_i, cov_S, cov_T) have no typed contract — they live in FieldNode.support: dict[str, Any] and QState reads them with field.support.get('moran_i') (q_tensor.py:199, 236-237). q_tensor.py:208-213 substitutes the 1-D chain proxy _moran_contiguity when the key is absent and tags a warning; compile_attach.py:247 then computes a geography-aware moran_i and writes it into the SAME support/QState slot (compile_attach.py:259,326). Whether moran_i is a real Moran, a chain proxy, or a hardcoded placeholder (build_efg.py:46, output/bundle.py:46, sinasc_efg_bundle.py:50 all set 'moran_i': 0.0) is invisible to any downstream consumer — the type is just float|None. There is no reliability/provenance tensor carried alongside; the estimator ignores which spatial statistic it got.
+- evidence: pirs/schemas.py:50 support: dict[str, Any]; q_tensor.py:199 field.support.get('moran_i'), :208 proxy fallback, :242 emits moran_i; compile_attach.py:247/259/326 overwrites with adjacency Moran; hardcoded placeholders build_efg.py:46, output/bundle.py:46, output/sinasc_efg_bundle.py:50, sidra_denominator_anchor.py:108 ('moran_i': 0.0).
+- recommendation: Define a typed SpatialDiagnostics contract (moran_i: float|None, moran_provenance: Literal['geography','ordering_proxy','placeholder','absent'], weight_matrix_id: str) attached to QState instead of loose dict keys, and have the §6.3 spatial-mode gate + §3.12.3 n_eff deflation consume the provenance, refusing to treat a 0.0 placeholder or ordering-proxy as a geography Moran.
+- risk_if_ignored: A placeholder moran_i=0.0 (bundle.py) or an ordering-proxy is indistinguishable from a true 'no spatial autocorrelation' finding; select_spatial_effect_mode (pirs/spatial.py:43) then returns mode='none' on a spatially clustered outcome purely because an untyped dict carried a placeholder, with no contract to catch it.
+
+**`GDM-09` — MEDIUM — scattered_logic** — n_eff §3.12.3 (Kish + Moran deflation) primitives live in q_tensor but are re-imported and re-orchestrated in compile_attach, splitting one §3.12.3 computation across two modules
+- detail: The §3.12.3 effective-sample-size computation is split: the primitives _kish_effective_n and _moran_corrected_n_eff live in efg/q_tensor.py:147,165, but compile_attach.py:18 imports them and re-runs the full orchestration (compile_attach.py:253 n_eff = _moran_corrected_n_eff(_kish if.. else n_obs, moran_i)) with its own weight-selection and moran source, in parallel to q_tensor.py:214-220 doing the same assembly with a different weight/moran source. The comment at compile_attach.py:224-227 even notes an OLD local estimator was removed for non-conformance — but the current split still means the same §3.12.3 formula is assembled twice from the same two primitives, keyed off two different moran_i values (proxy vs geography).
+- evidence: q_tensor.py:147 _kish_effective_n, :165 _moran_corrected_n_eff, :218 assembly; compile_attach.py:18 imports both, :253 re-assembles n_eff with geography moran. Two call sites compute n_eff for (potentially) the same field.
+- recommendation: Make a single compute_n_eff(weights, moran_i, moran_provenance) function the one place §3.12.3 is assembled, called once with the authoritative (geography-preferred) moran_i. q_tensor should not compute a proxy-based n_eff that compile_attach then supersedes.
+- risk_if_ignored: Two n_eff values can be produced for one field (q_tensor's proxy-deflated one and compile_attach's geography-deflated one); whichever lands in QState depends on call order, and a §3.12.3 fix applied to one assembly site leaves the other non-conformant.
+
+
+### disease/graph
+
+**`GDM-08` — MEDIUM — orphan_deadcode** — DiseaseGraph.hierarchy(), .distance(), .groups(), .as_prior(), .adjacency() are public but unused by any live consumer
+- detail: Only DiseaseGraph.from_variable_code_sets (graph.py:100) is called in src (investigate.py:197). The other public methods are orphaned: hierarchy() (graph.py:70, the bare-ICD-code constructor) has no src caller — its own docstring on from_variable_code_sets (lines 104-111) explains hierarchy() 'never intersects gf.variables and the disease penalty would be a silent no-op', i.e. it documents its own uselessness for the LDO; distance() (graph.py:154, nearest-common-ancestor) has zero callers; groups() (graph.py:164) zero callers; as_prior() (graph.py:173) only calls itself internally and is invoked once from disease_prior.py:46 solely for its side-effect exception, not its return value; adjacency() (graph.py:151) is used only inside disease_prior. So the DiseaseGraph public API is largely a facade.
+- evidence: grep '\.hierarchy(|.distance(|.groups(|.as_prior()' src -> hierarchy/distance/groups: no external callers; as_prior only graph.py:179 (self) + disease_prior.py:46 (exception side-effect). Only from_variable_code_sets is genuinely consumed (investigate.py:197).
+- recommendation: Trim DiseaseGraph to its used surface, or wire the intended consumers: groups() should feed the §5.3 overlap guard, distance() the disease-distance prior. Remove hierarchy() (the code-keyed constructor its own sibling docstring calls a silent no-op) unless a caller is added.
+- risk_if_ignored: The public methods present a richer disease-graph capability than is actually exercised; a maintainer builds on distance()/groups() assuming they are load-bearing, or the §5.3 overlap handling that groups() was meant to power silently never runs.
+
+
+### measurement
+
+**`ORPH-02` — HIGH — orphan_deadcode** — measurement/age_standardization.py is fully orphaned inside src/pegasus — its only caller lives outside the package (studies/pancreatic_c25_national/analysis.py)
+- detail: All 5 public symbols of age_standardization.py (ReferencePopulation, StandardizedRate, load_reference_population, directly_standardized_rate, standardize_grouped) have zero callers anywhere in src/pegasus. The single repo consumer is studies/pancreatic_c25_national/analysis.py, a study script outside the library. So the age-standardization computation — the win-condition deliverable — is a module the package exports but never uses; the measurement subsystem has no internal contract binding rate computation to it. Any other subsystem that needs standardized rates (e.g. the LDO count-with-exposure margin, output tables) reimplements or omits standardization rather than routing through this module.
+- evidence: grep for all 5 symbols across src/pegasus excluding the defining file = 0; whole-repo grep finds only studies/pancreatic_c25_national/analysis.py
+- recommendation: Either (a) wire directly_standardized_rate/standardize_grouped into the measurement layer that the output tables and LDO exposure margins consume (a single measurement.rates API), or (b) move age_standardization out of the shipped library into studies/ if it is genuinely study-local. Do not leave a core epidemiological primitive exported-but-unwired inside the package.
+- risk_if_ignored: Silent divergence: the library's own rate outputs are NOT age-standardized while the study script is, so two callers of 'the mortality rate' get incomparable numbers; a refactor of the panel/output layer cannot know age_standardization must be kept in sync because nothing in src references it.
+
+**`GDM-10` — LOW — naming_inconsistency** — measurement/ conflates two unrelated §II.9 concerns (age-standardization vs race-bridge) and race.py mixes prior-loading, bridging, and bootstrap in one 492-LOC module
+- detail: The measurement/ package holds age_standardization.py (166 LOC, direct standardization + Fay-Feuer CI) and race.py (492 LOC, the RaceBridge emission prior). These share no code and no concept beyond both being 'measurement §II.9'; the package boundary is a label, not a contract. race.py itself is the largest file in the cluster and bundles prior schema/validation (RaceBridgePrior, validate_race_bridge_prior), the bridging estimator (fixedc_dynamic_weight_bridge, _bridge_with_crosswalk, _local_target_pi), and a full bootstrap/posterior CV machinery (_bootstrap_bridge_cv, _posterior_bridge_draws, _draw_prior_matrix, _posterior_intervals) — three separable responsibilities (contract, estimator, uncertainty) in one module.
+- evidence: measurement/race.py: 492 LOC, 25+ defs spanning validate_race_bridge_prior (:117), fixedc_dynamic_weight_bridge (:255), _bootstrap_bridge_cv (:351), _posterior_bridge_draws (:398). age_standardization.py imports nothing from race.py and vice versa.
+- recommendation: Low priority given both are live and cohesive internally. If touched: split race.py into race/prior.py (schema+validation+load), race/bridge.py (estimator), race/uncertainty.py (bootstrap/posterior), and consider whether age_standardization belongs in measurement/ or a rates/ module. Not urgent.
+- risk_if_ignored: Modest: the 'measurement' namespace gives no guidance on where a new §II.9 measure belongs, and race.py's size makes the bridge estimator hard to change without touching the bootstrap/uncertainty code that pins RaceBridgePrior numerics (test_race_bridge_fixedc).
+
+
+### workflows/construct + report
+
+**`WF-12` — LOW — orphan_deadcode** — CLI-shim wrapper modules with dead entrypoints (run_attach_substrate_to_run and the construct/efg_materialize passthroughs)
+- detail: construct/build_substrate.py, construct/efg_materialize.py, report/dashboard.py, report/acceptance.py, report/compile_source.py are thin one-line passthroughs whose only caller is cli.py. Within them run_attach_substrate_to_run (build_substrate.py:39) has ZERO callers even from the CLI (grep returns only its def), so it is a fully dead entrypoint; the rest add an indirection layer that only re-exports the underlying she/efg/acceptance/dashboard functions the CLI could call directly.
+- evidence: grep run_attach_substrate_to_run → only its def in build_substrate.py; each other wrapper symbol resolves to exactly cli.py + its own file
+- recommendation: Delete run_attach_substrate_to_run. Collapse the pure passthrough report/construct wrappers into cli.py direct calls (or a single thin cli_adapters module) rather than a file per command that only forwards args.
+- risk_if_ignored: A dead public function reads as a supported API (silent-failure risk if someone wires it), and the per-command wrapper proliferation inflates the module count and obscures where real logic lives.
+
+
+### causal
+
+**`ORPH-01` — HIGH — orphan_deadcode** — causal/orient.py and causal/quasi.py export 11 public building-block symbols with zero callers; only orient_links + escalate_rung2_its are consumed
+- detail: ldo/orchestrator.py:327 imports `orient_links` and :338 imports `escalate_rung2_its` — the two real entry points. But the `__all__` of the two modules (orient.py:213-220 and quasi.py:173-177) additionally publish 11 symbols that no other module references: is_non_gaussian, lingam_pairwise_direction, is_collider, orient_edge, apply_collider_orientation (orient.py) and ITSResult, interrupted_time_series, detect_structural_break, DiDResult, difference_in_differences, negative_control_break_fraction (quasi.py). These are the LiNGAM/DiD/ITS math primitives; they are only called internally by orient_links/escalate_rung2_its. The public `__all__` surface is a lie: it advertises a rung-1/rung-2 causal API that no consumer uses, while the actual consumed functions (orient_links, escalate_rung2_its) are the only ones that matter.
+- evidence: grep of each of the 11 symbols across src/pegasus (excluding defining file + __init__) returns zero hits; ldo/orchestrator.py:327 `from pegasus.causal.orient import orient_links`; ldo/orchestrator.py:338 `from pegasus.causal.quasi import escalate_rung2_its`
+- recommendation: Demote the 11 internal primitives to module-private (leading underscore, drop from `__all__`), keeping only orient_links and escalate_rung2_its as the public causal API. This collapses the two files into a single enforced entry-point contract (`pegasus.causal` = {orient_links, escalate_rung2_its}) and makes any future orphaning visible.
+- risk_if_ignored: The advertised public surface invites new callers to depend on primitives (e.g. difference_in_differences) that have no test coverage as an entry point and may silently drift; reviewers cannot tell which causal functions are load-bearing, so a refactor could break the real path (orient_links) while leaving the dead API green.
+
+
+### efg/geo
+
+**`DUP-01` — HIGH — duplication** — Moran's I is implemented twice with different weight models (geography-aware adjacency vs 1-D ordering proxy) instead of one geo.spatial_autocorrelation
+- detail: efg/compile_attach.py:115 `_moran_i_for_group` computes Moran's I from a real municipality adjacency dict; efg/q_tensor.py:116 `_moran_contiguity` computes Moran's I under a 1-D chain-contiguity proxy over tensor cell order. Both feed the SAME downstream deflation `_moran_corrected_n_eff` (q_tensor.py:165) for the §3.12.3 n_eff correction, but they can disagree sharply (a real spatial cluster reads high under adjacency, ~0 under arbitrary cell ordering). The canonical spatial-weight object geo/spatial_graph.py already exists (its docstring even lists `Moran's I → view('row_standardized')`) yet neither Moran implementation uses it. This is precisely the 'Moran's I in multiple places' pattern the audit flagged.
+- evidence: efg/compile_attach.py:115 `_moran_i_for_group`; efg/q_tensor.py:116 `_moran_contiguity`; both consumed by `_moran_corrected_n_eff` (q_tensor.py:165, compile_attach.py:253); geo/spatial_graph.py:8 docstring `Moran's I → view('row_standardized')` but no Moran function there
+- recommendation: Add one `spatial_autocorrelation(values, graph_view)` to geo/spatial_graph.py that takes a SpatialWeightGraph row-standardized view, and have BOTH compile_attach and q_tensor call it; delete the two private copies. The ordering-proxy variant becomes graph=chain-contiguity, made explicit rather than a silent fallback.
+- risk_if_ignored: The n_eff deflation — which controls how many independent observations the LDO/certification believes it has — is computed by two different formulas depending on which code path ran, so identical data yields different effective sample sizes and different significance verdicts with no way to reconcile them.
+
+
+### ldo
+
+**`CONTRACT-01` — HIGH — missing_data_contract** — The reliability tensor W is assembled, weighted, and threaded through the LDO but the covariance/precision estimators never read it
+- detail: ldo/assemble.py:69 builds W (p,S,T) with provenance-specific reliability weights (assemble.py:50-60: domain_scalar_broadcast=0.25, reconstructed=0.5, bounded=0.4, unavailable=0.0). W is faithfully propagated by edges.py:46, margins.py:34/142, resolution.py:72-81, spatial_field.py:84. But the actual estimators ignore it: covariance.py `pairwise_correlation` (covariance.py:48) takes only `samples` — grep of W/weight/reliab in covariance.py returns only a docstring mention (:161) of an unrelated whitener; precision.py has ZERO W/weight/reliability references. So every cell contributes equally to the correlation regardless of whether it was a certified count (W=1) or a 0.25-reliability domain broadcast. W is a data-carrier with no enforced contract that the estimator consume it.
+- evidence: ldo/assemble.py:50-69 (W construction + weights); grep `\bW\b|weight|reliab` in ldo/covariance.py → only docstring line 161; same grep in ldo/precision.py → 0 hits; ldo/margins.py:8 comment 'Reliability weights W propagate unchanged'
+- recommendation: Define an explicit typed contract at the estimator boundary: pairwise_correlation must accept W and compute reliability-weighted pairwise moments (weighted XᵀX with per-cell w), OR the LDOField must carry a flag asserting W was consumed. Route all estimation through one weighted-moment primitive so W cannot be silently dropped.
+- risk_if_ignored: Reconstructed/broadcast cells (intended to count for a quarter as much) are treated as fully reliable observations, so the correlation matrix — and every edge/precision estimate downstream — is contaminated by low-trust provenance at full weight; the system produces confident findings on data it internally rated as 0.25 reliable.
+
+**`ORPH-04` — MEDIUM — orphan_deadcode** — ldo/disease_prior.py and ldo/exhaustiveness.py each export unused primitives alongside the ones the orchestrator actually imports
+- detail: disease_prior.py __all__ (lines 170-178) has 8 symbols but only tile_penalty_across_lags (lags.py:23) and {disease_laplacian_matrix, disease_penalty_matrix, sum_of_scales_disease_operator} (orchestrator.py:168-172) are imported; variable_affinity, hierarchical_disease_laplacians_from_affinity, hierarchical_disease_laplacians, penalty_from_affinity have zero callers. exhaustiveness.py __all__ (lines 83-86) has 5 symbols but resolution.py:22 imports only {CoverageManifest, should_drill_down}; the three actual screens heterogeneity_screen, max_subgroup_screen, dispersion_screen have zero callers — i.e. the 'exhaustiveness' screening functions the module is named for are never run.
+- evidence: disease_prior.py:170-178 __all__; orchestrator.py:168-172 + lags.py:23 imports; grep of variable_affinity/hierarchical_*/penalty_from_affinity = 0. exhaustiveness.py:83-86 __all__; resolution.py:22 imports CoverageManifest+should_drill_down only; grep of *_screen = 0.
+- recommendation: For exhaustiveness: either wire the three *_screen functions into should_drill_down/the resolution drill loop (they appear to be the intended heterogeneity/dispersion gates) or delete them. For disease_prior: keep the 4 imported symbols, remove the 4 orphaned affinity variants that duplicate the disease_penalty_matrix path.
+- risk_if_ignored: The exhaustiveness subsystem name implies subgroup/dispersion screening is happening; with the screens orphaned the drill-down decision uses only should_drill_down, so heterogeneous subgroups that the screens would flag are silently never drilled — a coverage-completeness gap masquerading as implemented.
+
+
+### core/io
+
+**`DUP-02` — HIGH — duplication** — core.io_utils centralizes atomic JSON write but ~28 call sites reimplement mkdir+write_text(json.dumps) non-atomically, bypassing atomic_replace
+- detail: core/io_utils.py provides `_write_json` (io_utils.py:51) which does mkdir + tmp-write + `atomic_replace` (the Windows-lock-safe rename, io_utils.py:14). Yet `atomic_replace` has exactly ONE caller (io_utils itself), while ~28 sites across the repo hand-roll `path.write_text(json.dumps(...))` with no temp file and no atomic rename: assets/store.py:105, datasus/cache.py:25, datasus/manifests.py:328, datasus/profile.py:76, datasus/schema_compare.py:44, datasus/storage_gc.py:143, efg/compile_attach.py:564/574, efg/materialization_manifest.py:168/208, output/bundle.py:120, output/bundle_manager.py:200, output/schema_seed.py:196, she/panel.py:325, she/substrate.py:437/471, sidra/extract.py:35/112/196, sidra/metadata.py:196-198, source_artifacts/compile_policy.py:88, source_artifacts/contracts.py:157/203, workflows/acquire/sidra_national.py:106, workflows/compile.py:59/188/833/889. Each also re-picks json.dumps flags (indent/sort_keys/ensure_ascii) inconsistently. The canonical helpers `_hash_payload`, `_safe_id`, `_compact` have ZERO cross-module callers.
+- evidence: grep `atomic_replace` outside io_utils = 1 file; grep `write_text(json.dumps` outside io_utils = ~28 sites (listed); `_hash_payload`/`_safe_id`/`_compact` cross-module callers = 0
+- recommendation: Make `_write_json`/`atomic_replace` the public core.io API (rename without underscore, add to a real `__all__`) and migrate all ~28 ad-hoc writers to it; delete the unused `_hash_payload`/`_safe_id`/`_compact` or wire the writers that need hashing/slugs through them. One io module, one atomic-write path.
+- risk_if_ignored: Every ad-hoc writer is non-atomic on Windows — the exact PermissionError/partial-write failure atomic_replace was written to prevent; a crash mid-write leaves a truncated manifest/bundle JSON that later reads as valid-but-wrong, and the safe helper that would prevent it sits unused.
+
+**`DUP-04` — MEDIUM — duplication** — Inline JSON read (json.loads(path.read_text())) reimplemented ~28 times instead of routing through io_utils._load_json
+- detail: core/io_utils.py:39 provides `_load_json` (existence-safe, JSONDecodeError-safe, dict-typed), but it has only 4 cross-module callers while ~28 sites inline `json.loads(...read_text())` / `json.load(open())` with no missing-file or decode guard. This is the read-side twin of DUP-01. The inconsistency means some readers crash on a missing/corrupt manifest and others silently return {} depending on which idiom the author picked.
+- evidence: grep `_load_json` cross-module = 4 files; grep `json.loads(...read_text)|json.load(open` across src/pegasus (excluding io_utils) = 28 occurrences
+- recommendation: Promote `_load_json` (and a strict variant that raises) to the public core.io API and migrate ad-hoc readers; standardize whether a missing manifest is {} or an error at the call site via an explicit parameter, not by accident of idiom.
+- risk_if_ignored: Uneven error handling: a corrupt registry/manifest is silently treated as empty in some paths (producing wrong-but-quiet results) and fatal in others, so identical corruption manifests as either a hard crash or a subtle wrong answer depending on which reader hit it first.
+
+
+### disease
+
+**`ORPH-03` — MEDIUM — orphan_deadcode** — disease/icd_adapter.py publishes 10 ICD-hierarchy helpers; 5 have zero repo callers (cid10_chapter, cid10_block, descendants, is_leaf, is_valid_who)
+- detail: icd_adapter.py's `__all__` exports a full ICD navigation API, but cross-module grep shows cid10_chapter=0, cid10_block=0, descendants=0, is_leaf=0, is_valid_who=0 callers, while ancestors=1, nearest_common_ancestor=1, add_dot=1, remove_dot=1, ICDCodeInfo=1 are barely used. The disease subsystem exports a hierarchy-traversal surface where half is dead. This mirrors the causal pattern: __all__ over-declares.
+- evidence: grep of each symbol outside disease/icd_adapter.py and __init__: cid10_chapter/cid10_block/descendants/is_leaf/is_valid_who = 0; ancestors/nearest_common_ancestor/add_dot/remove_dot/ICDCodeInfo = 1 each
+- recommendation: Trim `__all__` to the 5 symbols actually consumed and mark the rest private, or wire chapter/block/descendants into the disease variable grammar (variable_grammar.py) that should be using ICD hierarchy for stratification. Either consolidate to a used API or delete.
+- risk_if_ignored: A large ICD-hierarchy API presents as tested/supported infrastructure while being untested dead weight; the disease variable generator may reimplement chapter/block logic rather than reuse these, spawning a second ICD-hierarchy implementation.
+
+
+### core/text
+
+**`DUP-03` — MEDIUM — duplication** — Digit-extraction / string-canonicalization reimplemented in 6+ modules with no core.text primitive
+- detail: The idiom `''.join(ch for ch in text if ch.isdigit())` (strip to digits, used for codes/CEP/CNS) appears independently in datasus/normalize/records.py:114, datasus/normalize/sinasc.py:40, efg/executor/support.py:52, geo/state_panel.py:104, measurement/race.py:107; and pirs/families.py:31 uses the alnum variant. core/io_utils.py:82 has yet another char-filter (`_safe_id`, isalnum→'_') that no one else calls. There is no core.text module; each subsystem carries its own copy of the same normalization, so a fix (e.g. handling non-ASCII digits) must be applied 6 times.
+- evidence: grep `ch.isdigit()` across src: records.py:114, sinasc.py:40, support.py:52, state_panel.py:104, race.py:107; pirs/families.py:31 alnum; core/io_utils.py:82 `_safe_id`
+- recommendation: Create core/text.py with `digits_only(s)`, `slugify(s)` (absorbing _safe_id), and any accent-strip helper; route all six sites through it. One text-normalization module.
+- risk_if_ignored: Six copies drift: one may strip a leading zero or mishandle None differently, so the same municipality code / CNS is canonicalized inconsistently across the pipeline, producing join misses that surface as silently-dropped rows rather than errors.
+
+
+### she
+
+**`ORPH-06` — MEDIUM — orphan_deadcode** — she/panel.py write_common_panel + PanelField are orphaned; the common-panel writing they name has no in-repo caller
+- detail: she/panel.py exports write_common_panel and PanelField; both have zero callers anywhere in the repo (excluding the defining file). The 'common panel' is the central data structure the LDO consumes (ldo/assemble.py takes a CommonPanel), so a public write_common_panel that nothing calls signals either a superseded writer left behind or a genuine wiring gap. she/panel.py:325 also hand-rolls a non-atomic json write (see DUP-01), reinforcing it as untended.
+- evidence: grep `write_common_panel` and `PanelField` across whole repo excluding she/panel.py = 0
+- recommendation: Confirm which module actually materializes the CommonPanel the LDO reads; if it is not she/panel.py, delete write_common_panel/PanelField; if it should be, wire it into the compile pipeline. Consolidate to a single common-panel writer.
+- risk_if_ignored: A second, dead common-panel serialization path invites divergence from the live one (schema/column drift), and its presence obscures where the real panel is produced, raising the cost of every panel-schema change.
+
+
+### efg
+
+**`GODMOD-01` — MEDIUM — god_module_decomposition** — efg/compile_attach.py concentrates Moran computation, adjacency loading, q-row assembly, tensor-warning rows, and non-atomic manifest writes in one module
+- detail: efg/compile_attach.py owns: two Moran helpers (_moran_i_for_group:115, _moran_i_adjacency:136, _moran_proxy:212, _moran_diagnostic:218), adjacency loading (_load_declared_adjacency:~205), n_eff assembly (_q_row/_vector_diagnostics ~247-326), reliability/tensor-warning row construction (_tensor_warning_row:381, tensor-read loop 602-643), AND two hand-rolled non-atomic JSON manifest writes (564, 574). It reaches into efg/q_tensor internals (imports _kish_effective_n, _moran_corrected_n_eff at line 18 — private symbols crossing a module boundary). This mixes spatial statistics, IO, and q-tensor assembly with no internal API boundary.
+- evidence: efg/compile_attach.py:18 imports private `_kish_effective_n, _moran_corrected_n_eff` from q_tensor; :115/:136/:212/:218 Moran; :381 tensor-warning rows; :564/:574 raw write_text json manifests
+- recommendation: Extract the Moran/adjacency block into the geo.spatial_autocorrelation module (DUP-02), the manifest writes into core.io (DUP-01), and expose q_tensor's n_eff helpers as a public function instead of importing underscored internals across the boundary. Leave compile_attach as pure orchestration.
+- risk_if_ignored: Cross-module import of private q_tensor symbols means a q_tensor refactor silently breaks compile_attach with no interface signal; the co-located spatial-stat + IO logic is where DUP-01 and DUP-02 divergence originates.
+
+
+### causal/ldo
+
+**`LAYER-01` — MEDIUM — layering_violation** — __all__ public surfaces systematically misrepresent the real inter-module API; consumers import symbols not in __all__ while __all__ advertises dead ones
+- detail: A repeated structural defect: the enforced-looking `__all__` boundary does not match actual usage in at least 4 modules. causal/orient.py __all__ lists 6, only orient_links is imported (ORPH-01). causal/quasi.py __all__ lists 7, only escalate_rung2_its imported. disease_prior.py __all__ lists 8, 4 orphaned (ORPH-04). exhaustiveness.py __all__ lists 5, the 3 screens orphaned. Because nothing validates __all__ against real cross-module callers, __all__ is decorative — it neither documents the true API nor prevents orphan accumulation. Of 676 __all__ entries repo-wide, a static bare-name scan flags 215 with no cross-module bare-name reference (many are legitimate re-exports, but the causal/disease/exhaustiveness cases above are confirmed true orphans).
+- evidence: Programmatic scan: 676 total __all__ symbols, 215 with zero cross-module bare-name usage; confirmed-true subset in ORPH-01/03/04; imports of non-__all__-relevant private symbols e.g. compile_attach.py:18
+- recommendation: Add a lightweight import-graph lint (or test) that fails when an `__all__` symbol has zero cross-package callers AND is not a documented plugin/entry point, run in CI. Treat __all__ as the enforced API contract, not documentation. This is the single mechanism that would have prevented ORPH-01 through ORPH-06.
+- risk_if_ignored: Orphans accumulate invisibly (the project's stated silent-failure risk): every dead public symbol is a maintenance tax and a false signal of tested infrastructure, and real wiring gaps (a function that SHOULD be called but isn't) are indistinguishable from intentional-library surface.
+
+
+## Theme index (resume)
+
+All 88 ids accounted for. Here is the lossless consolidation index.
+
+---
+
+# Modularization Consolidation Index
+
+Every one of the 88 findings is grouped below under one of five consolidation themes. Each theme states the single consolidation that dissolves its members, then walks each member id and its role.
+
+---
+
+## THEME 1 — Shared-Primitive Extraction
+
+*The single consolidation:* **Lift each repeatedly-hand-rolled computation into exactly one canonical primitive and route every call site through it.** Concretely, stand up: `geo.spatial_autocorrelation` (one Moran's I over the canonical `SpatialWeightGraph` view), one graph-Laplacian helper `L = D - W`, one HSIC kernel module (exact/RFF/Nyström), one population/simplex projection operator, one `core.text` digit/canonicalization primitive, one `core.io_utils` atomic-JSON read+write path, one `n_eff` §3.12.3 assembly, and one solver-telemetry/manifest emitter. The many divergent copies collapse into these.
+
+**Moran's I / spatial-weight construction** — the single most duplicated primitive, surfaced independently by seven ids: **EFG-03** (twice: ordering-contiguity in `q_tensor` vs geography-adjacency in `compile_attach`), **OR-03** (two implementations plus a stale schema field), **GDM-02** (≥3 divergent implementations, none using the canonical `SpatialWeightGraph` view), **DUP-01** (geography-aware adjacency vs 1-D ordering proxy → should be one `geo.spatial_autocorrelation`), **LDO-B12** (`pirs/spatial.py` Moran-based selector orphaned relative to live LDO), **GDM-07** (`moran_i`/`cov_S`/`cov_T`/`spatial_entropy`/`temporal_roughness` threaded through untyped `support: dict[str,Any]` so proxy and geography-aware values collide in one slot — the extraction must also type the output), and **GODMOD-01** (`compile_attach.py` concentrating Moran computation + adjacency loading among other concerns — the Moran piece exits to the shared primitive here). All collapse into the one canonical Moran over `SpatialWeightGraph`.
+
+**Per-field diagnostic statistics** — **EFG-04**: `cv` / `temporal_roughness` / `spatial_entropy` each implemented twice (list-based in `q_tensor`, panel-based in `compile_attach`) → one panel-based implementation.
+
+**Graph Laplacian `L = D − W`** — **LDO-B08** (hand-rolled at four independent sites, no shared helper) and **GDM-06** (Disease Laplacian computed 3× across `DiseaseGraph.laplacian`, `disease_prior.disease_laplacian_matrix`, `disease_prior._laplacian_from_mask` with two disjoint node keyings) → one Laplacian helper with a single node-keying contract.
+
+**HSIC kernel math** — **LDO-B03** (`residual_scan.py` reimplements the doubly-centered kernel and forks exact/RFF/Nyström already in `hsic.py`) and **LDO-B04** (`residual_scan` reaches into `hsic.py` privates `_bandwidth`, `_np_rff_features`, `_np_nystrom_features`) → one public HSIC module that `residual_scan` imports instead of forking.
+
+**Projection operators** — **RD-02** (population projection implemented twice, pure-Python and numpy, across population/migration/simplex) and **RD-05** (orphaned solvers reach into `projected_gradient`'s private projection/init helpers across module boundaries) → one public projection primitive; the private cross-boundary reach disappears with the orphans (Theme 4) but the primitive must be public first.
+
+**`n_eff` §3.12.3 (Kish + Moran deflation)** — **EFG-11** (`n_eff` centralized but the surrounding diagnostic assembly copy-pasted between `q_tensor.compute_q_state` and `compile_attach._vector_diagnostics`) and **GDM-09** (the §3.12.3 primitives live in `q_tensor` but are re-imported and re-orchestrated in `compile_attach`, splitting one computation across two modules) → one §3.12.3 assembly that both callers invoke.
+
+**Digit-extraction / string-canonicalization** — **AH-01** (`_clean`/`_digits`/`_stable_hash`/`_read_table` quartet copy-pasted across 4 normalizers with *divergent null-token sets*) and **DUP-03** (digit-extraction / string-canonicalization reimplemented in 6+ modules, no `core.text` primitive) → one `core.text` primitive with a single agreed null-token set.
+
+**Atomic JSON I/O** — **DUP-02** (~28 sites reimplement `mkdir + write_text(json.dumps)` non-atomically, bypassing `atomic_replace`) and **DUP-04** (~28 sites reimplement `json.loads(path.read_text())` instead of `io_utils._load_json`) → route all reads and writes through `core.io_utils`.
+
+**Solver telemetry / manifest boilerplate** — **RD-07**: solver-telemetry + `as_manifest` boilerplate duplicated across the population and ST-DFM schemas → one shared emitter.
+
+**Bundle column contracts / row schemas** (primitive form of a data contract, but the fix is a single shared constructor, so it lives here) — **OR-02** (bundle table column contracts redefined in 4+ places, no shared source of truth) and **WF-04** (`Q_tensor` / `V_fields` / `VariableDictionary` row schema hand-built in 4+ places, no typed constructor) → one typed row/column constructor as the single source of truth.
+
+**Population-mode → solver-mode mapping** — **WF-08**: two identical mappers in `compile.py` → one mapper.
+
+---
+
+## THEME 2 — Missing Data Contracts
+
+*The single consolidation:* **Introduce and enforce the typed contracts that producers already fill but consumers ignore or re-probe — the reliability tensor `W`, the typed `FieldNode.support`/Q-tensor rows, the CTR/ST-DFM certification gate, the SIDRA cell-cap config, and schema enforcement at ingest boundaries — so the contract is read where it is threaded.**
+
+**Reliability tensor `W` (ObservationReliability)** — the flagship missing contract, raised three times: **LDO-B01** (`W` produced and threaded through every type but ignored by the estimator — missing `ObservationReliability` contract), **CONTRACT-01** (`W` assembled, weighted, threaded through the LDO but the covariance/precision estimators never read it), and its under-fill **LDO-B02** (the `W` producer under-fills: docstring promises §3.12 `n_eff` but `assemble.py` only maps a fixed provenance-to-weight lookup). Consolidation: define the `ObservationReliability` contract, make the estimators consume it, and back it with the real §3.12 `n_eff` instead of the flat lookup.
+
+**Typed `support` / candidate axes** — **EFG-07** (`FieldNode.support`/`axes` untyped dict; producers flatten typed candidates into stringly-keyed dicts, consumers re-probe ~15 alias keys) and its statistical face **GDM-07** (already cited under Theme 1 for the Moran duplication, it *also* manifests the missing type on `support: dict[str,Any]`; the typing half is resolved here). Consolidation: a typed `support`/axes contract so producers stop flattening and consumers stop alias-probing.
+
+**Certification gates** — **RD-04** (CTR certification is a parallel *unenforced* copy of ST-DFM certification, so reconstructed tensors reach substrate uncertified) and **RD-03** (the CTR 'unification' kernel is orphaned for its two headline instances *and its certification gate*). Consolidation: one enforced certification contract that CTR and ST-DFM both pass through; no tensor reaches substrate uncertified.
+
+**SIDRA cell-cap magic number** — **AH-06**: cell-cap `49900` duplicated across 4 sites → one config contract.
+
+**Ingest-boundary schema enforcement** — **OR-08** (`OutputBundleManager.set_table` accepts untyped `list[dict]`, no schema enforcement at ingest) and **OR-06** (`empty_by_profile` warning emitted twice, hardcoded vs dynamic, with drift risk — a symptom of no single emission contract). Consolidation: enforce the table schema at the `set_table` boundary and emit the empty-profile warning from that single contract.
+
+---
+
+## THEME 3 — God-Module Decomposition
+
+*The single consolidation:* **Split each oversized multi-responsibility module/function along its responsibility seams into focused units, extracting the shared math (to Theme 1) and the orchestration wiring as it goes.**
+
+**LDO orchestrator** — **LDO-B09**: `orchestrator.run_ldo` is a ~390-line god-function stitching 14 subsystems with inline imports and inline math → decompose into staged subsystem calls, hoist the inline math to primitives.
+
+**EFG executor kernels** — **EFG-08**: `executor/kernels.py` (838 LOC) crams 10 unrelated tensor-computation kinds dispatched by operator string → one module per kernel kind behind a dispatch table.
+
+**EFG compile/attach** — **EFG-09** (`compile_attach.py`, 674 LOC, mixes execution orchestration, full Q-tensor recomputation, ~10 row serializers, run-bundle attachment) and its overlapping restatement **GODMOD-01** (same module concentrating Moran, adjacency loading, q-row assembly, tensor-warning rows, non-atomic manifest writes). Consolidation: split into orchestration / serialization / attachment units; the Moran math exits to Theme 1 and the non-atomic writes to Theme 1's io_utils routing.
+
+**EFG DAG spine** — **EFG-10**: `dag/spine.py._build_efg_base` is a single ~560-line function building the entire graph → break into per-region builders.
+
+**RD orchestrator** — **RD-09**: `orchestrator.py` (782 lines) with two ~500-line build functions holding solver-selection, problem-assembly, projection, and result-emission → split those four concerns into separate units.
+
+**Measurement module** — **GDM-10**: `measurement/` conflates age-standardization vs race-bridge (two unrelated §II.9 concerns), and `race.py` (492 LOC) mixes prior-loading, bridging, and bootstrap → separate the two §II.9 concerns and split `race.py`'s three responsibilities.
+
+---
+
+## THEME 4 — Orphan Removal
+
+*The single consolidation:* **Delete (or, where the capability is genuinely wanted, wire) each unreachable/zero-caller symbol, module, and parallel code path; retire superseded implementations and their support scaffolding.** This is the largest theme — grouped by subsystem below.
+
+**LDO orphans** — **LDO-B05** (`inverse_gaussianize`, the §III.5 native-scale back-map, zero callers), **LDO-B06** (Difference-in-differences `DiDResult`/`difference_in_differences` dead in the causal ladder — only ITS wired), **LDO-B07** (`build_spatial_precision` dense GMRF orphan, superseded by `build_spatial_precision_sparse`), **LDO-B11** (`dispersion_screen` exported from `exhaustiveness` but never used, even internally), **ORPH-04** (`ldo/disease_prior.py` and `ldo/exhaustiveness.py` each export unused primitives alongside the ones the orchestrator imports).
+
+**EFG orphans / parallel paths** — **EFG-01** (`q_tensor.compute_q_state`/`classify_q_state`/`provenance_risk` — declared canonical Q-tensor, ZERO production callers), **EFG-05** (efg materialization-manifest write/attach chain reachable only from CLI, disjoint from live `build_efg`), **EFG-06** (`materialize.materialized_field_nodes` and `compile_attach._moran_proxy` pure orphans). Note **EFG-02** (three divergent `FieldState` classifiers) is filed under Theme 5 as a layering/API-convergence problem.
+
+**Reconstruction/population orphans** — **RD-01** (three registered population-solver backends — ADMM, block-coordinate, state-space — unreachable dead code), **RD-03** (CTR 'unification' kernel orphaned for its two headline instances — its certification-gate face is under Theme 2), **RD-06** (state-space smoother's stale `None`-anchor check after schema switched anchors to NaN numpy arrays), **RD-08** (`dense_national_abort_check`, `_ilr_np`, `iter_coordinates` exported with zero callers), **RD-11** (`plan_sparse_population_solver`/`SparsePopulationPlan`/memory preflight reachable only through the orphaned sparse solvers — removed with them).
+
+**Acquisition orphans / parallel paths** — **AH-02** (two DATASUS acquisition entrypoints re-assembling the same manifest+fetch+parallel loop), **AH-04** (record-oracle path `normalize_record`+`normalize_*_record`, zero production callers), **AH-05** (`plan_sidra_chunks`+`extract_chunk_plan` sequence re-assembled in 5 independent sites), **AH-07** (`ingest_sidra()` public entrypoint, test-only), **AH-09** (`projection.py` and `sidra_projection.py` both implement SIDRA classification projection), **AH-10** (`run_datasus_profile` raw-vs-processed schema-compare audit CLI-only, unreachable from pipeline). Consolidation converges these to the single live acquisition path (see also WF-05).
+
+**Orchestration/output orphans** — **OR-04** (`curated_cause_report.py` ~388-LOC orphan reporter, zero callers), **OR-05** (fixture-only bundle writers living in production `output/` beside the real writer), **OR-07** (`assert_materialized_external_source_purity`, no callers).
+
+**Graph/domain orphans** — **GDM-01** (`SpatialWeightGraph.view()` row_standardized/symmetric/laplacian views and `blocks()` orphaned — the 'one graph, many views' API has no real consumers; note the *live* consumer arrives when Theme 1 routes Moran through this view), **GDM-03** (entire `pirs/` package — schemas/families/spatial/nystrom/rff — zero production callers, shadowed by live re-implementations), **GDM-04** (`disease/variable_grammar.py` — self-admitted second unwired §5.1 generator; `stratify_events`/`assemble_disease_field` no src callers), **GDM-08** (`DiseaseGraph.hierarchy()`/`.distance()`/`.groups()`/`.as_prior()`/`.adjacency()` public but unused).
+
+**Workflow orphans** — **WF-01** (`run_attach_race_bridge` — forbidden manual domain-attacher, zero callers), **WF-02** (`curated_cause_report.py`, 394 LOC, orphaned from real study path — same reporter as OR-04), **WF-03** (`build_autonomous_efg`/`build_autonomous_efg_from_manifest` wrappers bypassed and orphaned), **WF-09** (`write_reproducibility_manifest` called twice with identical args in `_serialize_run_bundle` — dead second call), **WF-10** (`pirs_model`/`pirs_hsic` stage requirements permanently non-executable — retired to LDO — but still planned and validated), **WF-12** (CLI-shim wrapper modules with dead entrypoints: `run_attach_substrate_to_run` and the construct/efg_materialize passthroughs).
+
+**Cross-cutting orphans** — **ORPH-01** (`causal/orient.py` and `causal/quasi.py` export 11 public building-block symbols with zero callers; only `orient_links`+`escalate_rung2_its` consumed), **ORPH-02** (`measurement/age_standardization.py` fully orphaned inside `src/pegasus` — sole caller is `studies/pancreatic_c25_national/analysis.py` outside the package; either promote to a supported cross-package API or relocate), **ORPH-03** (`disease/icd_adapter.py` publishes 10 helpers; 5 zero-caller: `cid10_chapter`, `cid10_block`, `descendants`, `is_leaf`, `is_valid_who`), **ORPH-05** (`output/sidra_denominator_anchor.py` entry `attach_sidra_population_anchor_to_run`, zero src callers, test-only), **ORPH-06** (`she/panel.py` `write_common_panel`+`PanelField` orphaned — the common-panel writing has no in-repo caller).
+
+---
+
+## THEME 5 — Layering & Import-Boundary Correction
+
+*The single consolidation:* **Fix the module boundaries so private symbols are not reached across modules, import cycles are broken structurally, stale post-move path references are repaired, parallel acquisition/loader/classifier paths converge to one, and `__all__` truthfully reflects the real inter-module API.**
+
+**Private-symbol cross-boundary reach** — **LDO-B10** (`orchestrator` imports `certgates._edge_keys`, a private symbol, across the module boundary) → promote to a public accessor. (`LDO-B04` and `RD-05`, also private-reach, are filed under Theme 1 because their fix is the shared primitive that removes the reach.)
+
+**Import cycles** — **GDM-05**: `geo/migration_affinity.py` imports UP into `denominators`, creating a `geo`↔`denominators` cycle broken only by a deferred in-function import → restructure so the dependency flows one way.
+
+**Namespace / boundary between acquire and transform** — **AH-08** (two parallel SIDRA namespaces `pegasus.sidra` vs `pegasus.sources.sidra`, no boundary between acquire and transform), **AH-11** (SIDRA metadata-cache warming + client construction scattered across acquire sites instead of a shared acquire context), **WF-06** (`_acquire_datasus` lives in `pipeline.py` and is imported back circularly by `sidra_national`). Consolidation: one acquire package/context with a clean acquire↔transform boundary, breaking the circular import.
+
+**Convergence of parallel paths to one canonical path** — **WF-05** (SIDRA acquisition in three parallel, non-converging code paths — the workflow-level statement of AH-02/AH-05/AH-08), **OR-01** (four independent registry-YAML loaders with three divergent entry contracts → one loader, one contract), **EFG-02** (three independent divergent `FieldState` classifiers for the same verified/fragile/quarantined decision → one classifier).
+
+**UF-list canonicalization** — **AH-03** (hardcoded `_ALL_UFS` tuple + private `_resolve_ufs` vs canonical `geo.uf.ALL_UF_SIGLAS`) and **WF-07** (`_resolve_ufs` and the 27-UF list duplicated instead of `geo.uf.ALL_UF_SIGLAS`) → all resolution routes through `geo.uf.ALL_UF_SIGLAS`.
+
+**Stale post-move path references** — **RD-10** (stale `she.reconstruction` references after the package moved to `denominators.reconstruction`) and **RD-06**'s sibling concern of schema-drift is handled in Theme 4; here **RD-10** and the intent-loader drift below are the path-reference fixes.
+
+**Triplicated loaders with divergent contracts** — **WF-11**: `_load_intent` triplicated with three different return contracts → one loader, one return contract.
+
+**`__all__` truthfulness** — **LAYER-01**: `__all__` public surfaces systematically misrepresent the real inter-module API (consumers import symbols not in `__all__`; `__all__` advertises dead ones) → reconcile every `__all__` to the real API surface, which also finalizes the orphan-removal (Theme 4) and private-reach (this theme) cleanups.
+
+---
+
+## Coverage ledger (all 88 ids placed, no drops)
+
+- **Theme 1 (Shared-Primitive Extraction, 24):** EFG-03, EFG-04, EFG-11, OR-02, OR-03, DUP-01, DUP-02, DUP-03, DUP-04, LDO-B03, LDO-B04, LDO-B08, GDM-02, GDM-06, GDM-07, GDM-09, GODMOD-01, RD-02, RD-05, RD-07, AH-01, WF-04, WF-08 — plus GDM-07 spans to Theme 2 for its typing half.
+- **Theme 2 (Missing Data Contracts, 8):** LDO-B01, LDO-B02, CONTRACT-01, EFG-07, RD-03, RD-04, AH-06, OR-08, OR-06 — (GDM-07 typing counted here as its second face).
+- **Theme 3 (God-Module Decomposition, 6):** LDO-B09, EFG-08, EFG-09, EFG-10, RD-09, GDM-10 — (GODMOD-01 primary in Theme 1's Moran; its decomposition aspect noted here).
+- **Theme 4 (Orphan Removal, 38):** LDO-B05, LDO-B06, LDO-B07, LDO-B11, ORPH-04, EFG-01, EFG-05, EFG-06, RD-01, RD-03, RD-06, RD-08, RD-11, AH-02, AH-04, AH-05, AH-07, AH-09, AH-10, OR-04, OR-05, OR-07, GDM-01, GDM-03, GDM-04, GDM-08, WF-01, WF-02, WF-03, WF-09, WF-10, WF-12, ORPH-01, ORPH-02, ORPH-03, ORPH-05, ORPH-06, LDO-B12.
+- **Theme 5 (Layering & Import-Boundary, 15):** LDO-B10, GDM-05, AH-08, AH-11, WF-06, WF-05, OR-01, EFG-02, AH-03, WF-07, RD-10, WF-11, LAYER-01.
+
+A few ids intentionally appear under more than one theme because a single finding carries two separable defects (e.g. RD-03 = orphaned kernel *and* orphaned certification gate; RD-04 = parallel copy *and* unenforced contract; GODMOD-01 = duplicated Moran *and* god-module; GDM-07 = duplicated stat *and* untyped slot; WF-05 = the workflow-level umbrella over the AH acquisition duplications). The primary placement is where the single consolidation actually resolves it; the cross-reference is noted inline so nothing is silently dropped. Every distinct id from the input list of 88 is referenced.

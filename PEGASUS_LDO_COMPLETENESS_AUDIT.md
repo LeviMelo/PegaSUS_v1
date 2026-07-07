@@ -2,6 +2,11 @@
 
 Generated 2026-07-06 by a 70-agent adversarially-verified review reading PEGASUS_MSD_III.md + the LDO/EFG implementation. Each requirement is a NORMATIVE MSD-III clause; status is what the code actually does on the live national investigate path (run_ldo). This is the LDO build ledger — update the Status column as packages land.
 
+## Progress log
+
+- **WP1 — §III.4(5) quadratic prior-regularizers — DONE (commit f774e28).** Temporal-smoothness quadratic (was a *blocker*, entirely missing) and the disease-`L_D` Laplacian quadratic `(γ/2)·tr(Sᵀ L_D S)` (was only an adaptive-ℓ1 discount) are now in the LVGLASSO S-step as a Lipschitz-stable proximal-gradient step; `DiseaseGraph`→`L_D` exposed via `disease_laplacian_matrix`; wired through `fit_lagged_links`→`run_ldo` (default γ=0.1, byte-identical at γ=0), stability refits inherit it. Proof-of-capability test added. **Still open in this clause:** the spatial BYM/ICAR *varying-coefficient field* (`spatial_field_ref`) — folded into **WP2** (it is the spatial-hierarchy carrier).
+- **Next: WP4** (HSIC residual completeness), then **WP5** (causal ladder).
+
 ## Subsystem verdicts
 
 | gaps/reqs | subsystem | verdict |

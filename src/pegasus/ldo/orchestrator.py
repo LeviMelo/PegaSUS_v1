@@ -268,6 +268,23 @@ def run_ldo(
     for r in records:
         assert_ldo_edge_promotion_allowed(r)
 
+    # §V.2 separable joint-precision telemetry (§V.6): the factored log-det of the joint
+    # operator Ω_var ⊗ Σ_space⁻¹ ⊗ Σ_time⁻¹, computed axis-by-axis — the (pST)² joint is never
+    # materialized. Exact sparse-Cholesky space factor at moderate S; matrix-free SLQ at
+    # national S. Best-effort telemetry feeding the validity report; never fails a run.
+    kronecker_report = None
+    try:
+        if lagged.lag0_precision is not None and gf.shape[1] > 1:
+            from pegasus.ldo.kron import joint_logdet, kronecker_from_ldo
+            _op = kronecker_from_ldo(lagged.lag0_precision, gf.space_ids, kappa=kappa, tau=K + 1)
+            _ld, _method = joint_logdet(_op, seed=seed)
+            kronecker_report = {
+                "joint_logdet": _ld, "space_logdet_method": _method,
+                "dim": _op.dim, "p": _op.p, "S": _op.S, "tau": _op.tau,
+            }
+    except Exception:
+        kronecker_report = None
+
     n_eff = int(np.isfinite(gf.Z).any(axis=0).sum())
     # §VIII.2(3) typed coverage manifest: record what was searched (resolution, lag depth,
     # functional forms) and, explicitly, what was not — so "no edge" ≠ "not looked for".
@@ -317,6 +334,9 @@ def run_ldo(
         "coverage_manifest": coverage.as_manifest(),
         # §V.5: adaptive-precision-controller verdict (None when the controller is off).
         "precision_controller": precision_report,
+        # §V.2: separable joint-precision log-det via the Kronecker-factored operator (None
+        # when the variable precision is not SPD or the space factor is unavailable).
+        "kronecker_joint": kronecker_report,
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

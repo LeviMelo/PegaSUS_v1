@@ -16,6 +16,13 @@ from pegasus.ldo.certify import (
 from pegasus.ldo.orchestrator import LDORun, run_ldo
 from pegasus.ldo.resolution import MultiResolutionRun, restrict_variables, run_multiresolution_ldo
 from pegasus.ldo.envelope import ScaleExceedsEnvelopeError, assert_within_envelope, estimate_ldo_bytes, load_compute_envelope
+from pegasus.ldo.kron import (
+    KroneckerPrecision,
+    build_temporal_precision_ar1,
+    joint_logdet,
+    kronecker_from_ldo,
+)
+from pegasus.ldo.stochastic import stochastic_logdet
 from pegasus.ldo.output import link_records_to_table, write_hypotheses
 from pegasus.ldo.records import LINK_RECORD_COLUMNS, EdgeType, LinkRecord
 
@@ -50,6 +57,11 @@ __all__ = [
     "estimate_ldo_bytes",
     "load_compute_envelope",
     "ScaleExceedsEnvelopeError",
+    "KroneckerPrecision",
+    "build_temporal_precision_ar1",
+    "kronecker_from_ldo",
+    "joint_logdet",
+    "stochastic_logdet",
     "link_records_to_table",
     "write_hypotheses",
     "LinkRecord",

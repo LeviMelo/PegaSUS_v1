@@ -107,16 +107,23 @@ def fit_contemporaneous_precision(
     spatial_whiten: bool = True,
     min_coverage: int = 30,
     min_overlap: int = 20,
+    use_reliability_weights: bool = True,
 ) -> PrecisionFit:
     """Estimate the sparse contemporaneous variable precision ``Ω_var`` (K=0).
 
     Uses the pairwise-complete correlation over ``(s,t)`` cells (missing-aware; no
     impute-0), so a link is genuine covariation rather than an artefact of the
     shared missingness pattern. Variables with insufficient coverage are dropped.
+
+    §II.6.1 ObservationReliability contract: the per-cell reliability tensor ``W`` weights
+    each cell's moment contribution (reconstructed/broadcast cells inform ``Ω_var`` less than
+    observed ones). ``use_reliability_weights=False`` or an absent ``W`` → unweighted
+    (byte-identical) moments.
     """
     p, S, T = field.shape
     samples = field.Z.reshape(p, S * T)  # (p variables, n cells), NaN where absent
-    pw = pairwise_correlation(samples, min_coverage=min_coverage, min_overlap=min_overlap)
+    W = field.W.reshape(p, S * T) if (use_reliability_weights and getattr(field, "W", None) is not None) else None
+    pw = pairwise_correlation(samples, min_coverage=min_coverage, min_overlap=min_overlap, weights=W)
     kept = pw.kept
     corr = pw.correlation + 1e-4 * np.eye(len(kept))
     try:

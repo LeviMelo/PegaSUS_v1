@@ -50,6 +50,7 @@ def pairwise_correlation(
     *,
     min_coverage: int = 30,
     min_overlap: int = 20,
+    weights: np.ndarray | None = None,
 ) -> PairwiseCovariance:
     """Pairwise-complete correlation of a (features × samples) matrix with NaNs.
 
@@ -62,6 +63,18 @@ def pairwise_correlation(
     overlap mask, ``mean_a = (X0 @ M^T)/n``, ``var_a = (X0^2 @ M^T)/n - mean_a^2``,
     ``cov = (X0 @ X0^T)/n - mean_a mean_b`` — the 1/n (or 1/(n-1)) cancels in the
     correlation ratio, so this is numerically identical to per-pair ``np.corrcoef``.
+
+    ``weights`` (the §II.6.1 ObservationReliability contract, ``(F, n)`` in [0,1], 0
+    where unobserved) makes each cell's contribution proportional to its reliability:
+    a pair ``(a,b)``'s cell ``t`` carries effective weight ``w_a[t]·w_b[t]``, so a
+    reconstructed/broadcast cell (``W<1``) informs the moment less than a directly
+    observed one. The weighted moments are ``n_ab = W_a·W_b``, ``Sx = (X0∘W_a)·W_b``,
+    ``Sxx = (X0²∘W_a)·W_b``, ``Cxy = (X0∘W_a)·(X0∘W_b)`` — with ``weights=None`` (⇒
+    ``W = M`` the binary mask) every product collapses to the unweighted form above,
+    so the estimate is **byte-identical** when no reliability is supplied. Feature
+    inclusion (``kept``) and the ``min_overlap`` guard stay on the RAW mask, so
+    reliability reshapes the correlation *values* without changing which
+    variables/pairs are considered.
     """
     F, n = samples.shape
     finite = np.isfinite(samples)
@@ -79,24 +92,33 @@ def pairwise_correlation(
     X = samples[kept]                              # (q, n), may contain NaN
     M = np.isfinite(X).astype(np.float64)          # (q, n) overlap mask
     X0 = np.where(M > 0.0, X, 0.0)                  # (q, n) NaN -> 0
+    # Reliability weight: W = M (binary) when unsupplied → byte-identical to the
+    # unweighted moments; else the per-cell reliability, forced to 0 off-mask so a
+    # NaN cell can never carry weight (mirrors the assembly-side W[nan]=0 invariant).
+    if weights is None:
+        Wq = M
+    else:
+        Wq = np.clip(np.asarray(weights, dtype=np.float64)[kept], 0.0, None) * M
 
-    n_ab = M @ M.T                                 # (q, q) pairwise overlap counts
-    Sx = X0 @ M.T                                  # [a,b] = sum_t x_a * M_b  (sum of a over overlap)
-    Sxx = (X0 * X0) @ M.T                           # [a,b] = sum_t x_a^2 * M_b
-    Cxy = X0 @ X0.T                                # [a,b] = sum_t x_a * x_b  (overlap only; x=0 off-mask)
+    n_raw = M @ M.T                                # (q, q) RAW overlap counts (govern min_overlap)
+    n_ab = Wq @ Wq.T                               # (q, q) reliability-weighted effective pair weights
+    XW = X0 * Wq                                   # (q, n) reliability-scaled data
+    Sx = XW @ Wq.T                                 # [a,b] = sum_t (w_a x_a) w_b
+    Sxx = (X0 * XW) @ Wq.T                          # [a,b] = sum_t (w_a x_a^2) w_b
+    Cxy = XW @ XW.T                                # [a,b] = sum_t (w_a x_a)(w_b x_b)
 
     with np.errstate(invalid="ignore", divide="ignore"):
         inv = np.where(n_ab > 0, 1.0 / n_ab, 0.0)
-        mean_a = Sx * inv                          # mean of a over overlap-with-b
-        mean_b = Sx.T * inv                        # mean of b over overlap-with-a
+        mean_a = Sx * inv                          # weighted mean of a over overlap-with-b
+        mean_b = Sx.T * inv                        # weighted mean of b over overlap-with-a
         var_a = Sxx * inv - mean_a * mean_a
         var_b = Sxx.T * inv - mean_b * mean_b
         cov = Cxy * inv - mean_a * mean_b
         denom = np.sqrt(np.clip(var_a, 0.0, None) * np.clip(var_b, 0.0, None))
         corr = np.where(denom > 1e-18, cov / denom, 0.0)
 
-    # Enforce the guards the loop applied: enough overlap, finite, degenerate-variance -> 0.
-    valid = (n_ab >= min_overlap) & (var_a > 1e-18) & (var_b > 1e-18) & np.isfinite(corr)
+    # Enforce the guards the loop applied: enough RAW overlap, finite, degenerate-variance -> 0.
+    valid = (n_raw >= min_overlap) & (var_a > 1e-18) & (var_b > 1e-18) & np.isfinite(corr)
     C = np.where(valid, corr, 0.0)
     np.fill_diagonal(C, 1.0)
     C = 0.5 * (C + C.T)
@@ -154,6 +176,7 @@ def whitened_lagged_correlation(
     K: int,
     *,
     min_coverage: int = 30,
+    weights: np.ndarray | None = None,
 ) -> PairwiseCovariance:
     """Spatially-whitened variable×lag correlation via the sparse metric ``Q`` (§V.2/§V.4).
 
@@ -166,6 +189,17 @@ def whitened_lagged_correlation(
     not ``O(S²)``. Missing cells are imputed with the Gaussian margin mean (0) — a dense
     spatial operator cannot honour per-cell missingness (§III.4 whitened estimator).
 
+    ``weights`` (the §II.6.1 ObservationReliability contract, ``(p, S, T)`` in [0,1], 0
+    where unobserved) reliability-scales each feature-cell before the whitened Gram, so a
+    reconstructed/broadcast cell contributes proportionally less to every whitened
+    cross-moment. With ``weights=None`` (⇒ scale 1 on observed cells, the missing cells
+    already zeroed by the impute) ``Ft`` is unchanged, so the estimate is byte-identical
+    to the unweighted whitened correlation. **Ceiling:** this is the feature-scaling form
+    of reliability down-weighting (a low-reliability cell's *signal* is attenuated); the
+    metric ``Q`` and the constant mean-centering count ``n_cells`` are unchanged, so an
+    exact heteroscedastic-GLS whitening (reliability folded into ``Q`` and a per-feature
+    effective count) is a documented refinement, not implemented here.
+
     ``Z`` is ``(p, S, T)``; feature ``f = lag·p + var``; returns the same
     :class:`PairwiseCovariance` contract as :func:`pairwise_correlation`.
     """
@@ -176,8 +210,13 @@ def whitened_lagged_correlation(
     Zc = np.where(np.isfinite(Z), Z, 0.0)
     finite = np.isfinite(Z)
     F = p * (K + 1)
+    # Per-cell reliability scale, forced to 0 off-mask (a NaN cell carries no weight).
+    # None → unweighted (Ft stays = Zc slice), so the fit is byte-identical.
+    Wc = None
+    if weights is not None:
+        Wc = np.where(finite, np.clip(np.asarray(weights, dtype=np.float64), 0.0, None), 0.0)
 
-    # observed-cell count per feature (from the true mask, before impute)
+    # observed-cell count per feature (from the true mask, before impute) — RAW, governs kept
     obs = np.empty(F, dtype=np.int64)
     for lag in range(K + 1):
         obs[lag * p:(lag + 1) * p] = finite[:, :, K - lag: T - lag].sum(axis=(1, 2))
@@ -190,7 +229,10 @@ def whitened_lagged_correlation(
     Ft = np.empty((F, S), dtype=np.float64)
     for t in range(K, T):
         for lag in range(K + 1):
-            Ft[lag * p:(lag + 1) * p] = Zc[:, :, t - lag]
+            blk = Zc[:, :, t - lag]
+            if Wc is not None:
+                blk = blk * Wc[:, :, t - lag]     # reliability-scale the feature-cell signal
+            Ft[lag * p:(lag + 1) * p] = blk
         G += Ft @ (Q_sparse @ Ft.T)  # Q@Ft.T is a sparse (S×S)·(S×F) matvec
         R += Ft
 

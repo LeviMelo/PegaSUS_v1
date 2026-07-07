@@ -84,6 +84,7 @@ def fit_lagged_links(
     spatial_whiten: bool = True,
     randomized_factors: bool | None = None,
     float32_bulk: bool = False,
+    use_reliability_weights: bool = True,
 ) -> LaggedFit:
     """Fit the time-extended precision (missing-aware) and read off directed lagged links.
 
@@ -106,15 +107,21 @@ def fit_lagged_links(
     Laplacian term is empty and whitening reduces to a κ-scaling (a no-op at κ=1).
     """
     p = len(field.variables)
+    # §II.6.1 ObservationReliability contract: the per-cell reliability tensor W (provenance +
+    # §3.12 field reliability) weights every cell's contribution to the moments — a reconstructed/
+    # broadcast cell informs the precision less than a directly observed one. Absent/disabled → the
+    # estimators fall back to the unweighted (byte-identical) moments. W is 0 where the value is NaN.
+    W = field.W if (use_reliability_weights and getattr(field, "W", None) is not None) else None
     if spatial_whiten and field.Z.shape[1] > 1:
         # Spatial GMRF whitening via the sparse metric (§V.2/§V.4): matrix-free, O(F·S)
         # memory, no dense S×S whitener or O(S³) sqrt — so it scales to national S≈5570.
         from pegasus.ldo.precision import build_spatial_precision_sparse
         Q_space = build_spatial_precision_sparse(field.space_ids, kappa=kappa)
-        pw = whitened_lagged_correlation(field.Z, Q_space, K, min_coverage=min_coverage)
+        pw = whitened_lagged_correlation(field.Z, Q_space, K, min_coverage=min_coverage, weights=W)
     else:
         feat = _build_lagged_feature_matrix(field.Z, K)  # (p*(K+1), n)
-        pw = pairwise_correlation(feat, min_coverage=min_coverage, min_overlap=min_overlap)
+        w_feat = _build_lagged_feature_matrix(W, K) if W is not None else None
+        pw = pairwise_correlation(feat, min_coverage=min_coverage, min_overlap=min_overlap, weights=w_feat)
     kept = pw.kept
     pos = {f: a for a, f in enumerate(kept)}  # feature index → matrix position
     penalty_matrix = None

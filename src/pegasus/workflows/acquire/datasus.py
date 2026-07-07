@@ -66,7 +66,7 @@ def run_datasus_ingest(
     if dry_run or not manifests:
         return {"planned": planned, "executed": [], "blocked": False, "failed": False}
 
-    workers = int(max_workers) if max_workers else int(getattr(cfg, "max_parallel_requests", 8) or 8)
+    workers = int(max_workers) if max_workers else int(cfg.max_parallel_requests)  # single source of truth (T1.11)
     workers = max(1, min(workers, len(manifests)))
 
     def _fetch(manifest):

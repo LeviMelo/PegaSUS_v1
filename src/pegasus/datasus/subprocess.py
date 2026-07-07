@@ -83,25 +83,34 @@ def datasus_dependency_unavailable(*, dependency: str, detail: str) -> str:
     )
 
 
+# T1.11: single source of truth for the production defaults. The dataclass fields AND the
+# from_mapping fallbacks both reference these, so a bare DatasusConfig(), a partial YAML, and a
+# full YAML can no longer diverge (was 300/8 dataclass vs 900/4 from_mapping — a partial YAML
+# silently halved parallelism or set a 300s heartbeat that kills slow-but-alive R processes).
+_DEFAULT_R_TIMEOUT_SECONDS = 7200
+_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 900
+_DEFAULT_MAX_PARALLEL_REQUESTS = 8
+
+
 @dataclass(frozen=True)
 class DatasusConfig:
     rscript_path: str = "Rscript"
     r_library_path: str | None = None
-    r_timeout_seconds: int = 7200
-    heartbeat_timeout_seconds: int = 300
-    max_parallel_requests: int = 8
+    r_timeout_seconds: int = _DEFAULT_R_TIMEOUT_SECONDS
+    heartbeat_timeout_seconds: int = _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
+    max_parallel_requests: int = _DEFAULT_MAX_PARALLEL_REQUESTS
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "DatasusConfig":
         r_library_path = payload.get("r_library_path")
-        r_timeout_raw = os.environ.get("PEGASUS_DATASUS_R_TIMEOUT_SECONDS", payload.get("r_timeout_seconds", 7200))
+        r_timeout_raw = os.environ.get("PEGASUS_DATASUS_R_TIMEOUT_SECONDS", payload.get("r_timeout_seconds", _DEFAULT_R_TIMEOUT_SECONDS))
         heartbeat_timeout_raw = os.environ.get(
             "PEGASUS_DATASUS_HEARTBEAT_TIMEOUT_SECONDS",
-            payload.get("heartbeat_timeout_seconds", 900),
+            payload.get("heartbeat_timeout_seconds", _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS),
         )
         parallel_raw = os.environ.get(
             "PEGASUS_DATASUS_MAX_PARALLEL_REQUESTS",
-            payload.get("max_parallel_requests", 4),
+            payload.get("max_parallel_requests", _DEFAULT_MAX_PARALLEL_REQUESTS),
         )
         return cls(
             rscript_path=str(payload.get("rscript_path", "Rscript")),

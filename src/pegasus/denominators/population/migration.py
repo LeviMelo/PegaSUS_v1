@@ -106,15 +106,15 @@ def hop_distances(
 
 
 def _candidate_pairs(nodes: list[str], hops: dict[tuple[str, str], int], max_hops: int) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    for i in nodes:
-        for j in nodes:
-            if i == j:
-                continue
-            d = hops.get((i, j))
-            if d is not None and 1 <= d <= max_hops:
-                pairs.append((i, j))
-    return pairs
+    # T1.9: ``hops`` already holds ONLY reachable within-``max_hops`` pairs (bounded BFS), so
+    # iterate its keys directly — O(|hops|) = O(N·k) — instead of an O(N²) scan over all
+    # node×node pairs (5,570² ≈ 31M dict lookups per year at national scale, just to build the
+    # same list before the MAX_DENSE_FLOW_PAIRS guard rejects it).
+    node_set = set(nodes)
+    return [
+        (i, j) for (i, j), d in hops.items()
+        if i != j and 1 <= d <= max_hops and i in node_set and j in node_set
+    ]
 
 
 def _gravity_prior(

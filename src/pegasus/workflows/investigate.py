@@ -16,7 +16,7 @@ from typing import Any
 import polars as pl
 
 from pegasus.ldo.field_selection import analytical_variable_ids
-from pegasus.ldo.orchestrator import run_ldo
+from pegasus.ldo.orchestrator import run_ldo, run_ldo_multiresolution
 from pegasus.ldo.output import write_hypotheses
 from pegasus.she.panel import Resolution, compile_common_panel
 
@@ -180,6 +180,7 @@ def run_investigate(
     lambda1: float = 0.1,
     lambda2: float = 1.0,
     write: bool = True,
+    multiresolution: bool | str = "auto",
     **ldo_kwargs,
 ) -> InvestigateResult:
     """Run the LDO over a compiled run and (optionally) write the Hypotheses key.
@@ -226,12 +227,30 @@ def run_investigate(
     if spatial_field_dir is None:
         spatial_field_dir = str(Path(run_dir) / "spatial_fields")
 
-    ldo_run = run_ldo(
-        panel, K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables,
+    # §II.7 / RES-01 coarse→fine: run the two-pass multiresolution LDO when the fine field is
+    # large enough that a coarse candidate screen pays for itself (sub-annual grain, or a large
+    # municipality×time lattice). "auto" keeps typical municipality×year runs single-pass so the
+    # national determinant run's compute is unchanged; a caller can force True/False.
+    _pv = panel.values
+    _cells = 0
+    if "municipality_cod6" in _pv.columns:
+        _S = _pv["municipality_cod6"].n_unique()
+        _T = _pv["year"].n_unique() if "year" in _pv.columns else 1
+        _cells = int(_S) * int(_T)
+    if multiresolution == "auto":
+        use_mr = resolution != "year" or _cells > 300_000
+    else:
+        use_mr = bool(multiresolution)
+
+    _ldo_common = dict(
+        K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables,
         variable_meta=variable_meta, disease_graph=disease_graph,
         measured_quantity_by_variable=mq_by_var, spatial_field_dir=spatial_field_dir,
-        **ldo_kwargs,
     )
+    if use_mr:
+        ldo_run = run_ldo_multiresolution(panel, **_ldo_common, **ldo_kwargs)
+    else:
+        ldo_run = run_ldo(panel, **_ldo_common, **ldo_kwargs)
 
     # Record the disease-axis wiring so a run's diagnostics show whether the L_D prior /
     # overlap guard were live (rather than the wiring being silently inert as before).

@@ -375,4 +375,48 @@ def run_ldo(
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 
 
+def run_ldo_multiresolution(
+    source: CommonPanel | LDOField | GaussianField,
+    *,
+    K: int = 8,
+    coarse_level: int = 2,
+    coarse_K: int | None = None,
+    seed: int = 0,
+    keep_variables: set[str] | frozenset[str] | None = None,
+    exposure=None,
+    exposure_field_by_variable=None,
+    measured_quantity_by_variable=None,
+    **ldo_kwargs,
+) -> LDORun:
+    """§II.7 / RES-01 coarse→fine LDO on a panel/field source — a drop-in for :func:`run_ldo`.
+
+    Prepares the fine (municipality-grain) gaussian field once, spatially coarsens it to a cheap
+    discovery grain (cod6 prefix ``coarse_level``: 2 = UF, 1 = macroregion), and runs the two-pass
+    :func:`run_multiresolution_ldo` — a §VIII.2(1) recall-tuned sensitivity screen picks candidate
+    pairs from the coarse pass, only those variables are refit at fine grain, and a §VIII.2(2)
+    random deep audit of the pruned variables measures the false-negative rate. Returns a merged
+    ``LDORun`` (fine-sharpened candidate edges + coarse-only edges) with the fine pass's rich
+    diagnostics plus a ``multiresolution`` summary, so callers consume it exactly like ``run_ldo``.
+
+    The count-with-exposure / explicit-exposure inputs are consumed once when the fine field is
+    gaussianized here; they are not re-forwarded to the per-grain fits (which take the prepared
+    field). This is the compute strategy for fine grains too large to fit wholesale (§V.1): each
+    pass is envelope-sized (coarse ``S≈27``; fine restricted to candidate variables).
+    """
+    from pegasus.ldo.resolution import coarsen_field_spatial, run_multiresolution_ldo
+
+    _, fine = _prepare_ldo_inputs(
+        source, seed=seed, keep_variables=keep_variables, exposure=exposure,
+        exposure_field_by_variable=exposure_field_by_variable,
+        measured_quantity_by_variable=measured_quantity_by_variable,
+    )
+    coarse = coarsen_field_spatial(fine, level=coarse_level)
+    ck = coarse_K if coarse_K is not None else max(1, min(K, 4))
+    mr = run_multiresolution_ldo(coarse, fine, coarse_K=ck, fine_K=K, seed=seed, **ldo_kwargs)
+    base = mr.fine.diagnostics if mr.fine is not None else mr.coarse.diagnostics
+    diagnostics = dict(base)
+    diagnostics["multiresolution"] = mr.diagnostics
+    return LDORun(link_records=mr.link_records, variables=fine.variables, diagnostics=diagnostics)
+
+
 __all__ = ["LDORun", "run_ldo"]

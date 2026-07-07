@@ -46,6 +46,43 @@ def restrict_variables(field: GaussianField, variables: tuple[str, ...]) -> Gaus
     )
 
 
+def coarsen_field_spatial(field: GaussianField, *, level: int = 2) -> GaussianField:
+    """Aggregate a GaussianField to a coarser spatial grain by cod6 prefix (§II.7 coarse pass).
+
+    Municipalities sharing the first ``level`` cod6 digits (``level=2`` → UF/state, ``level=1``
+    → macroregion) are pooled: each coarse cell is the reliability-weighted mean of its member
+    municipalities' values, per variable and time. The coarse field has far fewer spatial units
+    (``S≈27`` at UF) so the coarse discovery pass is cheap and envelope-sized, while the fine
+    field stays at municipality grain for candidate refinement. Cells with no weight stay NaN.
+    """
+    ids = [str(s) for s in field.space_ids]
+    prefixes = [s[:level] if len(s) >= level else s for s in ids]
+    groups = sorted(set(prefixes))
+    gpos = {g: i for i, g in enumerate(groups)}
+    member_idx: list[list[int]] = [[] for _ in groups]
+    for i, pre in enumerate(prefixes):
+        member_idx[gpos[pre]].append(i)
+
+    p, _, T = field.Z.shape
+    G = len(groups)
+    Zc = np.full((p, G, T), np.nan, dtype=np.float64)
+    Wc = np.zeros((p, G, T), dtype=np.float64)
+    W = field.W if getattr(field, "W", None) is not None else np.ones_like(field.Z)
+    for g, members in enumerate(member_idx):
+        idx = np.asarray(members, dtype=np.int64)
+        w = np.where(np.isfinite(field.Z[:, idx, :]), W[:, idx, :], 0.0)  # (p, |members|, T)
+        vals = np.where(np.isfinite(field.Z[:, idx, :]), field.Z[:, idx, :], 0.0)
+        wsum = w.sum(axis=1)                                             # (p, T)
+        num = (w * vals).sum(axis=1)                                     # (p, T)
+        ok = wsum > 0
+        Zc[:, g, :] = np.where(ok, num / np.where(ok, wsum, 1.0), np.nan)
+        Wc[:, g, :] = np.where(ok, wsum / np.maximum(1, len(members)), 0.0)  # mean reliability
+    return GaussianField(
+        variables=field.variables, space_ids=tuple(groups), time_ids=field.time_ids,
+        Z=Zc, W=Wc, resolution=f"{field.resolution}_L{level}",
+    )
+
+
 _LINK_EDGE_TYPES = {"lagged_directed", "contemporaneous", "nonlinear_residual", "latent_shared"}
 
 
@@ -165,4 +202,4 @@ def run_multiresolution_ldo(
     )
 
 
-__all__ = ["MultiResolutionRun", "run_multiresolution_ldo", "restrict_variables"]
+__all__ = ["MultiResolutionRun", "run_multiresolution_ldo", "restrict_variables", "coarsen_field_spatial"]

@@ -13,8 +13,13 @@ from pegasus.ldo.certify import (
     assert_ldo_edge_promotion_allowed,
     certify_links,
 )
-from pegasus.ldo.orchestrator import LDORun, run_ldo
-from pegasus.ldo.resolution import MultiResolutionRun, restrict_variables, run_multiresolution_ldo
+from pegasus.ldo.orchestrator import LDORun, run_ldo, run_ldo_multiresolution
+from pegasus.ldo.resolution import (
+    MultiResolutionRun,
+    coarsen_field_spatial,
+    restrict_variables,
+    run_multiresolution_ldo,
+)
 from pegasus.ldo.envelope import ScaleExceedsEnvelopeError, assert_within_envelope, estimate_ldo_bytes, load_compute_envelope
 from pegasus.ldo.kron import (
     KroneckerPrecision,
@@ -49,9 +54,11 @@ __all__ = [
     "LDOCertificationPolicy",
     "LDOCertificationError",
     "run_ldo",
+    "run_ldo_multiresolution",
     "LDORun",
     "run_multiresolution_ldo",
     "MultiResolutionRun",
+    "coarsen_field_spatial",
     "restrict_variables",
     "assert_within_envelope",
     "estimate_ldo_bytes",

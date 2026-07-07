@@ -32,7 +32,13 @@ def test_ldo_recovers_planted_structure() -> None:
     )
     field = generate_planted_field(truth, S=30, T=60, noise=0.25, seed=1)
 
-    run = run_ldo(field, K=8, n_subsamples=10, stability_threshold=0.5, run_residual_scan=False, seed=0)
+    # This prong tests the CPW S/L IDENTIFIABILITY (separability of a shared factor from
+    # direct edges), which §III.4.1-2 defines without the §III.4(5) smoothness prior. The
+    # prior is a distinct capability (borrow-strength shrinkage) with its own recovery test;
+    # here it is turned off (γ=0) so the incoherence/mutual-exclusion mechanics are what is
+    # scored, on clean planted data where no borrowing is needed.
+    run = run_ldo(field, K=8, n_subsamples=10, stability_threshold=0.5, run_residual_scan=False,
+                  gamma_temporal=0.0, gamma_disease=0.0, seed=0)
     score = recovery_score(run.link_records, truth)
 
     # every planted edge is recovered...

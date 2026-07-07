@@ -59,6 +59,20 @@ def variable_affinity(variables: tuple[str, ...], graph: "DiseaseGraph") -> np.n
     return affinity
 
 
+def disease_laplacian_matrix(variables: tuple[str, ...], graph: "DiseaseGraph") -> np.ndarray:
+    """``p×p`` disease-graph Laplacian ``L_D = D − W`` aligned to the LDO variable set.
+
+    ``W`` is the structural affinity (:func:`variable_affinity`: 1 same category, 0.5 same
+    block, 0.25 same chapter; 0 for unmatched variables). ``L_D`` is the §III.4(5) disease-
+    smoothness operator: the quadratic ``+(γ/2)·tr(Sᵀ L_D S)`` shrinks each variable's
+    precision row toward those of its hierarchical neighbours (structurally-close diseases
+    get similar dependency profiles). Variables absent from the graph are isolated rows of
+    ``L_D`` (zero), so they receive no disease smoothing. PSD by construction.
+    """
+    W = variable_affinity(variables, graph)  # symmetric, zero diagonal, ≥0
+    return np.diag(W.sum(axis=1)) - W
+
+
 def penalty_from_affinity(
     affinity: np.ndarray, *, lambda1: float, beta: float = 0.7, min_frac: float = 0.2
 ) -> np.ndarray:
@@ -99,6 +113,7 @@ def tile_penalty_across_lags(penalty_pp: np.ndarray, K: int, lambda1: float) -> 
 
 __all__ = [
     "variable_affinity",
+    "disease_laplacian_matrix",
     "penalty_from_affinity",
     "disease_penalty_matrix",
     "tile_penalty_across_lags",

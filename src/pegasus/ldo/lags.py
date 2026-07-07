@@ -78,6 +78,9 @@ def fit_lagged_links(
     min_coverage: int = 30,
     min_overlap: int = 20,
     disease_penalty: np.ndarray | None = None,
+    disease_laplacian: np.ndarray | None = None,
+    gamma_temporal: float = 0.0,
+    gamma_disease: float = 0.0,
     spatial_whiten: bool = True,
 ) -> LaggedFit:
     """Fit the time-extended precision (missing-aware) and read off directed lagged links.
@@ -116,9 +119,20 @@ def fit_lagged_links(
     if disease_penalty is not None:
         big = tile_penalty_across_lags(disease_penalty, K, lambda1)
         penalty_matrix = big[np.ix_(kept, kept)]
+    # §III.4(5) quadratic prior-regularizers: temporal (adjacent-lag) + disease-Laplacian
+    # smoothness over the lag-extended feature space, subset to the kept features (matching
+    # penalty_matrix). None when both weights are 0 → the CPW fit is byte-identical.
+    from pegasus.ldo.lowrank import build_smoothness_operator
+    smoothness = build_smoothness_operator(
+        p, K, disease_laplacian=disease_laplacian,
+        gamma_temporal=gamma_temporal, gamma_disease=gamma_disease,
+    )
+    if smoothness is not None:
+        smoothness = smoothness[np.ix_(kept, kept)]
     fit = fit_sparse_plus_lowrank(
         pw.correlation, lambda1=lambda1, lambda2=lambda2,
         edge_threshold=edge_threshold, penalty_matrix=penalty_matrix,
+        smoothness_operator=smoothness,
     )
 
     S = fit.S

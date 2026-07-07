@@ -102,6 +102,8 @@ def run_ldo(
     max_workers: int | None = None,
     adaptive_k: bool = True,
     disease_graph=None,
+    gamma_temporal: float = 0.1,
+    gamma_disease: float = 0.1,
     variable_meta: dict[str, dict] | None = None,
     exposure=None,
 ) -> LDORun:
@@ -123,13 +125,20 @@ def run_ldo(
     envelope_bytes = assert_within_envelope(p=p, S=S, T=T, K=K) if enforce_envelope else None
 
     disease_penalty = None
+    disease_laplacian = None
     if disease_graph is not None:
-        from pegasus.ldo.disease_prior import disease_penalty_matrix
+        from pegasus.ldo.disease_prior import disease_laplacian_matrix, disease_penalty_matrix
         disease_penalty = disease_penalty_matrix(gf.variables, disease_graph, lambda1=lambda1)
+        # §III.4(5) disease-Laplacian quadratic operand (smooth precision rows across the
+        # CID-10 hierarchy). Distinct from the ℓ1 penalty above (edge selection); this is the
+        # GMRF/hierarchy quadratic. Absent a disease graph, only temporal smoothing applies.
+        disease_laplacian = disease_laplacian_matrix(gf.variables, disease_graph)
 
     fit_kwargs = dict(
         kappa=kappa, lambda1=lambda1, lambda2=lambda2,
         edge_threshold=edge_threshold, disease_penalty=disease_penalty,
+        disease_laplacian=disease_laplacian,
+        gamma_temporal=gamma_temporal, gamma_disease=gamma_disease,
     )
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
 

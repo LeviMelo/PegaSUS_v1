@@ -99,6 +99,7 @@ def fit_sparse_plus_lowrank(
     loading_threshold: float = 0.3,
     min_factor_support: int = 3,
     penalty_matrix: np.ndarray | None = None,
+    smoothness_operator: np.ndarray | None = None,
     factor_rank_cap: int = 24,
     randomized_factors: bool | None = None,
     seed: int = 0,
@@ -110,6 +111,14 @@ def fit_sparse_plus_lowrank(
     related disease-concept variables get a *lower* penalty so their (sparse) edges
     survive, i.e. dependency profiles vary smoothly across the disease hierarchy.
     Absent it, the estimator is the plain scalar-penalty LVGLASSO (a no-op prior).
+
+    ``smoothness_operator`` (``p×p``, symmetric PSD — the combined graph Laplacian
+    ``G = γ_t·L_time + γ_d·L_D`` in the fit's feature space) adds the §III.4(5) **quadratic
+    prior-regularizers** ``+(1/2)·tr(Sᵀ G S)`` to the LVGLASSO objective: temporal-smoothness
+    (adjacent lags) and disease-Laplacian (structurally-close diseases get similar precision
+    rows) shrinkage. It enters the S-step as a linearized proximal-gradient term
+    ``−(G·S)/ρ`` before the soft-threshold; at ``G=None`` the step is exactly the original
+    CPW soft-threshold, so the S/L split is unperturbed and the fit is byte-identical.
 
     ``min_factor_support`` enforces the Chandrasekaran–Parrilo–Willsky **incoherence
     identifiability condition** at readout: a genuine low-rank latent driver must be
@@ -129,7 +138,21 @@ def fit_sparse_plus_lowrank(
         if penalty_matrix.shape != (p, p):
             raise ValueError(f"penalty_matrix must be {(p, p)}, got {penalty_matrix.shape}")
         penalty_matrix = np.clip(0.5 * (penalty_matrix + penalty_matrix.T), 0.0, None)
-    tau1 = (penalty_matrix if penalty_matrix is not None else lambda1) / rho
+    penalty = penalty_matrix if penalty_matrix is not None else lambda1
+    tau1 = penalty / rho
+    G_sym: np.ndarray | None = None
+    lipschitz = rho
+    tau_pg = tau1
+    if smoothness_operator is not None:
+        smoothness_operator = np.asarray(smoothness_operator, dtype=np.float64)
+        if smoothness_operator.shape != (p, p):
+            raise ValueError(f"smoothness_operator must be {(p, p)}, got {smoothness_operator.shape}")
+        G_sym = 0.5 * (smoothness_operator + smoothness_operator.T)  # symmetrize; §III.4(5)
+        # Prox-gradient step for the S-subproblem (ℓ1 + (1/2)tr(SᵀG S) + (ρ/2)‖S−M‖²): the
+        # smooth part has Lipschitz constant ρ + λ_max(G), so a step of 1/lipschitz is
+        # contractive (the crude 1/ρ linearization diverges when λ_max(G) is not ≪ ρ).
+        lipschitz = float(rho + max(0.0, np.linalg.eigvalsh(G_sym).max()))
+        tau_pg = penalty / lipschitz
     C_over_rho = C / rho            # loop-invariant; was recomputed every ADMM iteration
     l2_over_rho = lambda2 / rho     # loop-invariant shift for the L-step PSD projection
     S = np.eye(p)
@@ -142,7 +165,16 @@ def fit_sparse_plus_lowrank(
         # R-step: prox of -logdet + linear term.
         R = _prox_neg_logdet(S - L - U - C_over_rho, rho)
         # S-step: soft-threshold off-diagonal (scalar or disease-informed per-pair penalty).
-        S = _soft_threshold_offdiag(R + L + U, tau1)
+        if G_sym is None:
+            S = _soft_threshold_offdiag(R + L + U, tau1)
+        else:
+            # §III.4(5) quadratic prior-regularizers: one proximal-gradient step on the smooth
+            # part q(S)=(1/2)tr(SᵀG S)+(ρ/2)‖S−(R+L+U)‖² (∇q = G·S + ρ(S−M)), step 1/lipschitz,
+            # then soft-threshold. At the fixed point ∇q=0 so the ADMM converges to the true
+            # smoothed-objective solution; at G=0 (lipschitz=ρ) this reduces exactly to the line
+            # above. tr(SᵀG S) smooths precision rows across adjacent lags + related diseases.
+            grad = G_sym @ S + rho * (S - (R + L + U))
+            S = _soft_threshold_offdiag(S - grad / lipschitz, tau_pg)
         # L-step: PSD projection with trace shrink.
         L = _psd_project_shifted(S - R - U, l2_over_rho)
         # Dual update.
@@ -211,4 +243,51 @@ def fit_sparse_plus_lowrank(
     )
 
 
-__all__ = ["SparseLowRankFit", "fit_sparse_plus_lowrank"]
+def lag_chain_laplacian(K: int) -> np.ndarray:
+    """``(K+1)×(K+1)`` path-graph Laplacian over lag positions 0..K (adjacent lags linked).
+
+    The §III.4(5) temporal-smoothness prior ties a variable's precision row across
+    neighbouring lags: lag ``a`` ~ lag ``a±1``. ``L = D − W`` for the chain graph.
+    """
+    n = K + 1
+    if n <= 1:
+        return np.zeros((n, n), dtype=np.float64)
+    W = np.zeros((n, n), dtype=np.float64)
+    idx = np.arange(n - 1)
+    W[idx, idx + 1] = 1.0
+    W[idx + 1, idx] = 1.0
+    return np.diag(W.sum(axis=1)) - W
+
+
+def build_smoothness_operator(
+    p: int, K: int, *, disease_laplacian: np.ndarray | None = None,
+    gamma_temporal: float = 0.0, gamma_disease: float = 0.0,
+) -> np.ndarray | None:
+    """The §III.4(5) combined smoothness operator ``G = γ_t·(L_lag⊗I_p) + γ_d·(I_{K+1}⊗L_D)``
+    in the ``p·(K+1)`` lag-extended feature space (feature index ``f = lag·p + var``).
+
+    ``L_lag`` is the temporal chain Laplacian (:func:`lag_chain_laplacian`); ``L_D`` is the
+    disease-graph Laplacian over the ``p`` base variables. Returns ``None`` when both weights
+    are 0 (or their operands absent) so the caller passes no smoothing and the CPW fit is
+    byte-identical. ``tr(Sᵀ G S)`` then smooths precision rows across adjacent lags and across
+    structurally-close diseases.
+    """
+    terms: list[np.ndarray] = []
+    if gamma_temporal > 0.0 and K >= 1:
+        terms.append(gamma_temporal * np.kron(lag_chain_laplacian(K), np.eye(p)))
+    if gamma_disease > 0.0 and disease_laplacian is not None:
+        L_D = np.asarray(disease_laplacian, dtype=np.float64)
+        if L_D.shape == (p, p):
+            terms.append(gamma_disease * np.kron(np.eye(K + 1), L_D))
+    if not terms:
+        return None
+    G = terms[0]
+    for t in terms[1:]:
+        G = G + t
+    return G
+
+
+__all__ = [
+    "SparseLowRankFit", "fit_sparse_plus_lowrank",
+    "lag_chain_laplacian", "build_smoothness_operator",
+]

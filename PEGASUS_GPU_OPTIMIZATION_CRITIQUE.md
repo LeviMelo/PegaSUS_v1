@@ -415,3 +415,634 @@ The earlier "GPU gains are minor" was correct for the workload AS IT WAS (few, s
 - validity_preserved: Fully preserving — num_rows from footer equals pl.len(); identical value.
 - evidence: src/pegasus/sidra/extract.py:75-90 (per-chunk scan_parquet(...).select(pl.len()) on the warm path).
 - recommendation: Replace the polars scan with pyarrow.parquet.ParquetFile(facts_path).metadata.num_rows (footer-only, no data read), or persist row_count in the extraction log and skip the per-file open entirely when the log is present and consistent.
+
+
+*(Resume wf_46e7744b-323 completed the failed clusters — total now 84. Appending the 44 newly-returned findings (compute-infra, numerical-methods, population-solve, etc.); the earlier 50 are already above.)*
+
+
+### population-solve / inner SPG loss
+
+**`POP-01` - HIGH - gpu_acceleration_candidate** - The per-iteration loss+gradient (evaluate_population_loss) is a pure batched dense-tensor stencil — the canonical GPU-favorable op, currently 100% on CPU/numpy
+- detail: evaluate_population_loss (loss.py) is the dominant wall-clock cost of the whole solve: it runs 2x per SPG iteration (once for the accepted step, once+ inside the Armijo/quadratic-interp backtrack loop, up to 8x), and per call it does ~8 element-wise reduction terms over the full (S,T,A,X,R) block tensor: anchor residual (P[mask]-a)^2, cohort-aging shifted-slice stencil P_curr - (P_prior*surv + M_eta) with 4 scatter-adds into gp_tens/gm_tens, birth stencil, death rate*P, race ILR (a log + two matmuls log_x@basis.T and residual@basis), migration 2nd-difference (i2-2*i1+i0), age 2nd-difference, migration-total sum-over-(a,x,r). Every one of these is a shifted-slice subtract-multiply-reduce or a small matmul — i.e. exactly torch's elementwise+reduction+bmm sweet spot with no data-dependent control flow. Op shapes per 2M-cell block: dense f32 tensor (S_block, T~25, A, X, R); the aging term touches ~5 shifted views of it. On the RTX 4050 a whole block's population+migration+two gradients is 4 x 2M x 4B (f32) = 32MB resident, plus ~10 like-sized temporaries = ~350MB — trivially inside 6.4GB VRAM. The whole loss is torch ops: torch.where/masked subtract, slice-shift subtract, torch.matmul for the ILR basis (A,X,R with R<=~6 so basis is tiny), torch.sum. Reframe vs the earlier 'GPU minor' call: the earlier judgment was per-op; here the SAME small tensor is swept ~8x/iter x 12 iters x N_blocks with the gradient scatter fused — a persistent-on-device iterate never leaving VRAM amortizes all H2D cost. This is the single highest-leverage GPU port in the subsystem.
+- expected_gain: Loss eval is ~all of solve wall-clock. A 2M-cell f32 elementwise+reduction sweep is memory-bound; 4050 bandwidth (~190 GB/s) vs a loaded desktop DDR (~40-60 GB/s effective under the thread pool) gives ~3-5x on the sweep alone, and keeping P/M/gp/gm resident on-device across the ~12 iters (only scalar objective + convergence norms come back) removes H2D/D2H per iter. Net ~4-8x on the solve phase. Fits VRAM with huge headroom (~350MB/block).
+- validity_preserved: Loss is a sum of squares of population-scale values (~1e6-1e10 per cell, objective ~1e18). float32 has ~7 digits; summing ~2M terms of magnitude ~1e12 into a ~1e18 objective loses low-order digits AND the gradient (2*w*residual) can cancel catastrophically. MUST keep the reduction (np.sum/torch.sum of squares) and the ILR log in float64 (torch.float64 on CUDA, or pairwise/Kahan f32) while elementwise stencils run f32. Recommend f32 elementwise + f64 accumulation (torch supports dtype= on sum). With that split, validity is preserved; naive full-f32 reduction is NOT safe here and would corrupt the objective/convergence test.
+- evidence: loss.py evaluate_population_loss (all 8 terms, lines ~204-325) allocates full-size f64 temporaries and np.sum reductions every call; projected_gradient.py line 396 calls evaluate_population_loss inside the up-to-8-iter backtrack loop and again at line 307/420 per accepted step; orchestrator max_iterations=12.
+- recommendation: Add a torch backend for evaluate_population_loss keyed off the resolved ComputeDevicePlan (torch_backend.torch_runtime already returns (torch,device,dtype)). Keep the numpy path as the CPU/validation oracle. Run elementwise stencils in float32 on CUDA but accumulate every terms[...] sum and the projected-gradient norm in float64 (torch.sum(x, dtype=torch.float64)). Keep P,M,gp,gm resident on device across the SPG iterations; only return scalars (objective terms, ||stat||) to the host.
+
+
+### population-solve / SPG driver
+
+**`POP-02` - HIGH - gpu_acceleration_candidate** - The SPG driver's BB step, Armijo line search, and simplex projection are all small dense vector ops that should live on-device with the iterate, not bounce to host each iteration
+- detail: _solve_projected_gradient_vectorized does, per iteration, on full-block vectors: dot products s@y, s@s, grad@dir (Barzilai-Borwein), the projected-gradient stationarity ||x - proj(x-g)|| (two projections + two dots), and the row-simplex projection _simplex_project_rows (a np.sort + cumsum + argmax per closure group — the closure groups are (S_block*T) rows of length A*X*R). All of these are torch.dot / torch.sort / torch.cumsum / torch.clamp on the resident iterate. If the loss (POP-01) is already on device, doing the driver arithmetic on host forces a full D2H of gp,gm,P,M every iteration — that is the thing to avoid. Op shapes: dots over 2M-element f32 vectors; the simplex sort is over rows of width A*X*R (small, e.g. <=~600), batched across ~S_block*25 rows — torch.sort(dim=1) batched is ideal. VRAM: negligible beyond the resident iterate.
+- expected_gain: Removes per-iteration H2D/D2H of ~4 x 8-32MB block arrays; keeps the whole SPG loop on-device. On its own modest, but it is the enabler that makes POP-01's gain real (without it the loss port is bottlenecked by transfer). Combined effect folded into POP-01's ~4-8x.
+- validity_preserved: BB dots and the projection are the same arithmetic; the risk is again float32 in the dot products (ss/sy can be ~1e12/1e6). Compute the BB inner products and the stationarity norm in float64 accumulation. The Duchi simplex projection (_simplex_project_rows) is exact and order-based (sort/cumsum) — safe in f32 for the comparison but do the theta=(cumsum-total)/rho subtraction in f64 since total is population-scale. With f64 accumulation the projection is byte-comparable to the numpy oracle.
+- evidence: projected_gradient.py lines 340-434: stat_p/stat_m projections, s_p@y_p BB dots, directional grad@dir, _simplex_project_rows (lines 151-171) np.sort+cumsum+argmax.
+- recommendation: Port the driver as a torch loop that shares device tensors with the POP-01 loss. Batch _simplex_project_rows as torch.sort(rows, dim=1, descending=True)+cumsum. Keep all reductions f64. Fall back to the existing numpy driver for CPU-only plans.
+
+
+### population-solve / float32 solve working-set (M2 follow-on §V.4)
+
+**`POP-03` - MEDIUM - memory_hotspot** - The SOLVE promotes every input to float64 at read; the mixed-precision solve working-set (§V.4) that M2 storage deferred is unbuilt, doubling resident solve memory
+- detail: schema stores inputs float32 (M2), but loss.py line 181 (P=np.array(population,float64)), 138/143/etc, and the SPG driver (np.array(..., float64) everywhere) promote to float64 for the whole solve. Per 2M-cell block the working set is P,M,gp,gm + prev_P,prev_M,prev_gp,prev_gm + ~10 loss temporaries, all f64 = ~15 x 2M x 8B = 240MB/block (matches the solvers.py comment '~15 float64 working arrays ~250MB'). At the national blocked scale this is per-worker x n_workers concurrent (ThreadPoolExecutor, one block per core) — with 8-16 workers that is ~2-4GB of f64 solve scratch on top of the ~8.4GB f32 resident problem, on a 34GB box shared with SIDRA/DATASUS frames. A float32 working-set halves it and is the precondition for POP-01/02 (device tensors are f32 anyway).
+- expected_gain: ~2x reduction of solve scratch (240MB->120MB per block; ~2GB->1GB aggregate across workers). Also halves H2D volume for the GPU port. Enables larger blocks (fewer, better-amortized GPU launches).
+- validity_preserved: This is the crux float32 risk. Municipality-year cell VALUES are integer-exact in f32 below 16.7M (schema note is correct for storage). But the SOLVE forms sums-of-squares (objective ~1e18) and gradient differences with cancellation — f32 accumulation there is NOT safe. Correct design: iterate/gradient STATE in f32, but every reduction (objective terms, BB dots, stationarity, simplex theta) accumulated in f64. That preserves validity while halving the state footprint. A blanket-f32 solve (including reductions) would silently degrade the objective and the convergence gate — do not do that.
+- evidence: schema.py lines 22-34 + comment 'A full float32 SOLVE working-set is the larger §V.4 mixed-precision follow-on and is not this change'; loss.py line 181; solvers.py line 61-62 comment '~15 float64 working arrays ~250MB'.
+- recommendation: Implement the §V.4 mixed-precision working-set: keep P/M/gradients f32, accumulate all reductions in f64 (numpy: np.sum(x.astype(...)) or math.fsum on small group sums; torch: dtype=torch.float64 on sums). Gate behind a validity test comparing objective/telemetry vs the f64 oracle on a fixture block.
+
+
+### population-solve / migration flow (problem.py solve_ctr)
+
+**`POP-04` - HIGH - foundational_design_flaw** - Migration flow reconstruction builds a DENSE P x P Hessian and O(P^3) eigen/lstsq per year — the problem shape is wrong; the operator is sparse (net-flow + gravity + anchor)
+- detail: solve_ctr / _quadratic_hessian (problem.py lines 142-203) assemble H = np.zeros((n,n)) then np.linalg.lstsq(H,c) and np.linalg.eigvalsh(H) (or norm-2). For migration n = number of candidate directed pairs, capped at MAX_DENSE_FLOW_PAIRS=8000. 8000x8000 f64 = 512MB just for H, and lstsq/eigvalsh are O(P^3) ~ 5e11 flops PER YEAR, run sequentially over ~25 years (reconstruct_migration_flows loops years). But the actual operators are structurally sparse: net_flow_operator S is an incidence-style sum (each pair contributes to 2 nodes), the gravity prior is diagonal (per-pair anchor), and the census anchor is diagonal. So H = 2(net_weight * S^T S + gravity_weight * I + census_weight * diag(mask)) — S^T S is at most 2-off-diagonal-band sparse. Materializing it dense and eigen-decomposing it is the colossal-instantiation antipattern applied to a sparse operator. The 8000-pair cap exists ONLY because the dense Hessian would OOM — a sparse operator removes the cap entirely (national candidate support is far more than 8000 pairs within max_hops).
+- expected_gain: Replace dense lstsq/eigvalsh with a scipy.sparse CG / conjugate-gradient on the sparse normal operator (matrix-free: apply S^T S via the pair->node scatter, plus diagonal terms). O(P^3)->O(iter * nnz) with nnz ~ 4*P. Per-year cost drops from ~5e11 flops + 512MB to ~a few MB and near-linear; lifts the 8000-pair cap so national all-hops flows become feasible. 10-100x per year and removes an OOM ceiling.
+- validity_preserved: Fully preserved and MORE accurate: the sparse CG solves the identical convex quadratic (same normal equations Hx=c) to tolerance, not an approximation. Non-negativity is still enforced by projected-gradient/CG-with-projection as today. No float32 needed (pair counts are small); keep f64. This is a pure numerical-method correctness+scale win.
+- evidence: problem.py _quadratic_hessian line 153 H=np.zeros((n,n)); solve_ctr line 193 np.linalg.lstsq(H,c), line 202 np.linalg.eigvalsh(H); migration.py MAX_DENSE_FLOW_PAIRS=8000 with comment 'the generic CTR builds a dense (PxP) Hessian for its exact solve. Above this ... refuses rather than risk OOM; a sparse backend ... is the documented scaling path.'
+- recommendation: Give migration_flow_instance a sparse/matrix-free CTR path: represent S as scipy.sparse (or a scatter closure), solve Hx=c with scipy.sparse.linalg.cg (Jacobi-preconditioned by the diagonal gravity+anchor+degree terms), project to nonneg. Retire MAX_DENSE_FLOW_PAIRS or raise it by 1-2 orders. This is the documented-but-unbuilt 'sparse backend'.
+
+
+### population-solve / migration flow (per-year loop)
+
+**`POP-05` - MEDIUM - gpu_acceleration_candidate** - Per-year migration solves are ~25 independent identically-structured small dense solves — a batched torch.linalg (bmm/cholesky_solve) is the textbook repeated-small-op GPU case
+- detail: reconstruct_migration_flows loops over ~25 years, each posing the SAME candidate-pair structure (support fixed by contiguity + max_hops; only gravity prior scale and net marginal change year to year). Today each is a separate CPU solve_ctr. This is precisely the 'repeated small dense op' the reframe targets: stack the years into a batched operator and solve with torch.linalg.cholesky_solve / torch.linalg.lstsq on a (Y, P, P) or (Y, P, k) batch on the GPU. Even keeping dense (if POP-04's sparse rewrite is not taken) at the 8000-pair cap, a single 8000x8000 f32 factorization is 256MB and a batched-over-years Cholesky is bandwidth/compute-bound in the GPU's favor. If POP-04 sparse is taken instead, the batched op is a batched sparse CG (many RHS) — still GPU-favorable via torch bmm on the scatter operator.
+- expected_gain: Batching ~25 years into one device call + f32 dense linalg: ~3-8x over the sequential CPU loop for the dense path; more if combined with keeping the fixed operator factorization reused across years (structure is constant, only RHS changes -> factor once, solve 25 RHS). VRAM: one 8000^2 f32 factor = 256MB, fits.
+- validity_preserved: Dense f32 Cholesky of a Hessian with condition driven by net_weight/gravity_weight ratios (10:1, 50:1) is borderline — f32 Cholesky can fail or lose accuracy on ill-conditioned normal equations. Prefer f64 on GPU for the factorization (torch supports float64 CUDA, 4050 is slow at f64 but the matrices are small) OR use the sparse-CG path (POP-04) which is well-conditioned with Jacobi preconditioning. Do NOT ship f32 dense normal-equation Cholesky without a residual check against the f64 oracle.
+- evidence: migration.py reconstruct_migration_flows loops 'for year in sorted(net_by_year)' each calling reconstruct_migration_flows_for_year->solve_ctr; support/hops computed once (shared), only net + gravity vary per year.
+- recommendation: Refactor to build the shared operator once, then batch-solve across years. If keeping dense, factor the (structurally constant) Hessian once and back-substitute per-year RHS on GPU in f64. If POP-04 taken, batch the sparse CG RHS. Guard with a per-year residual-norm check (already computed: net_residual_l1).
+
+
+### population-solve / blocked driver (solvers.py)
+
+**`POP-06` - MEDIUM - gpu_acceleration_candidate** - Locality blocks are provably independent identical-structure subproblems — the ideal GPU batch axis; today they run as CPU threads, one solver instance per block
+- detail: solve_population_tensor_blocked slices localities into ~2M-cell blocks that are EXACT independent subproblems (_locality_separable / _slice_localities) and runs them across a ThreadPoolExecutor with BLAS pinned to 1 thread/worker. Every block has identical tensor structure (same T,A,X,R; only S_block and the data differ). This is a batch dimension: instead of N CPU threads each doing a numpy SPG, run ONE batched SPG on the GPU over a (n_blocks_in_wave, block_cells) layout — or simpler, since blocks are just locality ranges, run the WHOLE national tensor's SPG on-device in locality-batched form (the loss stencils are all per-locality slices, they vectorize over S trivially). The current block boundary exists purely to bound CPU RAM (250MB/block); on GPU the natural bound is VRAM (~350MB per 2M cells, POP-01), so you can hold ~15-18M cells resident per wave and stream locality-waves through the device.
+- expected_gain: Removes Python thread-pool overhead + per-block solver setup/validation (validate_population_problem runs per loss call per block), and turns N sequential-ish CPU waves into GPU-batched waves. Combined with POP-01/02, the national solve goes from CPU-thread-bound to VRAM-streaming. Hard to isolate but the block-batching is what makes the GPU port scale to national. Fits: stream ~8M-cell waves at ~1.3GB f32 resident.
+- validity_preserved: Blocks are mathematically independent (locality-separable, asserted), so batching is exact — the reduction over blocks is order-preserving and identical. No approximation. float32 caveats identical to POP-01/03 (f64 reductions).
+- evidence: solvers.py solve_population_tensor_blocked lines 111-201, _slice_localities exactness comment lines 66-101, _BLOCK_TARGET_CELLS=2_000_000 chosen to bound CPU working set to ~250MB.
+- recommendation: Add a GPU-batched blocked path: size waves to VRAM (~8-15M cells), keep the locality batch on-device, run the batched SPG (POP-01/02) per wave, stream results to the parquet writer. Keep the CPU thread-pool path as the no-GPU fallback. validate_population_problem should run once per problem, not once per loss eval (see POP-08).
+
+
+### population-solve / loss allocation
+
+**`POP-07` - MEDIUM - memory_hotspot** - evaluate_population_loss allocates ~10+ full-size temporaries every call (2-8x per iter); these are transient churn, not resident, but they dominate the CPU path's allocator/bandwidth cost
+- detail: Each loss call does P=np.array(population,f64) and M=np.array(...) (2 full copies just to promote), gp/gm zeros (2 more), then per term: residual arrays, grad_res arrays, expected tensor (aging), ILR log_x + matmul outputs. For a 2M-cell block that is ~10-14 x 16MB = ~160-220MB of transient allocation PER loss call, x ~2-8 calls/iter x 12 iters x n_blocks. On CPU this is allocator pressure + memory-bandwidth-bound writes to scratch that is immediately discarded. The aging term especially builds a full 'expected' tensor and 4 grad scatter temporaries. This is why the loss is memory-bound and why the GPU port (POP-01, on-device fused) wins — but even staying on CPU, preallocating gp/gm and the big scratch buffers once per block (they are reused every iter) and using out= on the ufuncs removes most of the churn.
+- expected_gain: CPU-side: preallocating and out=-ing the scratch removes ~150MB/call of alloc+free; ~1.3-1.8x on the CPU loss path from reduced allocator/bandwidth. On GPU the fused kernels make it moot. Low risk, immediate.
+- validity_preserved: Fully preserved — pure allocation reuse, identical arithmetic. No precision change.
+- evidence: loss.py lines 181-197 (P/M/gp/gm full-size allocs every call), 222 expected=P_prior*surv_prior+M_eta, 232-236 grad_res scatters, 275-282 ILR obs_ilr/deriv/grad allocations.
+- recommendation: Preallocate P,M,gp,gm and the per-term scratch on the problem (like _LossConstants) and reuse with np.subtract(...,out=), np.multiply(...,out=). Avoid the two full promotion copies by keeping the iterate f64 in the driver (or f32-with-f64-reduce per POP-03). Marginal on CPU, but free and correct; the real win is POP-01.
+
+
+### population-solve / loss hot path
+
+**`POP-08` - MEDIUM - speed_hotspot** - validate_population_problem runs on EVERY loss evaluation (hundreds of times per solve) doing full-array isfinite scans and Python-level weight checks
+- detail: evaluate_population_loss calls validate_population_problem(problem) at line 176 — first thing, every call. That function does len() checks on ~12 fields, a Python any(...) over vars(weights), and mode checks; and separately the loss does np.isfinite(P).all() and np.isfinite(M).all() (line 184) — two full O(n_cells) scans of the iterate — every single evaluation. Across ~12 iters x up to 8 backtracks x 2M-cell blocks x n_blocks, the isfinite scans alone are a full extra read of P and M per loss call (another ~16MB x 2 x hundreds of calls per block). The problem is CONSTANT across the solve; validation belongs once at solve entry, not per gradient eval.
+- expected_gain: Removes 2 full-array isfinite sweeps + the Python validation per loss call. On the memory-bound CPU loss path this is ~10-20% off each call (two extra full reads eliminated). Trivial to fix.
+- validity_preserved: Fully preserved — validation still runs once at solve entry; the per-iterate finiteness is already implicitly guaranteed (projections keep iterates finite/nonneg). If paranoid, keep a cheap finiteness check only in debug. No numerical change.
+- evidence: loss.py line 176 validate_population_problem(problem) and line 184 np.isfinite(P).all()/np.isfinite(M).all(), inside evaluate_population_loss which projected_gradient.py calls in the backtrack loop line 396.
+- recommendation: Hoist validate_population_problem to solve entry (solve_projected_gradient_small already calls it at line 199 — the per-loss call is redundant). Drop or debug-gate the per-iterate isfinite scans (projections guarantee finiteness). Byte-identical result, fewer full-array reads.
+
+
+### population-solve / pure-Python fallback projections
+
+**`POP-09` - LOW - foundational_design_flaw** - The pure-Python O(n_cells) projection/loss paths (_project_population, ADMM, block_coordinate, state_space smoother) are Python-list solvers that cannot run at national scale and duplicate the vectorized path
+- detail: _project_population/_project_migration/_bounded_sum_projection (projected_gradient.py) and the whole solve_population_admm (sparse_admm.py) and solve_population_block_coordinate operate on Python lists with per-element loops and generator-based norms (list(primal)+list(migration_primal)+... in ADMM line 140 materializes 4 Python lists of n_cells floats every iteration = ~tens of GB at national scale). state_space.py's smoother has a 5-deep Python for-loop over (s,x,r,cohort_age,t) coordinates. These are only reachable for the hard-anchor/migration-equality case (_fast_projection_supported=False), which 'the current SIDRA population build never hits' — so at national scale they are latent OOM/perf traps, not live cost. But they are ~600 LOC of Python-scalar math shadowing the numpy path, and if the migration-equality feature is ever enabled the solver silently drops to a path that cannot complete nationally.
+- expected_gain: No live speedup (dead at national scale today), but eliminating/vectorizing them removes a latent national-scale OOM cliff and ~600 LOC of divergent math. If migration_totals is ever needed, the vectorized bounded-sum projection is required anyway. Correctness/maintainability > speed here.
+- validity_preserved: Preserved if the vectorized replacements mirror the same projections (the fast paths already do for the common case). The risk is the opposite: leaving the Python paths means enabling a feature silently swaps in a solver that won't finish.
+- evidence: projected_gradient.py _project_population lines 42-72 (Python loops), _bounded_sum_projection lines 87-100 (80-iter bisection over Python lists); sparse_admm.py lines 116-140 list-comprehension iterations + list(primal)+list(...) norm; state_space.py 5-deep coordinate loop lines 174-210.
+- recommendation: Either vectorize the hard-anchor/migration-total projections (numpy, like _simplex_project_rows) so the fast path covers everything, or make the registry hard-refuse those problem features at >DENSE thresholds rather than silently routing to a Python solver. Prefer vectorizing bounded-sum projection as batched bisection.
+
+
+### population-solve / warm-start optimality
+
+**`POP-10` - LOW - numerical_method_swap** - The national solve is a near-optimum polish of the census warm start (max_iterations=12, mostly stalls) — the informative case is the only one worth accelerating; the data-poor case already skips the solve
+- detail: The orchestrator sets max_iterations=12 and documents (lines 141-147, 448-457) that the intercensal (a,x,r) structure is underdetermined: the census-proportion warm start (interpolate_census_composition) IS the optimum, so the SPG mostly hits the 'no feasible descent -> stall x3 -> bail' branch (projected_gradient.py lines 403-413). The data-poor path already skips the solve entirely and just projects the prior mean (orchestrator lines 467-495). So the ACTUAL heavy solve only runs when informative (>=2 censuses, or death/birth/migration-total terms active). This bounds the total GPU/opt upside: the solve is 12 iters, not thousands. It reframes the GPU port priority — the win is fewer-but-bigger loss sweeps, i.e. POP-01's per-sweep bandwidth + on-device residency, not iteration count. Also: the quadratic-interp backtrack (lines 400-402) and the stall-exit are already good; not the bottleneck.
+- expected_gain: No new speedup by itself; it CALIBRATES the others. It means POP-01/02/06's gain is ~(#loss sweeps per solve ~ 12 iters x up to 8 backtracks + POP-04/05 migration) — real but bounded. It also flags that the data-poor path (majority of municipality-years) already costs ~one vectorized simplex projection, so don't GPU-port that path.
+- validity_preserved: Preserved; this is an analysis of where cost actually is, not a code change. Confirms the census warm start is the scientifically-correct estimate in the data-poor limit (documented MSD §2.8.10).
+- evidence: orchestrator lines 138 max_iterations=12, 141-147 underdetermined note, 452-457 'informative' gate, 467-495 closed-form skip; projected_gradient.py lines 403-413 stall-bail, 386-392 quadratic-interp comment ('~240 wasted evals to ~20').
+- recommendation: Prioritize the GPU port for the INFORMATIVE branch only (solve_population_tensor_blocked path). Leave the closed-form/data-poor branch on the already-fast vectorized simplex projection. Measure #loss sweeps per national solve first (instrument evaluate_population_loss call count) to size the real POP-01 upside before building the torch backend.
+
+
+### population-solve / race ILR term
+
+**`POP-11` - LOW - gpu_acceleration_candidate** - The race ILR term is a batched (log, matmul, matmul) over ~S*T*A*X rows with a tiny R-wide basis — a batched torch.matmul, the cleanest GPU sub-kernel in the loss
+- detail: The race term (loss.py lines 267-286) gathers P over race-observed cells (mask), normalizes, takes log, then obs_ilr = log_x @ basis.T and deriv = residual @ basis where basis is (R-1, R) with R ~<=6. This is a batch of ~S_block*T*A*X rows (hundreds of thousands per block) each a length-R vector times a tiny (R,R-1) matrix — i.e. a batched GEMV / torch.matmul((N,R),(R,R-1)). On GPU this is a single fused matmul; on CPU numpy it is already vectorized but memory-bound on the log and the gather. VRAM negligible. It is the one term with an actual matmul (the rest are stencils), so it maps most directly to a GPU tensor-core-adjacent op, though R is too small to hit tensor cores — it's bandwidth-bound on the log.
+- expected_gain: Folds into POP-01 (part of the same fused device loss). Standalone: the log over the masked cells is the cost; GPU log bandwidth ~3-4x. Not worth porting in isolation — port as part of POP-01.
+- validity_preserved: The ILR log uses epsilon 1e-12 for structural-zero stability and normalizes to a simplex; float32 log of a normalized composition (values in [1e-12,1]) is fine for the log itself, but the residual (obs_ilr - tgt_ilr) and its sum-of-squares must accumulate in f64 (consistent with POP-01). The target ILR is precomputed/cached in f64 already (_LossConstants.race_prior_masked_ilr) — keep it f64.
+- evidence: loss.py _ilr_coords lines 93-101 (x/x.sum, np.log, log_x@basis.T), race term lines 267-286 obs_ilr/deriv/grad, _LossConstants caches race_prior_masked_ilr.
+- recommendation: Include the ILR term in the POP-01 torch loss as batched torch.matmul + torch.log (f32 elementwise, f64 residual sum). Do not port standalone.
+
+
+### sidra/facts.py + sidra/normalize.py
+
+**`DSS-01` - HIGH - foundational_design_flaw** - SIDRA fact normalization is a per-record Python object loop (pydantic build → model_dump → per-row json.dumps), the national-scale wall-clock hotspot
+- detail: The whole SIDRA fact path is row-at-a-time Python. flat_response_to_records() builds a dict per row; normalize_flat_records_to_facts() then loops those records building a pydantic SIDRAFactRow per row (classify_sidra_value + _tuple_from_pairs per row); facts_to_frame() loops AGAIN calling fact.model_dump(mode='json') + json.dumps(classification_tuple)/json.dumps(category_tuple) per row before a single pl.DataFrame(rows). This is 3 full Python passes over every cell of every chunk. At national scale that is ~94 compendium tables × 27 UFs × chunks, each returning up to the cell-cap of rows — millions of rows through pure-Python pydantic validation and json.dumps. The problem SHAPE is wrong: SIDRA flat JSON is already columnar (D1C/D2C/D3C/NC/V arrays), so it should be loaded straight into a polars DataFrame and decoded with column expressions (str.replace for the pt-BR decimal, when/then for the value_status ladder, struct.json_encode for the two tuple columns) — exactly the vectorized primitive discipline the DATASUS side already uses. pydantic SIDRAFactRow should validate the SCHEMA once, not instantiate per row.
+- expected_gain: 10-50x on the SIDRA normalize step (pydantic per-row instantiation + double json.dumps typically dominates; column-expression decode is Rust-native). Memory drops because the intermediate list[SIDRAFactRow] and list[dict] (both full-copy Python object graphs, ~5-10x the parquet size) disappear. No VRAM involved.
+- validity_preserved: Fully preserved. classify_sidra_value's symbol ladder (dash/x/.../..) and the pt-BR '.'-thousands ','-decimal rule map exactly to polars string expressions; value_numeric stays f64. Pin against the existing per-row function as oracle on a fixture chunk. No float32/approx risk — this is string parsing, not arithmetic.
+- evidence: src/pegasus/sidra/facts.py:56-103 (per-record loop building SIDRAFactRow), :131-139 (facts_to_frame re-loops model_dump + json.dumps per row), :18-41 (classify_sidra_value scalar); src/pegasus/sidra/normalize.py:96-161 (flat_response_to_records per-row dict build). extract_one_chunk calls this for every chunk (extract.py:127-136).
+- recommendation: Rewrite the fact path as: pl.DataFrame(payload_rows) → with_columns(value_status/value_numeric via when/then + str.replace, classification/category tuples via struct.json_encode) → write_parquet. Keep normalize_flat_records_to_facts as the record oracle only. Validate byte-identity against a fixture.
+
+
+### sidra/schemas.py + facts.py
+
+**`DSS-02` - MEDIUM - memory_hotspot** - list[SIDRAFactRow] pydantic object graph materialized fully in RAM per chunk before any write
+- detail: extract_one_chunk holds the entire chunk as a Python list of pydantic model instances (facts) AND the upstream list[dict] records simultaneously before write_facts_parquet. A pydantic BaseModel instance with ~14 fields costs ~1-2KB/row in Python object overhead vs ~100-200B/row in an Arrow column — a 10-20x inflation over the on-disk parquet. Chunks are individually cell-capped so a single chunk fits, but under the national fan-out (_SIDRA_UF_PARALLEL=6 UFs × _SIDRA_CHUNK_CONCURRENCY=4 → up to 24 chunks decoding concurrently) these Python object graphs stack in the 34GB RAM budget, and the GIL serializes their construction so the parallelism buys nothing on the decode itself.
+- expected_gain: Peak RAM for SIDRA decode drops ~10-20x per in-flight chunk once DSS-01 removes the object graph; also unblocks real decode parallelism (column decode releases the GIL, pydantic-per-row does not). Comfortably inside 34GB.
+- validity_preserved: Fully preserved — same output parquet. No numeric change.
+- evidence: src/pegasus/sidra/facts.py:67-101 (facts list accumulation) then :131-139 (second full list `rows`); src/pegasus/sidra/schemas.py:53-67; concurrency at sidra/extract.py:150-190 and acquire/sidra_national.py:216-223.
+- recommendation: Fold into DSS-01: go payload→polars frame directly, never build list[SIDRAFactRow] for bulk. Retain the pydantic row only for single-record/fixture validation.
+
+
+### workflows/acquire/sidra_national.py + pipeline.py
+
+**`DSS-03` - HIGH - memory_hotspot** - Eager pl.read_parquet fallback in the national/chunk combines silently defeats the O(1)-RAM streaming design
+- detail: _combine_national_artifacts wraps the streaming sink in try/except and on ANY exception falls back to pl.concat([pl.read_parquet(p) for p in paths]).write_parquet — reading every per-UF national parquet fully into RAM at once. For SIM/SIH that is tens of millions of rows × ~60 wide (many Utf8/JSON) columns across 27 UFs: the whole-national eager frame is exactly the multi-tens-of-GB object the streaming design exists to avoid, and it can OOM the 34GB box. The except is bare (catches the sink's own transient/plan errors indiscriminately) so a recoverable sink hiccup escalates straight to the OOM path. Additionally the combine runs one ThreadPoolExecutor worker PER (system,role) group (max_workers=len(ordered_groups)); if several groups hit the eager fallback simultaneously their whole-frame reads stack.
+- expected_gain: Removes the largest single OOM risk in the subsystem at national scale; keeps peak RAM at one row-group per active sink instead of the full national frame. No speed regression on the happy path.
+- validity_preserved: Fully preserved (same concat semantics). The fix is about which code path runs, not the math.
+- evidence: src/pegasus/workflows/acquire/sidra_national.py:98-102 (bare-except eager fallback) and :116-119 (one worker per group); src/pegasus/workflows/pipeline.py:181-187 (_combine_processed_datasus_chunks — same sink pattern, though without the eager fallback there).
+- recommendation: Narrow the except to the specific sink-unsupported error; if the sink truly cannot run, fall back to a chunked pyarrow ParquetWriter append loop (like stream_normalize_batched) rather than pl.read_parquet-all. Cap combine workers (e.g. min(4, groups)) so concurrent fallbacks cannot stack whole-frame reads.
+
+
+### datasus/normalize/records.py
+
+**`DSS-04` - MEDIUM - speed_hotspot** - Registry-routed per-row record normalizer (normalize_record) is O(rows × columns) Python with a per-cell registry resolve
+- detail: normalize_record loops every row, and inside each row loops every column calling resolve_raw_source_fields(source_system, raw_column_name, registry_root) plus _decode_value per cell — a registry lookup and a decoder dispatch per cell. This is the O(national×columns) Python path the vectorized _X_vectorized_frame decoders were built to replace. It is currently (correctly) used only as the record ORACLE for the equivalence tests and single-record use, NOT in the live batch pipeline (pipeline._NORMALIZERS routes to normalize_sih_rd_events etc., which call the vectorized frame). The flaw is latent: any caller that reaches for normalize_record/normalize_sim_do_record on a national frame silently gets the ~1000x-slower path, and the per-cell resolve_raw_source_fields (registry I/O) is not memoized across rows.
+- expected_gain: N/A on the live path (already vectorized); but memoizing resolve_raw_source_fields per (system,column) would make the oracle equivalence tests over larger fixtures materially faster and remove a footgun.
+- validity_preserved: Preserved — memoization of a pure registry resolve changes nothing numerically.
+- evidence: src/pegasus/datasus/normalize/records.py:370-428 (double loop, per-cell resolve at :384); contrast the live vectorized path at sih.py:271-421 dispatched from pipeline.py:143-164.
+- recommendation: Add an lru_cache on resolve_raw_source_fields keyed by (source_system, raw_column_name, registry_root); document normalize_record as oracle-only and assert against national use. No live-pipeline change needed.
+
+
+### datasus/normalize/sih.py + cnes.py + sim.py + sinasc.py
+
+**`DSS-05` - MEDIUM - speed_hotspot** - Per-system normalize re-scans the written national parquet 2-3 extra times for manifest stats and column lists
+- detail: After stream_normalize_batched writes the canonical parquet, normalize_sih_rd_events runs a separate pl.scan_parquet(out).select(len/valid/deaths).collect() for stats, THEN a second pl.scan_parquet(out).collect_schema() for the column list, and check_raw_completeness scanned the INPUT once more. For a national SIH/CNES canonical (tens of millions of rows, ~60 columns), each full scan re-reads the whole zstd parquet from disk. That is 2 extra full-file reads purely to produce a row count and two sums that could be accumulated for free inside the batch writer loop.
+- expected_gain: Eliminates ~2 full national-parquet re-reads per system (I/O-bound; on a ~1-3GB zstd national file that is seconds-to-tens-of-seconds each, ×4 systems). Peak RAM unchanged (scans are streaming) but wall-clock drops.
+- validity_preserved: Fully preserved — the stats are exact running aggregates, identical to the post-hoc scan.
+- evidence: src/pegasus/datasus/normalize/sih.py:438 (input scan), :444-454 (stats scan), :455 (schema scan); cnes.py:351-355 shows the same pattern (stats collect + head(1) collect).
+- recommendation: Accumulate row_count / valid_rows / deaths as running sums inside stream_normalize_batched's batch loop (return them alongside total); take the column list from the pinned target_schema captured on the first batch. Drop the two post-write full scans.
+
+
+### sidra/cache.py
+
+**`DSS-06` - LOW - speed_hotspot** - SIDRA cache serializes each payload to JSON twice on every write (once for the hash+bytes, once via _write_json)
+- detail: SidraJsonCache.write does raw_text = json.dumps(payload, ensure_ascii=False, sort_keys=True) to compute sha256 and byte length, then calls _write_json(payload_path, payload) which serializes the SAME payload to JSON a SECOND time to write it. For large national SIDRA payloads (the compendium tables can be multi-MB JSON) this doubles the serialization CPU and transiently holds two full string copies. It runs on every non-cache-hit chunk fetch across the national fan-out.
+- expected_gain: Halves cache-write serialization CPU + transient RAM per fetched chunk. Small per call but multiplied across 94×27×chunks on a cold national run.
+- validity_preserved: Fully preserved — write raw_text to disk directly (bytes already computed) instead of re-serializing.
+- evidence: src/pegasus/sidra/cache.py:90-105 (json.dumps at :90 then _write_json at :91 re-serializes).
+- recommendation: Write raw_text.encode('utf-8') directly to payload_path (it is already the canonical serialized form used for the hash), skipping the second _write_json serialization; keep _write_json only for the small sidecar.
+
+
+### datasus-sidra-stream (whole subsystem)
+
+**`DSS-07` - LOW - gpu_acceleration_candidate** - Honest re-derivation: this subsystem is string/date/regex/JSON decode on Utf8 columns — categorically NOT a GPU/torch workload; the reframe does not apply here
+- detail: The task's reframe (GPU wins on repeated small dense ops / huge dense scans like the 48GB HSIC) targets the LDO/inference math. This subsystem's work is: read parquet/JSON, strip/clean strings, regex \D extraction, strptime dates, mod-11 CNPJ check-digit integer arithmetic on 14 sliced Utf8 chars, codebook dict lookups, and struct.json_encode. None of these is dense float linalg or a batched-kernel eval. The single arithmetic kernel — the CNPJ mod-11 (primitives._cnpj_check_ok, 14 int slices × two weighted sums % 11) — is embarrassingly parallel but operates on strings, is memory/parse-bound not FLOP-bound, and moving it to torch would require host→device transfer of the Utf8 column, char-tensor encoding, and device→host writeback that dwarfs the ~28 integer mults/row it saves. cuDF (RAPIDS) could accelerate the column decode, but it is not installed (torch 2.5.1 only) and a 6.4GB-VRAM 4050 cannot hold a tens-of-millions-row × 60-col national string frame. The correct engine here is polars' Rust/SIMD backend, which is already used.
+- expected_gain: GPU gain here is ZERO-to-negative for float32/torch; the honest conclusion for THIS workload is: keep it on the CPU/polars, invest in DSS-01/03/05 instead. (The reframe's GPU thesis stands for the inference subsystems, not for ingest/decode.)
+- validity_preserved: N/A — recommending NOT to GPU-accelerate; no numerical change. Note float32 would be actively WRONG for value_numeric (SIDRA population counts exceed 2^24 exactly-representable f32 range → silent rounding of large-municipality totals); f64 must stay.
+- evidence: primitives.py:467-489 (CNPJ mod-11 the only arithmetic; all-Utf8); read_raw_table forces all-Utf8 (:37-54); the heavy ops are str/regex/date/json across sih.py/cnes.py/facts.py. No torch import anywhere in datasus/normalize or sidra.
+- recommendation: Explicitly do NOT route this subsystem to torch/GPU. If column-decode throughput ever becomes the national-run bottleneck after DSS-01/05, evaluate optional cuDF — but only as a CPU-fallback-gated accelerator, and never in f32 for value_numeric. Reserve VRAM for the LDO/HSIC math.
+
+
+### datasus/normalize/primitives.py (stream_normalize_batched)
+
+**`DSS-08` - LOW - streaming_redesign** - Batch size is a fixed 120k rows regardless of column width/dtype; wide CNES batches over-allocate, narrow SIM batches under-utilize
+- detail: stream_normalize_batched(batch_rows=120_000) is constant across all four systems, but their per-row working-set differs by ~3x: CNES-ST is ~4.9GB peak (many QTINST/QTLEIT capacity columns + attribute_vector_json struct), SIH ~1.7GB, SIM/SINASC narrower. A single fixed row-count means CNES batches carry ~3x the RAM of SIM batches, while the decode's per-batch Python/plan overhead is amortized worse on the narrow systems that could afford larger batches. The batch decode also re-derives the schema name-set and builds the full expression tree per batch (Cols(lf) + the ~60 with_columns exprs are reconstructed for every 120k-row batch), so a national SIM run pays that plan-construction cost hundreds of times.
+- expected_gain: Modest: sizing batch_rows by an estimated bytes/row budget (e.g. target ~1-2GB/batch) evens peak RAM across systems and lets narrow systems use bigger batches (fewer plan rebuilds). Frees headroom to raise DATASUS normalize parallelism above the current cap of 2.
+- validity_preserved: Fully preserved — row_offset keeps per-row surrogate identity byte-identical regardless of batch boundaries (already the module's stated invariant).
+- evidence: src/pegasus/datasus/normalize/primitives.py:72-143 (fixed batch_rows, frame_fn rebuilt per batch at :122); memory note of CNES ~4.9GB vs SIH ~1.7GB reflected in pipeline.py:270-273.
+- recommendation: Derive batch_rows from a target byte budget (n_columns × approx bytes/col) so peak RAM per batch is system-invariant; optionally hoist the per-batch expression construction so the plan is built once and applied per batch.
+
+
+### sidra/extract.py
+
+**`DSS-09` - LOW - speed_hotspot** - Warm-run chunk cache-skip still does a full pl.scan_parquet(...).select(len).collect() per existing chunk just to read the row count
+- detail: extract_one_chunk's warm-run fast path checks facts_path.exists() then runs pl.scan_parquet(facts_path).select(pl.len()).collect().item() to get row_count. A national compendium re-run reprocesses thousands of on-disk chunks (~94 tables × 27 UFs × chunks); each cache-hit opens a polars scan and executes a length aggregate. pyarrow can read the row count straight from the parquet footer metadata (ParquetFile(path).metadata.num_rows) with no scan/collect and no polars plan.
+- expected_gain: Turns each warm cache-hit from a polars scan+collect into a footer metadata read (microseconds vs milliseconds); across thousands of chunks on a warm national re-run this is seconds saved and avoids spinning up polars execution per chunk.
+- validity_preserved: Fully preserved — parquet footer num_rows is exact.
+- evidence: src/pegasus/sidra/extract.py:75-90 (scan+len+collect for the cached row count).
+- recommendation: Replace the length scan with pyarrow.parquet.ParquetFile(facts_path).metadata.num_rows (already a dependency via stream_normalize_batched). Keep the try/except fall-through to re-extract on a corrupt footer.
+
+
+### sidra/metadata.py
+
+**`DSS-10` - LOW - speed_hotspot** - Normalized-metadata assembly iterates category/table frames row-by-row via iter_rows(named=True) instead of a columnar group/join
+- detail: read_normalized_metadata_tables reads six metadata parquets then walks cat_df (and another df) with for r in df.iter_rows(named=True) to build nested Python dicts. Metadata is small relative to facts, but this runs on every plan/acquire call (plan_live_pipeline and the national metadata-ensure both read it), and iter_rows materializes each row as a Python dict — the same per-row Python antipattern, just at smaller scale. For the full compendium the categories frame is not tiny (94 tables × their classification categories).
+- expected_gain: Small absolute (metadata is KB-MB), but removes a repeated per-row Python pass on a hot planning path; a group_by/partition-based assembly is both faster and clearer.
+- validity_preserved: Fully preserved — pure restructuring of an in-memory dict build.
+- evidence: src/pegasus/sidra/metadata.py:367 and :391 (iter_rows(named=True) loops building nested dicts) after reading six parquets at :375-380.
+- recommendation: Build the nested lookup with polars group_by + struct/agg (or partition_by) and to_dicts() once per group rather than per row; cache the assembled structure across calls within a run.
+
+
+### compute/devices + installed runtime
+
+**`CI-01` - HIGH - foundational_design_flaw** - Installed torch is a CPU-only build (2.12.1+cpu) — the entire compute.yaml CUDA path is dead; every resolve_torch_device call silently returns CPU
+- detail: `python -c import torch` on this box reports `torch 2.12.1+cpu`, `torch.cuda.is_available()==False`. resolve_torch_device (devices.py:64) computes `available = torch.cuda.is_available()` and then `use_cuda = available and (...)`, so on the actual machine it ALWAYS resolves device='cpu', dtype=compute.cpu_dtype (float64), no matter what compute.yaml.cuda.enabled_for lists. The config advertises dtype=float32, max_vram_fraction=0.80, require_cuda_for_region_hsic=true, and enabled_for=[pirs_hsic_*, race_bridge_*, stdfm_solver] — all inert. The envelope guard's _detect_device_bytes() (envelope.py:41) also falls through to the 6GB RTX-4050 fallback constant because cuda is unavailable, so the 48GB residual-scan refusal is being computed against a *hypothetical* 6GB VRAM budget while the scan actually runs in 34GB CPU RAM (residual_scan._residual_scan_memory_budget uses 60% of system RAM — a different, correct budget). Net: the GPU story is aspirational; the prompt's premise (torch 2.5.1 + 6.4GB VRAM) does not match the installed CPU wheel. This is the #1 thing to fix before ANY GPU wiring: install a cu12x torch build, or the reframed GPU gains cannot be realized at all.
+- expected_gain: Prerequisite for all GPU gains below (0x without it). Installing torch-cu12x is the single unblocking step; no code change needed for resolve_torch_device to then light up.
+- validity_preserved: N/A (environment fix). Note: switching from the current float64 CPU default to float32 CUDA changes numerics — must be gated by the §V.6 exact-certifies-approximate contract, which already exists (certify_approximation_on_slice).
+- evidence: devices.py:64-68; config/compute.yaml:20-21; envelope.py:41-49; `import torch` → 2.12.1+cpu, cuda avail False
+- recommendation: Install a CUDA torch build matching the 4050 (cu121/cu124). Add a startup assertion or telemetry line that logs the resolved device+dtype+torch build so a CPU wheel on a CUDA box is loud, not silent. Until then, treat every 'cuda' finding as blocked.
+
+
+### ldo/residual_scan (served by compute infra, but bypasses it)
+
+**`CI-02` - HIGH - gpu_acceleration_candidate** - The 48GB residual HSIC scan — O(p²) pairs × ~200 permutation nulls of dense n×n kernels — is pure NumPy CPU and never calls resolve_torch_device; this is the single biggest GPU-favorable workload
+- detail: scan_residual_nonlinear_edges (residual_scan.py:237) is THE national-scale hotspot. Exact mode retains, per variable, two n_eff×n_eff float64 centered kernels (envelope.py:82 estimates ~48GB at n_eff=5000,p=130), then for each of p(p-1)/2 pairs computes stat=sum(kx*ky)/denom (residual_scan.py:169) and, per permutation, sum(kx*ky[ix_(pm,pm)]) (line 170). With p~130 that is ~8,385 pairs × 200 perms = ~1.7M elementwise-multiply-reduce ops over n×n matrices, plus 1.7M fancy-index gathers ky[ix_(pm,pm)]. This is the 'huge dense scan + repeated small dense ops' pattern the reframe names. It imports _bandwidth/_np_rff_features/_np_nystrom_features from hsic.py but NEVER calls resolve_torch_device/torch_runtime — the docstring in hsic.py:6-11 confirms the live scan reimplements the loop in NumPy. The permuted-kernel reduction sum(K∘(P L Pᵀ)) is exactly torch.einsum('ij,ij->', K, L[perm][:,perm]) — batchable across all permutations as a single (n,n)·(B,n,n) broadcast. On GPU the whole pair's null vector is one fused kernel launch.
+- expected_gain: For the exact path: batching the 200 permutations of one pair into a single torch bmm/einsum on GPU is ~50-200x per pair over the Python-level per-perm NumPy loop; the p² pair loop parallelizes further. Realistically 10-40x wall-clock on the whole scan if it fits. Memory: two n×n float32 kernels per pair = 2·5000²·4B = 200MB/pair — fits 6GB if kernels are built per-pair (not all p cached); the current all-p cache (48GB) does NOT fit VRAM and must be redesigned (see CI-03).
+- validity_preserved: float32 RBF kernels + centered-HSIC statistic are low-risk: HSIC is a ratio/sum of O(1)-scale centered kernel entries, well-conditioned; permutation p-values are rank-based (exceedance counts) so float32 rounding cannot flip a p-value except at exact ties (already handled with a 1e-15 slack in hsic.py:321). Certify via the existing exact-vs-float32 slice contract.
+- evidence: residual_scan.py:159-183 (_pair_stat_and_null), :356-371 (cache + pair loop); envelope.py:74-95 (48GB estimate); hsic.py:6-11 (live scan bypasses generic scanner)
+- recommendation: Wire the residual scan through resolve_torch_device('pirs_hsic_exact', prefer_cuda=True). Move kernel construction inside the pair loop (per-pair 2×n×n), and batch the permutation null as one torch.einsum over a stacked permuted-kernel tensor. Keep the NumPy path as the CPU fallback + exact certifier.
+
+
+### ldo/residual_scan cache shape
+
+**`CI-03` - HIGH - foundational_design_flaw** - Residual-scan retains a per-variable n×n kernel for ALL p variables at once (O(p·n²)=48GB) — the problem shape, not a local inefficiency; it should stream pairs, not pre-materialize the whole cache
+- detail: _build_var_reprs (residual_scan.py:111-156) precomputes and RETAINS two n_eff×n_eff centered kernels for every one of p variables BEFORE any pairing (comment lines 85-92 call this the O(p) build vs O(p²) rebuild win). But the retained footprint is O(p·n²): p=130, n=5000 → 130·2·5000²·8B ≈ 48GB (envelope.py:82 makes this exact). This is the same 'colossal instantiation' shape as the population-tensor OOM lesson: the cache trades a real recompute win for a footprint that only fits in RAM by luck and cannot fit 6GB VRAM at all — so it structurally FORBIDS the GPU path in CI-02. The correct shape is a streaming pair scan: hold the two variables' 1-D residual vectors (O(p·n), a few MB), build each pair's kernels on demand (or better, keep the O(p) win by caching only variable *feature maps* which are n×features, not n×n), and never let p full kernels coexist. Exact mode's n×n kernel is intrinsically the wrong retained object — feature-map (RFF/Nyström) HSIC gives the same O(p) cache in O(p·n·features) = 130·5000·512·8B ≈ 2.7GB, which fits VRAM.
+- expected_gain: Memory: 48GB → ~2.7GB (feature-map cache) or ~200MB working set (per-pair streaming) — a 17-240x reduction that also UNBLOCKS the GPU path and removes the multi-resolution coarsening fallback (residual_scan.py:304) that currently degrades national runs to a coarser grain purely to fit RAM. Speed: unchanged-to-faster (fewer cache misses, GPU-eligible).
+- validity_preserved: Feature-map HSIC is already the sanctioned approx for n>5000 (hsic.py:284) with the §V.6 certifier; extending it to the exact regime is an approximation that MUST be certified on a slice — honest float32/rank risk, not free. Per-pair exact streaming preserves exact numerics but loses the O(p)→O(p²) recompute win (still fine on GPU where each kernel is cheap).
+- evidence: residual_scan.py:111-156, :304-312 (coarsen-to-fit); envelope.py:80-84 ('single largest LDO allocation … ≈ 48 GB')
+- recommendation: Redesign the cache to hold feature maps (n×features), not n×n kernels, in exact mode too — or stream pairs building kernels on demand. Either fits VRAM and removes the coarsening degradation. Gate the approximation with the existing holdout certifier.
+
+
+### compute/devices seed policy
+
+**`CI-04` - HIGH - foundational_design_flaw** - resolve_torch_device re-seeds ALL global RNG (python/numpy/torch) on every call — a determinism + concurrency hazard, and it forces torch.use_deterministic_algorithms(True) which disables the fast cuBLAS/cuDNN GPU kernels
+- detail: resolve_torch_device (devices.py:84) calls seed_everything(seed) unconditionally on EVERY invocation. seed_everything (random.py:24-47) reseeds random, np.random (global), torch.manual_seed, torch.cuda.manual_seed_all, AND sets torch.use_deterministic_algorithms(True, warn_only=True). Two problems: (1) Global-state stomp under concurrency — stability_select (edges.py:115) runs n_subsamples fits on a ThreadPoolExecutor; STDFM (torch_solver.py:244) does multi_starts sequentially with seed+start but each fit calls seed_everything again. Any code path that calls resolve_torch_device inside a threaded/looped context silently resets the *shared* numpy global seed mid-stream, making results order-dependent (the very thing the stability loop pre-draws indices to avoid — but the fit's internal RNG is now clobbered). (2) use_deterministic_algorithms(True) is the OPPOSITE of what a GPU-throughput workload wants: it disables the nondeterministic-but-fast cuBLAS/cuDNN paths and can force slow fallbacks or raise on GPU. For a batched HSIC/kernel workload this is a direct throughput tax on the exact axis the reframe wants to accelerate.
+- expected_gain: Correctness: removes a real nondeterminism-under-concurrency bug. Speed: dropping forced-deterministic mode on GPU restores fast cuBLAS GEMM/batched-matmul kernels — often 1.5-3x on the dense linalg that dominates HSIC/STDFM. Seeding once at run entry (not per-op) also removes O(#tasks) redundant global reseeds.
+- validity_preserved: Seeding once per run (or using explicit local torch.Generator objects, which torch_generator() in random.py:51 already provides) is MORE reproducible than reseeding globally per-call, not less. Determinism can stay ON for the certification/exact path and OFF for the bulk approximate path — the two-tier precision policy already models this.
+- evidence: devices.py:84 (seed_everything on every resolve); random.py:44-47 (global reseed + use_deterministic_algorithms); edges.py:115 (threaded fits); torch_solver.py:244-257 (multi_starts each re-resolve)
+- recommendation: Move seeding to run entry; make resolve_torch_device seed-free (or gate behind a `seed_now: bool=False`). Prefer local generators (torch_generator, np.random.default_rng) already used in hsic.py:326. Set use_deterministic_algorithms per-task, defaulting OFF for approximate/bulk GPU work.
+
+
+### compute/devices VRAM admission
+
+**`CI-05` - MEDIUM - foundational_design_flaw** - No VRAM admission serialization exists despite being in scope — mem_get_info is read once with no lock/reservation, so concurrent CUDA tasks on a 6.4GB card race into OOM
+- detail: The prompt lists 'VRAM admission serialization' as a subsystem responsibility, but there is none. resolve_torch_device (devices.py:75-77) reads `free_bytes,_ = torch.cuda.mem_get_info()` once, computes a static preflight (preflight_memory, memory.py:58), and returns — there is no global lock, no reservation/booking of the estimated bytes, no admission queue. On a 6.4GB card, if the LDO ever runs multiple CUDA tasks (e.g. HSIC scan + STDFM, or the threaded stability loop each grabbing a GPU tensor), each independently sees the *current* free VRAM, both pass preflight, then both allocate and one OOMs. The preflight is TOCTOU-racy: the free-memory snapshot is stale the instant a second caller reads it. With float32 the residual-scan feature-map cache (CI-03, ~2.7GB) plus STDFM's 12-copy tensor budget (torch_solver.py:238) can jointly exceed 6.4GB. This is latent now only because CUDA is unavailable (CI-01); it becomes live the moment GPU wiring expands, which is the stated goal.
+- expected_gain: Prevents GPU-OOM crashes when the GPU path is expanded (the explicit ask: 'make GPU wiring safe to expand'). No throughput cost when tasks are serialized; a semaphore/reservation adds correctness, not latency, on a single-GPU box.
+- validity_preserved: Pure correctness/safety; no numerical impact.
+- evidence: devices.py:71-83 (preflight only, no lock/reservation); memory.py:58-78 (stateless check); torch_solver.py:238 (copies=12 VRAM budget); config/compute.yaml:21 (max_vram_fraction=0.80 of 6.4GB ≈ 5.1GB usable)
+- recommendation: Add a process-global VRAM admission gate: a lock + a running reserved-bytes tally around resolve_torch_device→torch allocation, so a task books its estimated_bytes before allocating and releases on completion. Serialize CUDA tasks on the single 4050 (a bounded semaphore of 1 for VRAM-heavy tasks). This is the safety layer the 'expand GPU wiring' mandate requires.
+
+
+### ldo/lowrank ADMM (CPW LVGLASSO)
+
+**`CI-06` - MEDIUM - gpu_acceleration_candidate** - The LVGLASSO ADMM does two dense p×p eigendecompositions PER iteration for up to 500 iters, refit ~12x in the stability loop — repeated small dense linalg, exactly the GPU-favorable reframe
+- detail: fit_sparse_plus_lowrank (lowrank.py:112) runs an ADMM loop (line 206) where every iteration calls _prox_neg_logdet (one eigh, line 64) and _psd_project_shifted (a second eigh, line 79) on p×p float64 matrices, plus a G@S matmul when smoothing is on (line 219). At p·(K+1) national feature counts (p~130, K~8 → feature dim up to ~1170) that is two O(dim³) eigh per iter × up to 500 iters. This fit is then repeated n_subsamples=12-20 times in stability_select (edges.py:89) AND once per lambda-perturbation axis. That is the 'repeated small dense ops (stability/λ-path/multiresolution refits)' pattern named in the reframe. torch.linalg.eigh is CUDA-accelerated and, critically, the 12-20 independent subsample fits could be BATCHED as a single (B, dim, dim) eigh (torch.linalg.eigh supports batch dims) — one launch instead of 20 Python-level LAPACK calls. Currently these run on a CPU ThreadPool with BLAS pinned to 1 thread/worker (edges.py:108-111), which is exactly the oversubscription workaround GPU batching sidesteps.
+- expected_gain: Batched (B=20, dim~1170) float32 eigh on GPU vs 20 sequential CPU float64 eigh: plausibly 5-20x on the eigen-dominated ADMM, more as dim grows. Memory: 20·1170²·4B ≈ 110MB batched — trivially fits 6GB.
+- validity_preserved: RISK: lowrank.py deliberately runs the eigh in float64 (lines 62-66, 77-81) because 'float32 round-off would corrupt small eigenvalues (and hence the log-det)'. This is a real, correct concern for -logdet prox. So the eigen-reduction must stay float64 on GPU too (torch supports float64 eigh on CUDA, though slower than float32). The bulk ADMM iterates can be float32 (already the §V.1 policy, lowrank.py:169-177 with cond-escalation). Net: GPU-batch the float64 eigh; do not drop to float32 on the spectrum step.
+- evidence: lowrank.py:55-81 (two per-iter eigh), :206-231 (ADMM loop), :169-177 (cond-escalate); edges.py:89,108-118 (12-20 refits, BLAS-pinned threadpool)
+- recommendation: Batch the n_subsamples ADMM fits as a single batched-eigh GPU solve (torch.linalg.eigh over a (B,dim,dim) stack), keeping float64 on the eigen step and float32 on the bulk iterates. Falls back to the existing CPU threadpool when CUDA is absent.
+
+
+### ldo/covariance pairwise-complete moments
+
+**`CI-07` - MEDIUM - gpu_acceleration_candidate** - pairwise_correlation's four O(F²·n) BLAS products (M@Mᵀ, X0@Mᵀ, X0²@Mᵀ, X0@X0ᵀ) are refit every subsample — dense GEMM that maps 1:1 to torch.mm on GPU
+- detail: pairwise_correlation (covariance.py:48) is the per-fit cost driver (its own docstring line 63: 'dominated the LDO's per-fit cost, run once per stability subsample'). It computes n_ab=M@M.T, Sx=X0@M.T, Sxx=(X0*X0)@M.T, Cxy=X0@X0.T (lines 83-86) — four (F,n)·(n,F) GEMMs, F=p(K+1)~1170, n=S·T~139k national. Each is ~F²·n = 1170²·139k ≈ 1.9e11 FLOPs, ×4 products ×12-20 subsamples. This is textbook GPU GEMM. whitened_lagged_correlation (covariance.py:151) additionally loops G += Ft@(Q_sparse@Ft.T) over T time slices (line 194) — a per-slice dense (F,S)·(S,F) accumulation, also GEMM-bound. Both are pure NumPy and never touch resolve_torch_device.
+- expected_gain: float32 GEMM on the 4050 vs numpy MKL: the 4050 does ~15 TFLOP/s fp32 vs a laptop CPU's ~0.5-1 TFLOP/s effective — 8-15x on these products, ×(12-20 subsamples). The X0@X0ᵀ etc. inputs are F×n = 1170×139k×4B ≈ 650MB per operand in float32 — fits 6GB with room for the products (F²·4B ≈ 5MB).
+- validity_preserved: RISK: the pairwise-complete moment algebra subtracts large means (cov = Cxy·inv − mean_a·mean_b, line 94) — a catastrophic-cancellation-prone form. In float32, sum_t x_a·x_b over n~139k terms then minus n·mean_a·mean_b loses precision when means are large relative to variance. The correlation ratio partly cancels 1/n but NOT the cancellation in the numerator. Recommend float32 for the GEMM accumulation only if inputs are pre-centered per overlap (harder here since overlap is pairwise), OR keep float64 GEMM on GPU (4050 fp64 is crippled ~1/32, so this may not win). Honest verdict: float32 speedup is real but needs a Welford/centered reformulation or a certified-on-slice check; naive float32 risks corrupting near-zero partial correlations at the edge-selection threshold.
+- evidence: covariance.py:83-96 (four GEMMs + cancellation-prone cov), :191-196 (per-slice G accumulation); docstring line 63 (per-fit cost driver)
+- recommendation: Route the four moment products through torch.mm on GPU. Prefer a centered/Welford accumulation to make float32 safe; else use float64 GPU (test whether the crippled-fp64 4050 still beats CPU — likely marginal). Certify on a slice before trusting float32 partial correlations.
+
+
+### she/stdfm torch_solver
+
+**`CI-08` - MEDIUM - speed_hotspot** - STDFM already uses torch+resolve_torch_device but runs multi_starts SEQUENTIALLY and re-resolves the device (re-seeding globally) each start — the multi-start loop is the batchable unit
+- detail: solve_stdfm (torch_solver.py:216) is the one consumer that DOES use the compute infra correctly (resolve_torch_device at line 233, torch_runtime, Adam optimizer). But it runs problem.multi_starts independent fits in a plain list comprehension (line 244) — sequential Adam optimizations of the SAME (space,time,fields) tensors with different seeds. Each _fit_start re-calls seed_everything (line 93) — the CI-04 global-reseed hazard, here compounding: start k's seeding stomps start k-1's numpy global state. The multi-start is embarrassingly parallel and, on GPU, batchable: stack the M starts into a leading batch dim so factors is (M,space,time,k), and the einsums (lines 138,148,152) become batched einsums — M Adam trajectories in one kernel stream. Also estimated_bytes uses copies=12 (line 238) as a static guess with no VRAM reservation (CI-05).
+- expected_gain: Batching M~4-8 starts into one GPU stream: near-Mx over the sequential loop (4-8x) since each start is small and launch-overhead-bound at national tile sizes. Removes M-1 redundant global reseeds.
+- validity_preserved: Adam/SGD in float32 is standard and low-risk for a factor model (the certification is holdout-MAPE based, torch_solver.py:314, not bit-exactness); float32 is appropriate here. Batched multi-start is numerically identical to sequential per-start (independent trajectories, same seeds).
+- evidence: torch_solver.py:244-257 (sequential starts), :93 (per-start global reseed), :238 (static copies=12 budget)
+- recommendation: Batch multi_starts along a leading dim with batched einsum + a single Adam over the stacked parameters; resolve the device once and seed via local generators. Book VRAM through the CI-05 admission gate.
+
+
+### ldo/residual_scan permutation nulls
+
+**`CI-09` - MEDIUM - speed_hotspot** - Per-pair permutation null builds ~200 fancy-index gathers ky[ix_(perm,perm)] and RFF cross-covariances in a Python loop — the null loop, not the statistic, dominates the scan
+- detail: In _pair_stat_and_null (residual_scan.py:159), the null is a Python list-comp over perms: exact mode does np.sum(kx*ky[np.ix_(pm,pm)]) for each of ~200 permutations (line 170) — each a full n×n gather + elementwise-multiply-reduce; approx mode does fx.T@fy[pm] per perm (line 181). With ~8,385 pairs × 200 perms this is ~1.7M NumPy calls at Python-loop granularity, and the ix_ double-gather materializes a fresh n×n permuted matrix each time (n=5000 → 200MB churn per pair). The statistic itself is one op; the null is 200x it. This is the classic 'huge dense scan of repeated small ops' — GPU batches the entire (perms, n, n) permuted-kernel tensor and reduces in one einsum; even on CPU, the exact null can be rewritten as trace(Kx @ Pᵀ Ky P) batched, or the RFF null as a single fx.T @ (fy_stacked_over_perms) tensor contraction avoiding the per-perm Python dispatch.
+- expected_gain: GPU: batching 200 perms per pair into one torch.einsum ≈ 50-150x per pair on the null (the dominant term). CPU-only fallback: stacking perms into a 3-D gather + einsum removes ~200x Python dispatch, ~5-15x. Memory (approx/RFF mode): perms·features·n is modest; exact mode's perms·n² stack (200·5000²·4B=20GB) does NOT fit VRAM — must chunk perms or use the feature-map path (ties to CI-03).
+- validity_preserved: Permutation p-values are exceedance counts (rank statistics); float32 cannot change the count except at ties, already slack-guarded (hsic.py:321). Bit-identical permutation set must be preserved (the code is careful about seed order, residual_scan.py:333-345) — batching must consume the SAME perms in order, which a stacked tensor does.
+- evidence: residual_scan.py:159-183 (per-perm Python loop), :367-371 (pair×perm scan)
+- recommendation: Vectorize the null: stack perms into a tensor and reduce in one einsum (GPU) or one 3-D NumPy contraction (CPU fallback), chunking the perm axis to fit VRAM in exact mode. Combine with CI-03's feature-map cache so the exact n² stack is avoided entirely.
+
+
+### ldo/kron joint operator + stochastic logdet
+
+**`CI-10` - LOW - gpu_acceleration_candidate** - Kronecker matvec/solve and stochastic-Lanczos logdet are matrix-free sparse+dense ops ideal for GPU, but currently NumPy/scipy-only and not wired to the compute infra
+- detail: KroneckerPrecision.matvec/solve/logdet (kron.py:98-144) do mode-wise tensordot on small dense factors (p×p Ω_var, τ×τ time) plus a sparse S×S space matvec/spsolve. joint_logdet (kron.py:173) at national S>20000 falls to stochastic_logdet (stochastic.py) — a stochastic-Lanczos quadrature with n_probes=16 sparse matvecs. These are matrix-free and GPU-eligible: torch.sparse supports the S×S GMRF matvec, and the 16 Hutchinson probes are an embarrassingly-parallel batched sparse-matvec (one (S,16) dense RHS through the sparse operator). Everything here is exact-or-certified and small in VRAM (the whole point of §V.2 is the factors never form the (pST)² joint). Low severity because this path is a likelihood *evaluator* (kron.py:26-31), not the per-fit hotspot — it runs O(1) times per run, not O(p²·subsamples).
+- expected_gain: Batched 16-probe sparse matvec on GPU vs a Python probe loop: ~10-16x on the SLQ logdet, but that logdet runs once per run — small absolute wall-clock. Real value is consistency (one device policy) more than raw speedup. VRAM trivial (sparse S×S ~0.3MB + (S,16) dense ~0.7MB at S=5570).
+- validity_preserved: SLQ is already a Monte-Carlo estimate with a reported SE (kron.py:188); float32 probes are fine — the estimator's variance dominates float32 rounding. The exact sparse-Cholesky path (S≤20000) should stay float64/CPU (scipy splu) as the certifier.
+- evidence: kron.py:98-144 (mode-wise ops), :173-190 (SLQ logdet), stochastic.py referenced
+- recommendation: Low priority: route the SLQ probe matvecs through torch.sparse on GPU when a CUDA plan is active, batching the 16 probes as one (S,16) RHS. Keep the exact sparse-Cholesky CPU path as certifier. Do CI-02/03/06 first — this is O(1)-per-run, not the hotspot.
+
+
+### compute/memory preflight
+
+**`CI-11` - LOW - memory_hotspot** - MemoryPreflight is a stateless one-shot check with no reservation and a Windows GlobalMemoryStatusEx path that can't see the 48GB residual-scan peak coming from a different budget function
+- detail: preflight_memory (memory.py:58) checks estimated_bytes ≤ available·max_fraction once, at call time, with no booking. Two gaps: (1) It is only invoked when a caller passes estimated_bytes (devices.py:72) — the residual scan (the 48GB allocator) does NOT go through resolve_torch_device, so this preflight never guards it; instead residual_scan.py:54 rolls its own _residual_scan_memory_budget (60% of psutil available). So the two largest allocators in the system use two DIFFERENT, uncoordinated RAM-budget functions, and the central one never sees the big one. (2) On Windows the fallback reads GlobalMemoryStatusEx avail_phys (memory.py:33-49) — a point-in-time snapshot with no reservation, so two concurrent preflights both pass then jointly OOM (same TOCTOU as CI-05 but for RAM). At national scale with a 34GB box and a 48GB-or-coarsened scan, an accurate, RESERVED budget matters.
+- expected_gain: Correctness/robustness, not speed. Unifying the budget avoids a class of OOM-or-needless-refusal mismatches (central guard says fine, scan's own guard coarsens, or vice versa).
+- validity_preserved: No numerical impact.
+- evidence: memory.py:58-78 (stateless), :33-49 (Windows snapshot); devices.py:72 (only when estimated_bytes given); residual_scan.py:54-67 (separate budget); envelope.py:74-95 (third budget model)
+- recommendation: Consolidate the three RAM/VRAM budget models (memory.preflight, residual_scan._residual_scan_memory_budget, envelope.estimate_*) behind one reserving admission manager (shared with CI-05). Have the residual scan register its estimate with the central guard so the system has one coherent view of peak allocation.
+
+
+### compute/devices dtype default
+
+**`CI-12` - LOW - numerical_method_swap** - CPU path hardcodes float64 (cpu_dtype default) while GPU path uses float32 — but the two are never reconciled, so a CUDA-absent box silently runs 2x the memory and half the throughput the envelope assumes
+- detail: resolve_torch_device (devices.py:68) picks dtype = cuda.dtype('float32') only when use_cuda, else compute.cpu_dtype defaulting to 'float64'. On this CPU-only box every torch task runs float64 — 2x the memory and (on CPU) roughly 2x the time of float32 for the same work — while envelope.estimate_ldo_bytes and the compute.yaml envelope are written around float32 (envelope.py:16 '6GB', compute.yaml float32). The bulk LDO fit path (lowrank work_dtype) already supports float32-with-cond-escalation on CPU (lowrank.py:169), proving float32 is viable for the bulk iterates even without a GPU. So the CPU default of float64 is a conservative choice that forfeits a free ~2x on the CPU path that will remain the ONLY path until CI-01 is fixed. The reframe's premise (float32) is not actually in effect for most compute on the real machine.
+- expected_gain: Adopting float32 bulk on the CPU torch path (where §V.1 already sanctions it with cond-escalation) is ~2x memory and up to ~2x speed on the affected tensors — realizable TODAY without CUDA. Reductions/eigh stay float64 per existing policy.
+- validity_preserved: Already-solved: the §V.1 two-tier policy (float32 bulk, float64 reductions, cond-escalation, exact-certifies-approximate) is exactly the validity framework. The risk is the same catastrophic-cancellation concern flagged in CI-07 for the moment products — apply the same certified-on-slice gate.
+- evidence: devices.py:68 (cpu_dtype float64 default); lowrank.py:169-177 (float32 bulk already viable on CPU); envelope.py:16, compute.yaml:20 (float32 envelope)
+- recommendation: Let the float32-bulk policy apply on the CPU torch path too (not just CUDA), gated by cond-escalation and the holdout certifier, to reclaim ~2x on CPU immediately. Reconcile compute.yaml so cpu_dtype and the envelope model agree on the bulk dtype.
+
+
+### ldo/lowrank.py — CPW ADMM inner loop
+
+**`NM-01` - HIGH - gpu_acceleration_candidate** - The two per-iteration eigh() in the CPW ADMM are the dominant serial cost and are the archetypal batched-small-dense GPU op
+- detail: fit_sparse_plus_lowrank runs up to max_iter=500 ADMM iterations; EACH iteration does two full symmetric eigendecompositions on an F×F float64 matrix (F=p·(K+1)): _prox_neg_logdet (line 209) and _psd_project_shifted (line 222), both via np.linalg.eigh. This is a hard O(F^3) LAPACK call on the CPU, single-matrix, serial. At national context scale F≈130–520 (p≈130–260, K≈1–2). Per run_ldo this fit is invoked ~18–20 times (1 main + up to 1 controller-escalate + 2 certify_approximation exact/approx + 1 temporal_holdout + 12 stability subsamples + 3 regularization-path refits), and run_ldo_multiresolution doubles that. So the workload is thousands of eigh(F) calls, F in the low hundreds. THE REDESIGN: (a) move the eigh onto the GPU with torch.linalg.eigh — a single 512×512 float32 eigh is dominated by launch/transfer overhead per call, so (b) the real win is BATCHING: the 12 stability subsamples + 3 lambda-path + 2 certify fits are independent ADMM chains; stack their current iterates into a (B,F,F) batch and call torch.linalg.eigh once per ADMM step over the whole batch (cuSOLVER batched syevj). B≈17, F≤520, float32 → 17·520·520·4 ≈ 18 MB per copy, a handful of copies — trivially inside 6.4 GB VRAM. The eigenbasis reshape (d = (vals+sqrt(vals^2+4/rho))/2 and clip) is elementwise, also batched.
+- expected_gain: Batched GPU eigh of the 17 independent chains collapses the single largest wall-clock term. Realistic 4–8x on the fit-dominated phase of a national context run; the whole stability+certify+path block currently re-pays O(F^3)·max_iter serially per chain. Fits VRAM by orders of magnitude (18 MB vs 6.4 GB).
+- validity_preserved: PARTIAL RISK. The module deliberately runs every eigh in float64 (§V.1) because small eigenvalues drive the -logdet prox and float32 round-off there can flip an edge near threshold. A GPU float32 batched eigh WOULD change results. Mitigation: RTX 4050 (Ampere) supports float64 eigh (slower but correct) — batch in float64 (36 MB/copy, still trivial) to stay byte-comparable, OR keep the cond(C)-escalation gate already in the code and only use float32 on well-conditioned chains, re-running flipped-near-threshold edges exact. Do NOT blindly cast to float32.
+- evidence: lowrank.py lines 55-81 (_prox_neg_logdet, _psd_project_shifted both eigh), 206-231 (loop, max_iter=500, two eighs/iter); lags.py:136 calls it; orchestrator.py callers: stability_select (n_subsamples=12), certify_approximation (2 fits), temporal_holdout (1), precision controller re-fit; certgates.py:51 (grid of 2 → 3 fits). compute.yaml enabled_for has NO ldo fit task — the ADMM never touches the GPU today.
+- recommendation: Add a torch batched-eigh backend for the ADMM prox steps and drive the independent stability/λ-path/certify chains as ONE (B,F,F) batch on cuda. Keep float64 on Ampere (still ~10 MB), or gate float32 behind the existing cond-escalation. Register an 'ldo_admm_prox' task in compute.yaml enabled_for.
+
+
+### ldo/residual_scan.py — exact HSIC kernel cache
+
+**`NM-02` - HIGH - foundational_design_flaw** - The exact residual-HSIC scan materializes 2·p dense n×n kernels (48 GB at national scale) — the problem shape is wrong, not the constant
+- detail: _build_var_reprs (residual_scan.py:122-132) precomputes and RETAINS, for every one of p variables, TWO doubly-centered n_eff×n_eff float64 kernel matrices (kx,ky). estimate_residual_scan_bytes documents this: exact n_eff=5000,p=130 ≈ 48 GB — larger than the 34 GB RAM box AND ~7× the VRAM. The current mitigation is to COARSEN (average residuals into spatial×temporal buckets) until it fits, which SACRIFICES resolution — it degrades the science to fit the memory. This is the colossal-instantiation→streaming lesson exactly: the O(p·n²) cache is the wrong shape. THE REDESIGN: the exact biased HSIC statistic sum(kx*ky)/(n-1)² and every permuted null sum(kx*ky[perm,perm]) do NOT need the dense kernel — they need trace(Kx·Π Ky Πᵀ). Use RFF/Nyström feature maps for ALL n (not just n>5000): represent each variable as an n×D feature map (D≈256–1024), store 2·p·n·D instead of 2·p·n². At n=5000,p=130,D=512 that is 130·2·5000·512·8 ≈ 5.4 GB — fits RAM, and the pair statistic becomes ‖fxᵀfy‖² (a D×D cross-cov) with permutations as fxᵀfy[perm] (O(nD) not O(n²)). The exact n×n kernel is only ever needed as a fidelity check on a bounded slice (the §V.6 certify contract already exists).
+- expected_gain: 48 GB → ~5 GB (≈10×) at national scale AND removes the resolution-destroying coarsening fallback so the scan runs at fine grain. Pair scoring drops from O(n²) per permutation to O(nD). Fits RAM; the D×D cross-cov (512² float32 = 1 MB) trivially fits VRAM for a batched-over-pairs GPU matmul.
+- validity_preserved: APPROX by design but principled: feature-map HSIC is the module's own §6.7 large-n estimator, already accepted for n>5000. Extending it below 5000 changes the exact scan to an approximate one — must be gated by the existing certify_approximation_on_slice (exact n×n vs feature-map on a bounded slice) so the approximation is measured, not assumed. float32 features are fine for the statistic; keep the permutation p-value count in float64.
+- evidence: residual_scan.py:111-156 (_build_var_reprs retains kx,ky per var), 163-183 (_pair_stat_and_null exact path builds ky[np.ix_(pm,pm)] per permutation — O(n²) per perm), envelope.py:74-95 (estimate_residual_scan_bytes: '48 GB'), residual_scan.py:304-312 (coarsen-or-refuse fallback that degrades resolution).
+- recommendation: Make the feature-map (RFF/Nyström) representation the DEFAULT for the residual scan at all n, storing n×D not n×n; keep exact n×n only for the §V.6 slice certification. Batch the D×D pair cross-covariances on GPU. Retire the coarsening fallback except as a last resort.
+
+
+### ldo/residual_scan.py — permutation null loop
+
+**`NM-03` - HIGH - speed_hotspot** - Permutation null is a Python loop over ~200 perms × p²/2 pairs, each an O(n²) fancy-indexed re-sum — the exact-mode wall-clock sink
+- detail: For every one of p·(p-1)/2 pairs, _pair_stat_and_null builds the null by looping over ~200 permutations and, in exact mode, computing np.sum(kx*ky[np.ix_(pm,pm)]) — a fresh O(n²) fancy-index + elementwise product + reduction PER permutation PER pair. At p=130,n=5000 that is 8385 pairs × 200 perms × 25M-element ops = ~4×10¹³ element-ops in a Python-driven loop. Even the feature-mode path (fxᵀfy[pm]) is a Python loop of D×D matmuls. THE REDESIGN: (a) in feature mode the null is a batched tensor op — stack the 200 permuted fy views into (200,n,D) once (or index on GPU) and compute the (200,D,D) batch of crosses with one torch.bmm, then the (200,) null vector; (b) the permutations are SHARED across all pairs (the null is structural, comment says so at line 286), so precompute the permuted feature tensors once and reuse across every pair — an outer (P_pairs)×(200) that is a single batched matmul on GPU. Kernel-mode exact permutation of an n×n matrix is intrinsically O(n²) and should not be used at national n at all (see NM-02).
+- expected_gain: The null loop is the dominant residual-scan wall-clock once memory fits. Batching the shared permutations into one bmm per pair (or one grand batched contraction) plus GPU is realistically 10–50× on this phase; float32 D×D crosses batch trivially in VRAM (200·512·512·4 = 210 MB).
+- validity_preserved: Byte-identical in feature mode (same feature maps, same permutations, same reduction — only the loop structure changes). float32 accumulation of the cross-cov is the only risk; the p-value is a rank statistic (exceedance count) so it is robust to small float32 drift in the statistic, but compute the final exceedance comparison with a consistent dtype.
+- evidence: residual_scan.py:159-183 (_pair_stat_and_null: `null = np.array([... ky[np.ix_(pm,pm)] ...])` exact; `for k,pm: fx.T@fy[pm]` feature), 364-371 (Python double loop over all pairs calling it), 286 ('Reuse the same structural permutations across pairs').
+- recommendation: Precompute the shared permuted feature tensors once; replace the per-pair Python permutation loop with one batched torch.bmm over (n_perms, D, D) on cuda. Drop exact n×n permutation at national n.
+
+
+### ldo/hsic.py — exact HSIC centering + null
+
+**`NM-04` - MEDIUM - foundational_design_flaw** - The generic HSIC scanner densifies the n×n centering matrix H and does an n×n permutation per null draw
+- detail: numpy_kernel_hsic_permutation_test._center (hsic.py:270-273) builds `h = np.eye(m) - np.full((m,m),1/m)` and does H@matrix@H — TWO dense n×n matmuls plus an explicit n×n H, when the identical result is K - rowmean - colmean + grandmean (residual_scan.py already does this the cheap way at line 106). And the exact null (line 280) recomputes np.sum(k*l[np.ix_(perm,perm)]) per permutation — the same O(n²)-per-perm pattern as NM-03. This scanner is the 'foundation' used by tests/acceptance; at any n>~2000 the H materialization alone is wasteful (n=5000 → three 200 MB n×n temporaries).
+- expected_gain: Replacing H@K@H with the rank-1 centering (already proven in residual_scan) removes two n×n matmuls + one n×n allocation per kernel — ~3× less memory and compute in the exact centering step. Batching the null as in NM-03 compounds it.
+- validity_preserved: Byte-identical: K - rm - cm + grandmean equals H K H exactly (residual_scan.py:104-108 documents and relies on this identity). No float32 risk if done in the same dtype.
+- evidence: hsic.py:270-273 (`h=np.eye(m)-np.full((m,m),1/m); return h@matrix@h`), vs residual_scan.py:104-108 (the cheap identity). hsic.py:279-281 (per-perm np.ix_ re-sum).
+- recommendation: Replace _center's H-matrix form with the rowmean/colmean/grandmean identity; share the batched-permutation redesign with the residual scan so both HSIC paths use one code path.
+
+
+### ldo/covariance.py — whitened_lagged_correlation
+
+**`NM-05` - MEDIUM - gpu_acceleration_candidate** - The whitened-lagged Gram accumulation is a T-step loop of dense F×S · sparse-S×S · S×F matmuls — a natural GPU streaming contraction
+- detail: whitened_lagged_correlation (covariance.py:191-194) accumulates G += Ft @ (Q_sparse @ Ft.T) in a Python loop over T time slices, each Ft being F×S dense (F=p(K+1)≈260, S≈5570). Per slice: a sparse S×S · S×F matvec-block then a dense F×S · S×F matmul (F²·S ≈ 260²·5570 ≈ 3.8×10⁸ flops) × (T-K)≈24 slices. This is the whitening backbone, run once per fit — and per NM-01 the fit runs ~18×/run. The dense F×S·S×F GEMM is ideal for the GPU; Q_sparse (~6 nnz/row) as a torch sparse tensor does the S×S matvec-block on device. Ft blocks are F×S float32 = 260·5570·4 ≈ 5.8 MB; the running G is F×F (tiny). Everything streams: only one Ft and Q on device at a time.
+- expected_gain: The dense F×S·S×F GEMM per slice is the cost; on GPU with float32 that is a well-shaped cuBLAS SGEMM. 3–6× on the whitening phase; multiplied across the ~18 fits/run it is material. Trivially fits VRAM (single-slice streaming, <10 MB working set).
+- validity_preserved: float32 GEMM risk is moderate — this feeds a correlation matrix that then goes to the ADMM; the module already whitens in float64. Keep the Gram accumulation float64 on GPU (Ampere supports it, 12 MB/slice) OR accumulate float32 and validate the resulting correlation against a float64 CPU reference on a slice. The Lanczos mean-centering (_sqrt_matvec) is a one-vector op, leave on CPU.
+- evidence: covariance.py:185-203 (the t-loop Gram accumulation, `G += Ft @ (Q_sparse @ Ft.T)`), lags.py:112-114 (called per fit when spatial_whiten), stability/certify/path callers multiply it.
+- recommendation: Port the per-slice Ft@(Q@Ftᵀ) contraction to torch with Q as a sparse cuda tensor, streaming one time slice at a time; accumulate G in float64 to preserve the correlation's fidelity.
+
+
+### ldo/lowrank.py — ADMM convergence & rho
+
+**`NM-06` - MEDIUM - numerical_method_swap** - Fixed rho, no over-relaxation, no adaptive stopping — the ADMM burns up to 500 iters where adaptive-rho + over-relaxation converge in a fraction
+- detail: fit_sparse_plus_lowrank uses a FIXED rho (default 1.0) and a single primal-residual stopping test (pn/rn<tol), no dual-residual test, no residual-balancing rho update, no Nesterov/over-relaxation. Standard CPW/ADMM practice (Boyd §3.4.1) is (a) residual-balancing: scale rho up/down by ~2× when primal/dual residuals diverge >10×, typically 2–5× fewer iterations, and (b) over-relaxation Rᵏ⁺¹←αRᵏ⁺¹+(1-α)(S-L), α≈1.5–1.8, another ~1.5×. Since EACH saved iteration is two O(F³) eighs (NM-01), cutting iteration count is a direct multiplier on the single most expensive op — and it is pure algorithm, no hardware, no accuracy loss.
+- expected_gain: 2–5× fewer ADMM iterations → the same multiple off the eigh-dominated fit cost, compounding with NM-01's batched GPU eigh. Cheapest high-leverage change (no VRAM, no float32 risk).
+- validity_preserved: FULLY preserved — adaptive rho and over-relaxation change only the convergence PATH, not the fixed point (the converged S,L solve the same min problem). Must add the dual-residual to the stopping test (currently only primal) so faster convergence is not declared prematurely; that strengthens correctness.
+- evidence: lowrank.py:186 (lipschitz=rho fixed), 198-199 (C_over_rho, l2_over_rho computed once from fixed rho), 206-231 (loop: no rho update, single primal-residual test at 229). Boyd-standard knobs absent.
+- recommendation: Add residual-balancing rho updates (recompute C_over_rho/l2_over_rho on change) + over-relaxation α≈1.6 + a proper primal+dual stopping test. Pure win; do this before/with the GPU batching.
+
+
+### ldo/lowrank.py + orchestrator.py — redundant refits
+
+**`NM-07` - MEDIUM - foundational_design_flaw** - ~18 full ADMM refits per run recompute overlapping quantities from scratch instead of warm-starting or sharing a factorization
+- detail: The stability (12), λ-path (3), certify-approx (2), holdout (1), and controller (1) refits each call fit_lagged_links → fit_sparse_plus_lowrank cold, re-running whitening + the full 500-iter ADMM from the identity init (S=I,L=0). But these fits are PERTURBATIONS of the same problem: stability = 70% spatial subsamples of the same panel; λ-path = same data, scaled penalty; certify = same slice exact-vs-approx. Two structural wins: (a) WARM-START each perturbed ADMM from the base fit's converged (S,L,U) — a 30% data change or 2× penalty change typically converges in far fewer iterations from a warm iterate than from identity; (b) the whitened correlation pw.correlation is data-only and IDENTICAL across the λ-path grid (only lambda1 changes) — it is recomputed 3× needlessly. Compute it once, reuse across the grid.
+- expected_gain: Warm-starting perturbed ADMM commonly halves iteration counts; caching the correlation across the λ-grid removes 2 of 3 whitening passes (NM-05 cost) in path agreement. Combined ~1.5–3× on the aggregate multi-fit cost, orthogonal to and compounding with NM-01/06.
+- validity_preserved: FULLY preserved for the correlation caching (identical matrix). Warm-start preserves the fixed point (ADMM converges to the same solution regardless of init) — but stability selection's semantics require each subsample to be an INDEPENDENT draw's edge set, so warm-starting from the base fit could bias which edges appear at the frequency margin. SAFE for λ-path and certify (deterministic same-data refits); use warm-start cautiously (or not) for stability to preserve the selection-frequency interpretation.
+- evidence: orchestrator.py:195 (main), 214 (controller refit), 233 (certify), 246 (holdout), 250-253 (stability_select→12 fits), certgates.py:51 (3-fit grid). lowrank.py:200-203 (cold S=I,L=0,U=0 init every call). certgates.py:48-51 recomputes whitening per grid point.
+- recommendation: Thread the base fit's converged (S,L,U) as an optional warm_start into fit_sparse_plus_lowrank and pass it for λ-path/certify refits; cache pw.correlation across the λ-grid (compute once, vary only lambda1). Keep stability refits cold to preserve selection semantics.
+
+
+### ldo/kron.py + stochastic.py — joint log-det
+
+**`NM-08` - LOW - numerical_method_swap** - The Kronecker joint log-det uses a scipy sparse LU (splu) for the S×S space factor where a Hutchinson/SLQ or sparse-Cholesky is the intended scalable path
+- detail: sparse_spd_logdet (kron.py:193-207) computes the space-factor log-det via scipy splu — a full sparse LU factorization of the S×S GMRF (S≈5570). splu fill-in on a 2D-ish planar adjacency is superlinear and materializes L,U factors; joint_logdet already falls back to stochastic_logdet (SLQ) only above exact_space_max=20000, so at national S=5570 it always takes the splu path. The GMRF is SPD with ~6 nnz/row — a sparse CHOLESKY (CHOLMOD via scikit-sparse, or the existing matrix-free SLQ in stochastic.py) is both faster and lower-memory than a general LU, and SLQ needs only sparse matvecs (GPU-friendly). This is telemetry-only (best-effort, never fails a run) so it is LOW severity, but it is on the run path once per run.
+- expected_gain: Sparse-Cholesky log-det is typically 2–5× faster and lower fill than splu on a GMRF; or drop to the already-built SLQ (n_probes·lanczos_steps sparse matvecs, O(nnz)) for a matrix-free estimate. Modest absolute (one call/run) but free correctness/perf.
+- validity_preserved: Cholesky log-det is EXACT (byte-comparable to splu for SPD). SLQ is a Monte-Carlo estimate with a reported SE — the code already carries the SE honestly (kron.py:188-190), so swapping in SLQ at national S is validity-preserving and honest.
+- evidence: kron.py:193-207 (splu path), 181-190 (joint_logdet uses splu below exact_space_max=20000, so always at S=5570), stochastic.py:51-80 (SLQ already available and GPU-portable via matvec).
+- recommendation: Lower exact_space_max or route the national space factor through a sparse Cholesky (CHOLMOD) for exact, or the existing SLQ matvec estimator (portable to a torch sparse cuda matvec); reserve splu for small S.
+
+
+### ldo/covariance.py — pairwise_correlation moments
+
+**`NM-09` - LOW - gpu_acceleration_candidate** - The pairwise-complete moment products (M@Mᵀ, X0@Mᵀ, X0@X0ᵀ) are four q×n·n×q GEMMs run once per non-whitened fit — a clean batched GPU matmul
+- detail: pairwise_correlation (covariance.py:83-86) forms n_ab=M@Mᵀ, Sx=X0@Mᵀ, Sxx=(X0*X0)@Mᵀ, Cxy=X0@X0ᵀ — four dense F×n · n×F GEMMs where F=p(K+1), n=S·T. At national n=5570·24≈134k and F≈260, each is 260·134k·260 ≈ 9×10⁹ flops; four of them, once per fit that does NOT spatial-whiten (the whitened path uses covariance NM-05 instead). These are textbook cuBLAS SGEMM shapes; X0/M are F×n float32 = 260·134k·4 ≈ 140 MB each — fits VRAM comfortably, and the outputs are tiny F×F.
+- expected_gain: 4 large GEMMs → GPU float32 SGEMM, ~5–10× on this term for the non-whitened path. Absolute impact is lower than NM-01 (this path is only hit when spatial_whiten is off, and it is not inside the ADMM iteration), hence LOW, but it is a zero-risk drop-in where used.
+- validity_preserved: Correlation-ratio math cancels the 1/n so it is scale-robust, but float32 accumulation over n=134k in the second moment (Sxx, Cxy) can lose precision for large-magnitude features. Mitigate by mean-centering before the GEMM or accumulate in float64 (140 MB×2 fits VRAM). The nearest-correlation eigh projection stays float64 on CPU.
+- evidence: covariance.py:83-96 (the four moment GEMMs + ratio), used by pairwise_correlation callers when spatial_whiten is False (lags.py:116-117 else-branch) and by fit_contemporaneous_precision (precision.py:119).
+- recommendation: Offer a torch GEMM path for the four moment products (float32 with pre-centering, or float64) when the non-whitened correlation is large; keep _nearest_correlation on CPU float64.
+
+
+### ldo/covariance.py + orchestrator.py — streaming XtX
+
+**`NM-10` - LOW - streaming_redesign** - The lag-extended sample/moment matrix is fully materialized in RAM; the moment algebra is already in streamable (out-of-core XtX) form but the driver isn't
+- detail: The covariance docstring (covariance.py:14-20) explicitly names this: the pairwise moments M@Mᵀ, X0@Mᵀ, X0@X0ᵀ ARE the XᵀX/Xᵀy accumulators §V.4 wants, but they are computed over an in-RAM (F×n) matrix built wholesale by _build_lagged_feature_matrix (lags.py:48-67, allocates F×(T_eff·S) float64 up front). At national n≈134k, F≈260 → 260·134k·8 ≈ 280 MB, which fits today — but the envelope guard REFUSES (rather than streams) when a larger config (more variables, finer time) would not fit. The moment products are additive over cell-blocks, so accumulating them by streaming scan_parquet row-groups (never materializing the full F×n) is the documented beyond-RAM extension. This is a ceiling, not a current break (hence LOW), but it is the foundational shape that lets full-national + all-SIDRA + fine-time runs proceed instead of refuse.
+- expected_gain: Unbounds the fit to arbitrary n at O(F²) memory instead of O(F·n) — turns envelope refusals into runnable streaming fits. No speedup at current scale; enables larger scale (the 'full data, no cherry-picking' directive).
+- validity_preserved: FULLY preserved — block-additive moment accumulation is exact (same sums, reassociated). The pairwise-complete overlap counting streams identically. Only the driver changes; the moment algebra is unchanged.
+- evidence: covariance.py:14-20 (docstring naming this exact ceiling), lags.py:48-67 (_build_lagged_feature_matrix materializes the full F×n), covariance.py:83-86 (block-additive moments), envelope.py:52-71 (refuses on the materialized-size estimate).
+- recommendation: Add an out-of-core accumulation path that streams cell row-groups and accumulates n_ab/Sx/Sxx/Cxy incrementally, so the F×n matrix never fully materializes; gate it on the envelope estimate exceeding RAM instead of refusing.
+
+
+### ldo/hsic.py — torch GPU path exists but is bandwidth-bound by n×n and unbatched
+
+**`NM-11` - MEDIUM - gpu_acceleration_candidate** - run_hsic_scan already dispatches to CUDA but builds a full n×n kernel on device and loops permutations one at a time — the GPU is starved
+- detail: run_hsic_scan (hsic.py:430-490) is the ONE path wired to CUDA (compute.yaml enabled_for: pirs_hsic_exact/nystrom/rff). But in exact mode it builds the n×n centered kernel on device (_exact_components → _kernel_matrix does values[:,None]-values[None,:], an n×n materialization) and the null loop (line 476-484) does one permutation per iteration with a Python-level generate_null_indices call + a per-perm H2D int64 copy + a y_repr[idx][:,idx] n×n gather. At national n the n×n on 6.4 GB VRAM caps n≈20k (n²·4=1.6 GB) and the per-perm Python round-trip serializes the GPU. THE FIX is the same as NM-02/03: use feature maps (n×D) even in 'exact' at large n and batch the permutations into one device tensor, so the GPU does one bmm instead of 200 launches. The mode-selection already switches to nystrom/rff above n_eff=5000 (line 88-92) — so the exact-on-CUDA branch is only hit for n≤5000 where a single n×n (≤200 MB) is fine, but the permutation loop is still serial.
+- expected_gain: Batching the ≤200 structural permutations into one device op removes ~200 Python/H2D round-trips per HSIC test; on the CUDA path this is the difference between a starved and a saturated GPU — several-fold on the null phase. Feature-map at large n keeps it VRAM-bounded.
+- validity_preserved: Byte-identical if the same permutations and kernels are used; only the batching changes. float32 (the CUDA dtype) is already the accepted regime for this path with approximation diagnostics emitted, so no NEW validity risk beyond what the module already documents.
+- evidence: hsic.py:451-457 (_exact_components builds n×n on device), 474-484 (per-perm Python loop with per-iter torch.as_tensor(indices) H2D + n×n double-gather), compute.yaml enabled_for (these three tasks ARE the only GPU-wired ones).
+- recommendation: Precompute all null permutations as one (P,n) int tensor on device; replace the per-perm loop with a batched gather + bmm; switch exact→feature-map above a VRAM-derived n threshold rather than the fixed 5000.
+
+
+## Theme index (workflow)
+
+This is a pure synthesis task over the provided id list — no file access needed. Let me build the lossless index.
+
+# Optimization / GPU Findings — Lossless Thematic Index
+
+Every id from all nine subsystems (LDO-*, LDOHSIC-*, KS-*, EFGK-*, POP-*, DSS-*, CI-*, NM-*) is placed into exactly one primary theme below, then cross-referenced where it legitimately spans two. No id is dropped.
+
+---
+
+## Theme 1 — GPU-batchable-refits
+*Repeated small/medium dense linear-algebra ops (mostly eigh/GEMM) that recur across ADMM iterations, stability subsamples, per-year/per-block solves, or multi-starts — the archetypal "batch many identical small ops on-device" reframe.*
+
+**Member ids:** LDO-GPU-01, LDO-GPU-02, LDO-GPU-09, LDO-SPEED-04, LDO-DESIGN-06, POP-02, POP-05, POP-06, POP-11, EFGK-01, EFGK-02, EFGK-10, CI-06, CI-07, CI-08, NM-01, NM-05, NM-09
+
+- **LDO-GPU-01 (HIGH):** ADMM inner eigh (`_prox_neg_logdet` + `_psd_project_shifted`) is the dominant repeated small-dense op → `torch.linalg.eigh` on GPU.
+- **LDO-GPU-02 (HIGH):** Fold the 12+ stability-subsample ADMM refits into one batched `torch.linalg.eigh` (b×q×q).
+- **LDO-GPU-09 (LOW):** `cond(C)` preflight + nearest-correlation projection are extra full eighs per fit — fold onto GPU or reuse.
+- **LDO-SPEED-04 (MEDIUM):** `whitened_lagged_correlation` Gram accumulation is a Python `T_eff × (K+1)` loop of dense (F×S) matmuls — batch it. *(also Theme 2 streaming contraction; primary here as a batched matmul.)*
+- **LDO-DESIGN-06 (HIGH):** ~19 independent full ADMM refits recompute whitening+covariance from scratch — share covariance and warm-start. *(cross-ref Theme 5.)*
+- **POP-02 (HIGH):** SPG BB step, Armijo line search, simplex projection — small dense vector ops that should live on-device with the iterate.
+- **POP-05 (MEDIUM):** ~25 identically-structured per-year migration solves — textbook batched `torch.linalg` (bmm / cholesky_solve).
+- **POP-06 (MEDIUM):** Locality blocks are provably independent identical-structure subproblems — ideal GPU batch axis; today CPU threads.
+- **POP-11 (LOW):** Race ILR term is a batched (log, matmul, matmul) over ~S·T·A·X rows with a tiny R basis — cleanest GPU sub-kernel in the loss.
+- **EFGK-01 (HIGH):** Race-bridge per-(year,municipality) loop with 200 nested bootstrap replicates — dominant executor hotspot.
+- **EFGK-02 (HIGH):** That bootstrap is an ideal small-dense-batched GPU workload (einsum over G×R×5×5).
+- **EFGK-10 (LOW):** Batched RN rate computation across many stratified numerators sharing one denominator is a GPU broadcast candidate — but I/O-bound, gain limited.
+- **CI-06 (MEDIUM):** LVGLASSO ADMM does two dense p×p eigendecompositions per iter, up to 500 iters, refit ~12× in the stability loop — the GPU-favorable reframe. *(same op-family as LDO-GPU-01/NM-01.)*
+- **CI-07 (MEDIUM):** `pairwise_correlation`'s four O(F²·n) BLAS products refit every subsample — dense GEMM mapping 1:1 to `torch.mm`. *(cross-ref Theme 3 memory / NM-09.)*
+- **CI-08 (MEDIUM):** STDFM already uses torch but runs `multi_starts` sequentially and re-resolves the device each start — the multi-start loop is the batchable unit. *(re-seeding hazard cross-refs CI-04.)*
+- **NM-01 (HIGH):** The two per-iteration eigh() in CPW ADMM — dominant serial cost, archetypal batched-small-dense GPU op. *(same finding as LDO-GPU-01 from the NM audit.)*
+- **NM-05 (MEDIUM):** Whitened-lagged Gram accumulation, a T-step loop of dense F×S · sparse-S×S · S×F matmuls — natural GPU streaming contraction. *(= LDO-SPEED-04 from NM audit; cross-ref Theme 2.)*
+- **NM-09 (LOW):** Pairwise-complete moment products (M@Mᵀ, X0@Mᵀ, X0@X0ᵀ) — four q×n·n×q GEMMs per non-whitened fit — clean batched GPU matmul. *(= CI-07 / LDO-MEM-05 family.)*
+
+**Expected aggregate gain:** Very high. This theme concentrates the wall-clock cost of the whole LDO fit path (ADMM eigh × 500 iters × ~12–19 refits) plus the executor's #1 hotspot (race-bridge bootstrap) and the population/migration solves. Batching + on-device residency collapses per-iteration host↔device bounce and turns hundreds of serial small ops into a handful of batched kernels — plausibly the single largest realizable speedup surface.
+
+**Validity note:** Strong and low-risk in principle — these are exactly the shapes GPUs win at. Two caveats gate realization: (a) **CI-01** shows the installed torch is CPU-only (`2.12.1+cpu`), so *none* of these currently touch a GPU until the build is fixed; (b) **CI-04** shows `resolve_torch_device` re-seeds all RNG and forces deterministic algorithms, disabling fast cuBLAS/cuDNN kernels — must be fixed or these ports underperform. EFGK-10 is explicitly I/O-bound (limited gain). LDO-GPU-09 and POP-11 are small contributors.
+
+---
+
+## Theme 2 — GPU-kernel-scan
+*The residual-HSIC dependency scan: p²/2 pair loop × ~200-permutation nulls over dense n×n kernels. The strongest single GPU/streaming candidate in the codebase, currently pure CPU NumPy.*
+
+**Member ids:** LDO-GPU-03, LDOHSIC-02, LDOHSIC-03, LDOHSIC-04, LDOHSIC-05, LDOHSIC-06, LDOHSIC-07, LDOHSIC-08, LDOHSIC-10, CI-02, CI-09, NM-03, NM-04, NM-11
+
+- **LDO-GPU-03 (HIGH):** Residual-scan HSIC kernel cache + pairwise products — the 48GB hotspot, strongest GPU/streaming candidate. *(memory dimension cross-refs Theme 3: LDOHSIC-01/CI-03/NM-02.)*
+- **LDOHSIC-02 (HIGH):** Exact permutation null does `np.ix_(pm,pm)` gather of a full n×n matrix per perm per pair — ~16M dense 25M-element gathers.
+- **LDOHSIC-03 (HIGH):** Approx (RFF/Nyström) null is `fx.Tᐧfy[pm]` — batched small d×d matmul, archetypal GPU shape, run on CPU numpy.
+- **LDOHSIC-04 (HIGH):** `residual_scan` reimplements the pair/perm loop in CPU numpy, importing ONLY the numpy primitives — orphaning `hsic.py`'s existing GPU paths.
+- **LDOHSIC-05 (MEDIUM):** Permuted-kernel null computable via cheap vector products (double-centering commutes with permutation) — avoids n×n gathers entirely. *(algorithmic, cross-ref Theme 4.)*
+- **LDOHSIC-06 (MEDIUM):** Permutation index sets regenerated per-pair via pure-Python `generate_null_indices` though pair-invariant.
+- **LDOHSIC-07 (MEDIUM):** float32 is safe for the HSIC statistic + permutation p-values (rank comparisons) — the enabling assumption for every GPU port here.
+- **LDOHSIC-08 (LOW):** Nyström feature map does a landmarks×landmarks eigh + inverse-sqrt per variable — keep float64, batch on GPU; O(p) not O(p²).
+- **LDOHSIC-10 (MEDIUM):** The p(p-1)/2 pair loop is serial Python with no cross-pair batching — GPU can score many pairs concurrently.
+- **CI-02 (HIGH):** The 48GB residual HSIC scan (O(p²) pairs × ~200 nulls of dense n×n kernels) is pure NumPy CPU, never calls `resolve_torch_device` — biggest GPU-favorable workload.
+- **CI-09 (MEDIUM):** Per-pair null builds ~200 fancy-index gathers `ky[ix_(perm,perm)]` + RFF cross-covariances in a Python loop — the null loop, not the statistic, dominates.
+- **NM-03 (HIGH):** Permutation null is a Python loop over ~200 perms × p²/2 pairs, each an O(n²) fancy-indexed re-sum — the exact-mode wall-clock sink. *(= LDOHSIC-02/CI-09.)*
+- **NM-04 (MEDIUM):** The generic HSIC scanner densifies the n×n centering matrix H and does an n×n permutation per null draw. *(cross-ref LDOHSIC-05 algorithmic fix.)*
+- **NM-11 (MEDIUM):** `run_hsic_scan` already dispatches to CUDA but builds a full n×n kernel on-device and loops permutations one at a time — the GPU is starved.
+
+**Expected aggregate gain:** Highest concentration of realizable win. Multiple independent audits (LDO, LDOHSIC, CI, NM) converge on the same object: the exact-mode HSIC scan is both the 48GB RAM peak *and* the CPU wall-clock sink. Moving it to batched GPU kernels (or the LDOHSIC-05 vector-product reformulation) attacks time and memory simultaneously.
+
+**Validity note:** Highly credible — corroborated four ways. LDOHSIC-07 (float32 safety for rank-based p-values) is the load-bearing correctness assumption underwriting every port; if it holds (audit says it does), risk is low. LDOHSIC-05/NM-04 offer an *algorithmic* alternative (commute double-centering with permutation) that may beat brute-force GPU entirely. NM-11 warns a naive CUDA dispatch still starves the GPU — the batching, not merely the device move, is what matters.
+
+---
+
+## Theme 3 — memory-streaming
+*Peak-RAM defects from pre-materializing whole caches / dense frames / object graphs instead of streaming. Distinct from Theme 2's compute framing: here the win is resident-memory reduction and O(1)-RAM restoration.*
+
+**Member ids:** LDO-MEM-05, LDOHSIC-01, LDOHSIC-09, POP-03, POP-07, EFGK-03, EFGK-04, EFGK-07, EFGK-11, DSS-02, DSS-03, DSS-05, DSS-09, CI-03, CI-11, NM-02, NM-10
+
+- **LDO-MEM-05 (MEDIUM):** `pairwise_correlation` materializes five dense (q×q) BLAS products simultaneously — the fit-path RAM peak. *(compute face = CI-07/NM-09.)*
+- **LDOHSIC-01 (HIGH):** Exact-mode per-variable kernel cache is O(p·n²) float64 — 52 GB at p=130, n=5000 — single largest LDO allocation. *(= LDO-GPU-03 / CI-03 / NM-02.)*
+- **LDOHSIC-09 (MEDIUM):** Coarsening is triggered by CACHE SHAPE, not scientific necessity — fixing LDOHSIC-01 removes forced resolution loss.
+- **POP-03 (MEDIUM):** SOLVE promotes every input to float64 at read; the mixed-precision working-set (§V.4) is unbuilt, doubling resident solve memory. *(cross-ref Theme 4 precision.)*
+- **POP-07 (MEDIUM):** `evaluate_population_loss` allocates ~10+ full-size temporaries per call — transient churn dominating the CPU allocator/bandwidth cost.
+- **EFGK-03 (MEDIUM):** Race-bridge materializes projected event frame + accumulates a Python list of dicts (5 rows/group) into one DataFrame.
+- **EFGK-04 (MEDIUM):** Race bridge re-reads/re-streams the source events frame instead of reusing the already-computed race count tensor.
+- **EFGK-07 (MEDIUM):** RN ratio + bridge-divergence eagerly read every parent tensor from parquet each fixed-point pass — no in-memory reuse.
+- **EFGK-11 (LOW):** SIDRA context/demographic/population kernels use eager `pl.read_parquet` on full facts frames instead of streaming scan.
+- **DSS-02 (MEDIUM):** `list[SIDRAFactRow]` pydantic object graph fully materialized in RAM per chunk before any write.
+- **DSS-03 (HIGH):** Eager `pl.read_parquet` fallback in the national/chunk combines silently defeats the O(1)-RAM streaming design.
+- **DSS-05 (MEDIUM):** Per-system normalize re-scans the written national parquet 2–3 extra times for manifest stats/column lists.
+- **DSS-09 (LOW):** Warm-run chunk cache-skip still does a full `scan_parquet(...).select(len).collect()` per existing chunk just to read row count.
+- **CI-03 (HIGH):** Residual-scan retains a per-variable n×n kernel for ALL p variables at once (O(p·n²)=48GB) — the problem shape; should stream pairs, not pre-materialize. *(= LDOHSIC-01/NM-02.)*
+- **CI-11 (LOW):** `MemoryPreflight` is stateless one-shot; Windows `GlobalMemoryStatusEx` path can't see the 48GB residual-scan peak coming from a different budget function.
+- **NM-02 (HIGH):** Exact residual-HSIC scan materializes 2·p dense n×n kernels (48GB) — the problem shape is wrong, not the constant. *(= LDOHSIC-01/CI-03/LDO-GPU-03.)*
+- **NM-10 (LOW):** Lag-extended sample/moment matrix fully materialized in RAM; moment algebra is already in streamable out-of-core (XtX) form but the driver isn't.
+
+**Expected aggregate gain:** High on the memory axis — this theme is what makes national scale *feasible* (not merely faster). DSS-03 and the shared 48GB kernel-cache finding (LDOHSIC-01/CI-03/NM-02) are the two OOM-class fixes; the rest trim resident peak and redundant re-reads.
+
+**Validity note:** The 48GB/52GB kernel-cache finding is quadruple-corroborated (Theme 2/3 overlap) — very high confidence. DSS-03 is a clean regression against an existing streaming design. POP-03 depends on the deferred M2 mixed-precision storage work. CI-11 and DSS-09 are minor. Note LDOHSIC-01/CI-03/NM-02/LDO-GPU-03 are the *same* object viewed as memory vs. compute — do not double-count the gain across Theme 2 and Theme 3.
+
+---
+
+## Theme 4 — numerical-method-swap
+*Replace the algorithm/kernel with a better-conditioned or lower-complexity one — gains independent of any GPU or hardware, often correctness-improving.*
+
+**Member ids:** LDO-NUM-07, LDOHSIC-05, KS-02, KS-05, EFGK-05, POP-08, NM-06, NM-08
+
+- **LDO-NUM-07 (MEDIUM):** L-step full eigh only needs the top-r PSD spectrum — swap dense `_psd_project_shifted` eigh for randomized/truncated eigensolve.
+- **LDOHSIC-05 (MEDIUM):** Compute the permuted-kernel null by cheap vector products (double-centering commutes with permutation) — avoids n×n gathers. *(also Theme 2.)*
+- **KS-02 (MEDIUM):** `sparse_spd_logdet` uses `splu` (LU) not Cholesky — 2× factor work, SPD structure unexploited.
+- **KS-05 (MEDIUM):** Lanczos has NO reorthogonalization — silent accuracy loss a swap (or float64 guard) fixes; independent of GPU.
+- **EFGK-05 (MEDIUM):** Replace the 200× Monte-Carlo bootstrap for CV/intervals with a closed-form / analytic-moment approximation. *(kills the EFGK-01/02 hotspot at the algorithm level.)*
+- **POP-08 (MEDIUM):** `validate_population_problem` runs on EVERY loss eval (hundreds/solve) doing full-array isfinite scans + Python weight checks — hoist/gate it.
+- **NM-06 (MEDIUM):** Fixed rho, no over-relaxation, no adaptive stopping — ADMM burns up to 500 iters where adaptive-rho + over-relaxation converge in a fraction.
+- **NM-08 (LOW):** Kronecker joint log-det uses scipy sparse LU (splu) where Hutchinson/SLQ or sparse-Cholesky is the intended scalable path. *(= KS-02 from NM audit.)*
+
+**Expected aggregate gain:** Medium–high and unusually cheap to realize — these need no GPU build, no VRAM, no batching infrastructure. NM-06 (adaptive-rho + over-relaxation) can shrink ADMM iteration count directly, multiplying every Theme-1 per-iteration saving. EFGK-05 can delete the executor's top hotspot outright. KS-05 and NM-08/KS-02 are correctness/robustness improvements as much as speed.
+
+**Validity note:** Neutral-to-positive validity: several (KS-05 reorthogonalization, NM-06 convergence) *improve* numerical honesty rather than trade it away. LDO-NUM-07 and LDOHSIC-05 must preserve the scientific outputs (top-r sufficiency; exactness of the commuted null) — verify before trusting. EFGK-05's closed-form CV must match bootstrap coverage before replacing it.
+
+---
+
+## Theme 5 — foundational-redesign
+*Problem-shape / architecture defects: wrong operator density, missing GPU wiring, absent admission control, dead solvers, unreachable code paths, and re-computation of invariants. These are prerequisites or ceilings on every other theme.*
+
+**Member ids:** LDO-SPEED-08, LDO-DESIGN-10, KS-01, KS-03, KS-04, KS-06, KS-07, KS-08, EFGK-06, EFGK-08, EFGK-09, EFGK-12, POP-01, POP-04, POP-09, POP-10, DSS-01, DSS-04, DSS-06, DSS-07, DSS-08, DSS-10, CI-01, CI-04, CI-05, CI-10, CI-12, NM-07
+
+- **LDO-SPEED-08 (LOW):** O(q²) Python triple-loops for `latent_shared` pair enumeration + direct-edge readout.
+- **LDO-DESIGN-10 (MEDIUM):** Config enables CUDA only for HSIC/race/stdfm — the LDO ADMM/eigh/whitening has NO wired GPU path despite being the heaviest linalg. *(the wiring gap behind all of Theme 1/2.)*
+- **KS-01 (HIGH):** Stochastic Lanczos logdet is unreachable at national scale — `exact_space_max=20000` gates it out for S=5570.
+- **KS-03 (MEDIUM):** Lanczos probes are serial Python — the one genuinely GPU-favorable pattern here, but only if SLQ becomes live (gated by KS-01).
+- **KS-04 (LOW):** `KroneckerPrecision.matvec/solve` are numpy tensordot on a (p,S,τ) tensor — GPU-portable but tiny, rarely called.
+- **KS-06 (MEDIUM):** `joint_logdet` recomputes AR(1) φ, rebuilds spatial precision, re-factors every run — no caching of the S-invariant space logdet.
+- **KS-07 (LOW):** No memory hotspot in this subsystem at national scale — the (pST)² object is correctly never materialized *(explicit negative finding — recorded, no action).*
+- **KS-08 (LOW):** `kron_cg_solve` calls `op.solve` (full mode-wise inverse incl. spsolve) as the preconditioner on EVERY CG iteration.
+- **EFGK-06 (MEDIUM):** SIDRA demographic-population canonicalization still routes every row through a Python `map_elements` UDF.
+- **EFGK-08 (LOW):** RN join computes num/den totals with two extra full-frame reductions + re-derives fragility per pass.
+- **EFGK-09 (MEDIUM):** Fixed-point executor is O(passes × pending) with per-field exception-driven retries instead of dependency-ordered single execution.
+- **EFGK-12 (LOW):** Dead bootstrap function + redundant duplicate imports inside hot kernels add avoidable overhead.
+- **POP-01 (HIGH):** Per-iteration loss+gradient (`evaluate_population_loss`) is a pure batched dense-tensor stencil — the canonical GPU-favorable op, currently 100% CPU/numpy. *(the redesign that unlocks POP-02/07/11.)*
+- **POP-04 (HIGH):** Migration flow reconstruction builds a DENSE P×P Hessian + O(P³) eigen/lstsq per year — wrong shape; the operator is sparse (net-flow + gravity + anchor).
+- **POP-09 (LOW):** Pure-Python O(n_cells) projection/loss paths (`_project_population`, ADMM, block_coordinate, state_space smoother) are Python-list solvers that can't run at national scale and duplicate the vectorized path — dead weight.
+- **POP-10 (LOW):** National solve is a near-optimum polish of the census warm start (`max_iterations=12`, mostly stalls) — only the informative case is worth accelerating; data-poor case already skips the solve. *(scoping insight: bounds the realizable POP gain.)*
+- **DSS-01 (HIGH):** SIDRA fact normalization is a per-record Python object loop (pydantic build → model_dump → per-row json.dumps) — the national-scale wall-clock hotspot.
+- **DSS-04 (MEDIUM):** Registry-routed per-row `normalize_record` is O(rows × columns) Python with a per-cell registry resolve.
+- **DSS-06 (LOW):** SIDRA cache serializes each payload to JSON twice per write.
+- **DSS-07 (LOW):** Honest re-derivation — this subsystem is string/date/regex/JSON decode on Utf8 columns, categorically NOT a GPU/torch workload *(explicit negative finding — the reframe does not apply).*
+- **DSS-08 (LOW):** Batch size fixed at 120k rows regardless of column width/dtype — wide CNES over-allocates, narrow SIM under-utilizes.
+- **DSS-10 (LOW):** Normalized-metadata assembly iterates category/table frames row-by-row via `iter_rows(named=True)` instead of columnar group/join.
+- **CI-01 (HIGH):** Installed torch is CPU-only (`2.12.1+cpu`) — the entire `compute.yaml` CUDA path is dead; every `resolve_torch_device` silently returns CPU. *(the master gate on all GPU themes.)*
+- **CI-04 (HIGH):** `resolve_torch_device` re-seeds ALL global RNG every call — determinism + concurrency hazard — and forces `use_deterministic_algorithms(True)`, disabling fast cuBLAS/cuDNN kernels.
+- **CI-05 (MEDIUM):** No VRAM admission serialization despite being in scope — `mem_get_info` read once, no lock/reservation → concurrent CUDA tasks on a 6.4GB card race into OOM.
+- **CI-10 (LOW):** Kronecker matvec/solve + stochastic-Lanczos logdet are matrix-free ops ideal for GPU but NumPy/scipy-only, unwired. *(= KS-03/KS-04 wiring gap.)*
+- **CI-12 (LOW):** CPU path hardcodes float64 while GPU path uses float32, never reconciled — a CUDA-absent box silently runs 2× memory / half throughput vs. the envelope.
+- **NM-07 (LOW):** ~18 full ADMM refits recompute overlapping quantities from scratch instead of warm-starting / sharing a factorization. *(= LDO-DESIGN-06 from NM audit; the redesign enabling Theme 1 batching.)*
+
+**Expected aggregate gain:** Structural — mostly *enabling* rather than directly measured. CI-01 and CI-04 are hard gates: until fixed, every HIGH GPU win in Themes 1–2 realizes as 0×. POP-01/POP-04 and DSS-01 are wrong-shape defects whose fixes unlock large downstream speedups. Several ids here (KS-07, DSS-07) are deliberate *negative* findings recording where the reframe does NOT apply — preserved so no future pass re-litigates them.
+
+**Validity note:** Highest-leverage but most prerequisite-laden theme. CI-01/CI-04/CI-05 must land *first* or Theme-1/2 GPU work is wasted. KS-01 gates KS-03/CI-10 (SLQ is dead code until the exact-space cap is lifted). POP-10 explicitly *caps* population gains (the solve mostly stalls at 12 iters, near optimum). KS-07 and DSS-07 assert "no action correct here" — respect them.
+
+---
+
+## Ranked list — HIGH-severity, validity-neutral wins
+
+"Validity-neutral" = the finding carries no correctness/scientific-trade-off caveat: the fix is a pure efficiency or enabling move whose only risk is the standard engineering risk of doing it right (the LDOHSIC-07 float32 assumption is treated as the audit's accepted premise). Ranked by realizable leverage — gates first, then the biggest concrete hotspots, then the batching/shape wins that ride on them.
+
+1. **CI-01 — Fix the CPU-only torch build.** Master gate. `2.12.1+cpu` means every GPU finding below is a no-op until resolved. Zero scientific risk; unlocks everything.
+
+2. **CI-04 — Stop `resolve_torch_device` re-seeding global RNG and forcing deterministic algorithms.** Second gate: without it, ported GPU kernels run on the slow deterministic path and carry a concurrency/determinism hazard. Pure infra fix.
+
+3. **CI-02 / CI-03 / NM-02 / LDOHSIC-01 / LDO-GPU-03 (the 48GB residual-HSIC scan — one object).** The single largest, quadruple-corroborated hotspot: both the RAM peak and the CPU wall-clock sink. Stream pairs + batch on GPU. Counted once.
+
+4. **LDOHSIC-02 / NM-03 / CI-09 (the exact permutation null).** The ~16M dense n×n gathers that dominate the exact-mode scan; the loop, not the statistic, is the cost. Batchable to GPU.
+
+5. **DSS-01 — Vectorize SIDRA fact normalization** off the per-record pydantic→json.dumps object loop. The national-scale acquisition wall-clock hotspot; columnar rewrite, no GPU needed.
+
+6. **DSS-03 — Restore O(1)-RAM streaming in the national/chunk combines** (kill the eager `pl.read_parquet` fallback). A clean regression fix against an existing design; OOM-class.
+
+7. **POP-01 — Move `evaluate_population_loss` (batched dense stencil) off 100% CPU/numpy.** Canonical GPU-favorable op and the redesign that unlocks POP-02/07/11.
+
+8. **POP-04 — Replace the dense P×P / O(P³) migration Hessian with the true sparse operator** (net-flow + gravity + anchor). Wrong-shape fix; large per-year win.
+
+9. **EFGK-01 / EFGK-02 — Batch the race-bridge per-(year,municipality) × 200-replicate bootstrap** into one einsum over G×R×5×5. The dominant executor hotspot; ideal small-dense GPU batch. *(EFGK-05 offers an even cheaper closed-form route but carries a coverage-verification caveat, so it is excluded from this neutral list.)*
+
+10. **LDO-GPU-01 / NM-01 — Port the two per-iteration ADMM eighs** (`_prox_neg_logdet` + `_psd_project_shifted`) to batched `torch.linalg.eigh`. The dominant repeated dense op in the fit path.
+
+11. **LDO-GPU-02 — Fold the 12+ stability-subsample ADMM refits into one batched eigh** (b×q×q). Rides directly on #10.
+
+12. **LDO-DESIGN-06 / NM-07 — Share covariance + warm-start across the ~19 independent ADMM refits** instead of recomputing whitening/covariance from scratch. Enabling redesign that multiplies #10–#11.
+
+**Notes on exclusions from the neutral list:** KS-01 (HIGH) is a reachability/redesign gate, not a directly bankable win, and is prerequisite-laden (unlocks KS-03/CI-10) — ranked structurally, not here. LDOHSIC-03/04 (HIGH) are real but are sub-components of the #3–#4 residual-scan cluster. Every MEDIUM/LOW id lives in its theme above; none dropped.
+
+**Double-count caution:** items #3 (LDOHSIC-01/CI-03/NM-02/LDO-GPU-03) and #4 (LDOHSIC-02/NM-03/CI-09) each name the *same* physical object across audits — count their gain once, not per-id.

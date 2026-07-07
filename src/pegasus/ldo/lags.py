@@ -82,6 +82,7 @@ def fit_lagged_links(
     gamma_temporal: float = 0.0,
     gamma_disease: float = 0.0,
     spatial_whiten: bool = True,
+    randomized_factors: bool | None = None,
 ) -> LaggedFit:
     """Fit the time-extended precision (missing-aware) and read off directed lagged links.
 
@@ -132,7 +133,7 @@ def fit_lagged_links(
     fit = fit_sparse_plus_lowrank(
         pw.correlation, lambda1=lambda1, lambda2=lambda2,
         edge_threshold=edge_threshold, penalty_matrix=penalty_matrix,
-        smoothness_operator=smoothness,
+        smoothness_operator=smoothness, randomized_factors=randomized_factors,
     )
 
     S = fit.S

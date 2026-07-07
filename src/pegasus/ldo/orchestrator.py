@@ -112,6 +112,8 @@ def run_ldo(
     disease_graph=None,
     gamma_temporal: float = 0.1,
     gamma_disease: float = 0.1,
+    precision_target: float | None = None,
+    precision_budget: float = 1.0,
     variable_meta: dict[str, dict] | None = None,
     exposure=None,
     exposure_field_by_variable=None,
@@ -151,6 +153,30 @@ def run_ldo(
         gamma_temporal=gamma_temporal, gamma_disease=gamma_disease,
     )
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
+
+    # §V.5 Adaptive Precision Controller: uncertainty drives compute. Model the low-rank
+    # readout as a decision-relevant Quantity (statistical = Fisher-z SE at n_eff, numerical =
+    # the randomized-SVD truncation error); if the numerical error DOMINATES and the budget
+    # allows, escalate the readout to EXACT (re-fit with a dense eigh) — else leave the
+    # data-limited fit alone. Report met vs approximation-limited (typed, never silent). Off
+    # (precision_target=None) → no controller, no behaviour change.
+    precision_report = None
+    if precision_target is not None:
+        import math as _math
+
+        from pegasus.compute.controller import Budget, Quantity, adaptive_precision_run
+        n_eff0 = int(np.isfinite(gf.Z).any(axis=0).sum())
+        stat_unc = 1.0 / _math.sqrt(max(n_eff0 - 3, 1))
+        q = Quantity(name="ldo_lowrank_readout", statistical_uncertainty=stat_unc,
+                     numerical_uncertainty=float(lagged.fit.numerical_error), exact_cost=1.0)
+        report = adaptive_precision_run([q], target=float(precision_target), budget=Budget(total=float(precision_budget)))
+        if report.spent > 0:  # controller escalated → exact low-rank readout
+            lagged = fit_lagged_links(gf, K=K, randomized_factors=False, **fit_kwargs)
+        precision_report = {
+            "target": float(precision_target), "spent": report.spent,
+            "met": list(report.met), "approximation_limited": list(report.approximation_limited),
+            "data_limited": list(report.data_limited), "escalated_to_exact": report.spent > 0,
+        }
 
     stability = stability_select(
         gf, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac, seed=seed + 1,
@@ -264,6 +290,8 @@ def run_ldo(
         "numerical_error": float(lagged.fit.numerical_error),
         # §VIII.2(3): typed coverage manifest (searched + explicitly-unsearched regions).
         "coverage_manifest": coverage.as_manifest(),
+        # §V.5: adaptive-precision-controller verdict (None when the controller is off).
+        "precision_controller": precision_report,
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

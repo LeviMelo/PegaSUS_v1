@@ -30,6 +30,7 @@ class SparseLowRankFit:
     factor_values: np.ndarray           # (r,) eigenvalues of L
     converged: bool
     iterations: int
+    numerical_error: float = 0.0        # §V.6(2): relative randomized-SVD truncation error (0 = exact)
     direct_edges: list[tuple[int, int, float]] = field(default_factory=list)   # (i,j,partial_corr) from S
     latent_shared: list[tuple[int, int, float]] = field(default_factory=list)  # (i,j,shared_loading) from L
 
@@ -206,6 +207,13 @@ def fit_sparse_plus_lowrank(
     keep = vals > max(1e-6, 0.02 * vals.max() if vals.size else 0.0)
     factor_values = vals[keep]
     factor_loadings = vecs[:, keep]
+    # §V.6(2) numerical error: an exact eigh has none; a randomized-SVD readout truncates the
+    # tail, so the largest OMITTED (kept-out) eigenvalue relative to the top one bounds the
+    # readout error — propagated into the affected (latent_shared) edges' uncertainty.
+    dropped = vals[~keep]
+    numerical_error = (
+        float(dropped.max() / vals.max()) if use_randomized and dropped.size and vals.size and vals.max() > 0 else 0.0
+    )
 
     # latent_shared pairs: variables both loading strongly on a common factor.
     # CPW incoherence gate: a factor supported on < min_factor_support variables is a
@@ -238,7 +246,7 @@ def fit_sparse_plus_lowrank(
     return SparseLowRankFit(
         S=S, L=L, precision=precision,
         factor_loadings=factor_loadings, factor_values=factor_values,
-        converged=converged, iterations=it,
+        converged=converged, iterations=it, numerical_error=numerical_error,
         direct_edges=direct_edges, latent_shared=latent_shared,
     )
 

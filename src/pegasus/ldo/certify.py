@@ -52,10 +52,15 @@ def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = 
         certified = (record.uncertainty is not None) or (not policy.require_uncertainty_for_nonlinear)
         return replace(record, certification_status="selected" if certified else "descriptive")
 
-    # lagged_directed / contemporaneous: require stability above threshold.
+    # lagged_directed / contemporaneous (§III.8): promotion is a CONJUNCTION — holdout
+    # stability above threshold AND propagated uncertainty. An edge with either missing is
+    # surfaced descriptive, never certified as a discovery.
     stab = record.stability
     if stab is None or stab < policy.min_stability:
         return replace(record, certification_status="descriptive")
+    if record.uncertainty is None:
+        return replace(record, certification_status="descriptive",
+                       warnings=record.warnings + ("uncertified_missing_propagated_uncertainty",))
     return replace(record, certification_status="selected")
 
 
@@ -64,11 +69,13 @@ def certify_links(records: list[LinkRecord], *, policy: LDOCertificationPolicy |
 
 
 def assert_ldo_edge_promotion_allowed(record: LinkRecord) -> None:
-    """§10 abort: a promoted (selected) edge must carry holdout stability or uncertainty."""
+    """§III.8/§10 standing abort: a promoted (``selected``) edge MUST carry holdout stability
+    AND propagated uncertainty. The final backstop over every record on the live path — it
+    hard-fails rather than relying only on ``certify_link``'s soft downgrade."""
     if record.certification_status != "selected":
         return
     if record.edge_type in {"lagged_directed", "contemporaneous"}:
-        if record.stability is None:
+        if record.stability is None or record.uncertainty is None:
             raise LDOCertificationError(
                 "dependency edge promoted without holdout stability or propagated uncertainty."
             )

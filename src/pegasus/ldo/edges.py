@@ -134,11 +134,20 @@ def to_link_records(
     stability_threshold: float = 0.5,
     null_strategy: str | None = None,
     fdr_method: str | None = None,
+    numerical_error: float = 0.0,
 ) -> list[LinkRecord]:
     """Assemble typed LinkRecords from a lagged fit, gated by stability + power."""
     stability = stability or {}
     n_eff = _n_eff(field) if field is not None else None
     low_power = n_eff is not None and n_eff < _MIN_N_EFF
+    # §III.7/§V.6(2) propagated uncertainty: statistical (Fisher-z SE of a partial correlation,
+    # 1/√(n_eff−3)) combined in quadrature with the fit's numerical (randomized-SVD) error. Every
+    # promoted edge MUST carry this (certification is a conjunction of stability AND uncertainty).
+    import math as _math
+    stat_se = 1.0 / _math.sqrt(max((n_eff or 0) - 3, 1)) if n_eff else None
+    edge_uncertainty = (
+        float(_math.hypot(stat_se, float(numerical_error))) if stat_se is not None else None
+    )
 
     records: list[LinkRecord] = []
     for lk in lagged.lagged_links:
@@ -160,6 +169,7 @@ def to_link_records(
                 partial_correlation=lk.peak_partial_correlation,
                 response_curve_ref=",".join(f"{r:.4f}" for r in lk.response_curve),
                 stability=stab,
+                uncertainty=edge_uncertainty,
                 certification_status="selected" if certified else "descriptive",
                 null_strategy=null_strategy,
                 fdr_method=fdr_method,
@@ -176,6 +186,7 @@ def to_link_records(
                 weight=pcorr,
                 partial_correlation=pcorr,
                 stability=stability.get(_edge_key(source, target, 0)),
+                uncertainty=edge_uncertainty,
                 certification_status="descriptive" if low_power else "selected",
                 warnings=("low_n_eff_descriptive_only",) if low_power else (),
             )
@@ -188,6 +199,7 @@ def to_link_records(
                 edge_type="latent_shared",
                 weight=loading,
                 confounding_factor_refs=("ldo_low_rank_factor",),
+                uncertainty=edge_uncertainty,
                 certification_status="descriptive" if low_power else "selected",
                 warnings=("low_n_eff_descriptive_only",) if low_power else (),
             )

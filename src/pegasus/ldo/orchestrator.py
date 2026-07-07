@@ -148,6 +148,7 @@ def run_ldo(
     )
     records = to_link_records(
         lagged, field=gf, stability=stability, stability_threshold=stability_threshold,
+        numerical_error=lagged.fit.numerical_error,
     )
 
     # Disease-axis provenance + the mandatory shared-code overlap guard (§5.3): a link
@@ -207,7 +208,20 @@ def run_ldo(
         series_by_var = {v: np.nanmean(gf.Z[i], axis=0) for i, v in enumerate(gf.variables)}
         records = escalate_rung2_its(records, series_by_var)
 
+    # §III.8 standing-abort backstop over every final record: a promoted edge without holdout
+    # stability AND propagated uncertainty hard-fails rather than shipping an uncertifiable claim.
+    from pegasus.ldo.certify import assert_ldo_edge_promotion_allowed
+    for r in records:
+        assert_ldo_edge_promotion_allowed(r)
+
     n_eff = int(np.isfinite(gf.Z).any(axis=0).sum())
+    # §VIII.2(3) typed coverage manifest: record what was searched (resolution, lag depth,
+    # functional forms) and, explicitly, what was not — so "no edge" ≠ "not looked for".
+    from pegasus.ldo.coverage import build_coverage_manifest
+    coverage = build_coverage_manifest(
+        resolution=str(getattr(gf, "resolution", "cell")), K=K, requested_K=requested_K,
+        ran_residual_scan=run_residual_scan, residual_error=_residual_error,
+    )
     diagnostics = {
         "p": p, "S": S, "T": T, "K": K, "K_requested": requested_K,
         "n_eff": n_eff,
@@ -230,6 +244,10 @@ def run_ldo(
         "n_rung0": sum(1 for r in records if (r.causal_rung or 0) == 0),
         "n_rung1": sum(1 for r in records if r.causal_rung == 1),
         "n_rung2": sum(1 for r in records if r.causal_rung == 2),
+        # §V.6(2): mean propagated numerical (randomized-SVD) error folded into edge uncertainty.
+        "numerical_error": float(lagged.fit.numerical_error),
+        # §VIII.2(3): typed coverage manifest (searched + explicitly-unsearched regions).
+        "coverage_manifest": coverage.as_manifest(),
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

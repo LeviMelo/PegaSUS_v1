@@ -14,14 +14,21 @@ from pegasus.ldo.records import LinkRecord
 
 
 def _edge(**kw) -> LinkRecord:
+    # §III.8 certification is a conjunction: a promotable edge carries BOTH holdout stability
+    # AND propagated uncertainty (the fixture supplies both).
     base = dict(source_var="A", target_var="B", edge_type="contemporaneous",
-                weight=0.5, stability=0.9)
+                weight=0.5, stability=0.9, uncertainty=0.05)
     base.update(kw)
     return LinkRecord(**base)
 
 
 def test_converged_stable_edge_is_selected():
     assert certify_link(_edge()).certification_status == "selected"
+
+
+def test_stable_edge_without_propagated_uncertainty_is_not_certified():
+    # §III.8: stability alone is insufficient — a missing propagated uncertainty blocks promotion.
+    assert certify_link(_edge(uncertainty=None)).certification_status == "descriptive"
 
 
 def test_unconverged_edge_is_downgraded_to_descriptive():

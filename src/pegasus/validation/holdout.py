@@ -78,4 +78,70 @@ def certify_approximation_on_slice(
     return report
 
 
-__all__ = ["certify_approximation_on_slice"]
+def _time_slice(field: GaussianField, t_lo: int, t_hi: int) -> GaussianField:
+    idx = list(range(t_lo, t_hi))
+    return GaussianField(
+        variables=field.variables, space_ids=field.space_ids,
+        time_ids=tuple(field.time_ids[t] for t in idx),
+        Z=field.Z[:, :, idx], W=field.W[:, :, idx], resolution=field.resolution,
+    )
+
+
+def _edge_signset(records) -> dict[tuple, float]:
+    out: dict[tuple, float] = {}
+    for r in records:
+        if r.edge_type in ("contemporaneous", "lagged_directed"):
+            out[(frozenset((r.source_var, r.target_var)), r.lag_k)] = float(np.sign(r.weight or 0.0))
+    return out
+
+
+def temporal_holdout(
+    field: GaussianField,
+    *,
+    K: int = 1,
+    fit_kwargs: dict | None = None,
+    holdout_years: int = 1,
+    min_train_T: int = 4,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """§IX.3 temporal holdout: fit through year ``T``, verify on the held-out tail.
+
+    Fits the LDO on the training window (all but the last ``holdout_years``) and on the held-out
+    window, then measures the **persistence rate** — the fraction of training-selected directed /
+    contemporaneous edges that recur with the SAME sign in the holdout window. A real link
+    persists / predicts; a fluke evaporates. Returns the rate + counts; skipped (``ran=False``)
+    when the time span is too short to split. Both windows must clear ``K``.
+    """
+    from pegasus.ldo.edges import to_link_records
+    from pegasus.ldo.lags import fit_lagged_links
+
+    fit_kwargs = dict(fit_kwargs or {})
+    p, S, T = field.Z.shape
+    train_T = T - holdout_years
+    test_T = T - train_T
+    if train_T < max(min_train_T, 2) or holdout_years < 1 or test_T < 2:
+        return {"ran": False, "reason": "time_span_too_short", "persistence_rate": None}
+    # Fit BOTH windows at the same affordable lag order so their edge keys are comparable
+    # (a directed edge the shorter window cannot even represent must not count as "not persisted").
+    k_eff = max(0, min(K, train_T - 2, test_T - 2))
+
+    def _edges(sl):
+        lag = fit_lagged_links(sl, K=k_eff, **fit_kwargs)
+        return _edge_signset(to_link_records(lag, field=sl))
+
+    train = _edges(_time_slice(field, 0, train_T))
+    test = _edges(_time_slice(field, train_T, T))
+    if not train:
+        return {"ran": True, "persistence_rate": None, "n_train_edges": 0,
+                "n_persisted": 0, "reason": "no_train_edges"}
+    persisted = sum(1 for k, s in train.items() if test.get(k) == s and s != 0.0)
+    return {
+        "ran": True,
+        "n_train_edges": len(train),
+        "n_persisted": persisted,
+        "persistence_rate": float(persisted) / float(len(train)),
+        "holdout_years": holdout_years,
+    }
+
+
+__all__ = ["certify_approximation_on_slice", "temporal_holdout"]

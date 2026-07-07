@@ -218,6 +218,17 @@ def run_ldo(
         except Exception as exc:
             approx_certification = {"ran": False, "reason": f"{type(exc).__name__}", "certified": None}
 
+    # §IX.3 temporal holdout: fit through the training window, verify persistence on the held-out
+    # tail year — a real edge persists/predicts, a fluke evaporates. Records the persistence rate
+    # (never asserts out-of-sample without measuring it). Gated on a time span long enough to split.
+    holdout_report = None
+    if T >= 6:
+        try:
+            from pegasus.validation.holdout import temporal_holdout
+            holdout_report = temporal_holdout(gf, K=K, fit_kwargs=fit_kwargs, seed=seed + 6)
+        except Exception as exc:
+            holdout_report = {"ran": False, "reason": f"{type(exc).__name__}"}
+
     stability = stability_select(
         gf, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac, seed=seed + 1,
         max_workers=max_workers, **fit_kwargs
@@ -401,6 +412,9 @@ def run_ldo(
         # §V.6(3): exact-certifies-approximate on a real spatial slice — the randomized low-rank
         # readout is validated against an exact refit; certified=False flags a rejected approximation.
         "exact_certifies_approx": approx_certification,
+        # §IX.3 temporal holdout: fraction of discovered edges that persist (same sign) on the
+        # held-out tail year — the out-of-sample prong (None when the span is too short to split).
+        "temporal_holdout": holdout_report,
         # §V.2: separable joint-precision log-det via the Kronecker-factored operator (None
         # when the variable precision is not SPD or the space factor is unavailable).
         "kronecker_joint": kronecker_report,

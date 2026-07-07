@@ -28,19 +28,26 @@ def _edge_key(source: str, target: str, lag: int) -> tuple[str, str, int]:
 
 
 def _subsample_edges(
-    field: GaussianField, idx: np.ndarray, *, K: int, fit_kwargs: dict
+    field: GaussianField, idx: np.ndarray, *, K: int, fit_kwargs: dict,
+    t_idx: np.ndarray | None = None,
 ) -> set[tuple[str, str, int]] | None:
-    """Fit one spatial subsample and return its selected edge keys (or None on failure)."""
+    """Fit one subsample and return its selected edge keys (or None on failure).
+
+    ``idx`` selects the SPATIAL subsample; ``t_idx`` (optional) selects a contiguous TIME window
+    so an edge that survives only at one time span is filtered (§III.7/§IX.3 lattice-subsampling
+    across Place AND Time, not space alone)."""
+    tsel = slice(None) if t_idx is None else t_idx
+    time_ids = field.time_ids if t_idx is None else tuple(field.time_ids[t] for t in t_idx)
     sub = GaussianField(
         variables=field.variables,
         space_ids=tuple(field.space_ids[i] for i in idx),
-        time_ids=field.time_ids,
-        Z=field.Z[:, idx, :],
-        W=field.W[:, idx, :],
+        time_ids=time_ids,
+        Z=field.Z[:, idx, :][:, :, tsel] if t_idx is not None else field.Z[:, idx, :],
+        W=field.W[:, idx, :][:, :, tsel] if t_idx is not None else field.W[:, idx, :],
         resolution=field.resolution,
     )
     try:
-        res = fit_lagged_links(sub, K=K, **fit_kwargs)
+        res = fit_lagged_links(sub, K=min(K, sub.Z.shape[2] - 2), **fit_kwargs)
     except Exception:
         return None
     seen: set[tuple[str, str, int]] = set()
@@ -60,9 +67,15 @@ def stability_select(
     lag_tolerance: int = 1,
     seed: int = 0,
     max_workers: int | None = None,
+    perturb_time: bool | str = "auto",
     **fit_kwargs,
 ) -> dict[tuple[str, str, int], float]:
-    """Return per-edge selection frequency over spatial subsamples of the lattice.
+    """Return per-edge selection frequency over lattice subsamples (Place × Time).
+
+    Each subsample perturbs the SPATIAL lattice and — when ``perturb_time`` is on ("auto" enables
+    it once the span is long enough to leave ``> K`` points, ``T ≥ K+4``) — also a contiguous TIME
+    window, so an edge that survives only at one spatial OR one temporal span is filtered
+    (§III.7/§IX.3 "edges must survive subsampling", across Place AND Time, not space alone).
 
     The subsample refits are independent and dominate the LDO cost, so they run
     concurrently on a thread pool (numpy's LAPACK eigensolves release the GIL and
@@ -74,11 +87,22 @@ def stability_select(
     p, S, T = field.shape
     n_keep = max(2, int(round(subsample_frac * S)))
     index_sets = [np.sort(rng.choice(S, size=min(n_keep, S), replace=False)) for _ in range(n_subsamples)]
+    use_time = (T >= K + 4) if perturb_time == "auto" else bool(perturb_time)
+    if use_time:
+        t_min = max(K + 2, int(round(0.6 * T)))
+        time_sets: list[np.ndarray | None] = []
+        for _ in range(n_subsamples):
+            L = int(rng.integers(t_min, T + 1))
+            start = int(rng.integers(0, T - L + 1))
+            time_sets.append(np.arange(start, start + L))
+    else:
+        time_sets = [None] * n_subsamples
 
     if max_workers is None:
         max_workers = max(1, min(n_subsamples, (os.cpu_count() or 2) - 1))
     if max_workers <= 1:
-        results = [_subsample_edges(field, idx, K=K, fit_kwargs=fit_kwargs) for idx in index_sets]
+        results = [_subsample_edges(field, idx, K=K, fit_kwargs=fit_kwargs, t_idx=t)
+                   for idx, t in zip(index_sets, time_sets)]
     else:
         # Pin BLAS to one thread per worker so N eigensolves use N cores rather than
         # oversubscribing (each LAPACK eigh would otherwise grab every core).
@@ -89,7 +113,9 @@ def stability_select(
             limiter = None
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                results = list(pool.map(lambda idx: _subsample_edges(field, idx, K=K, fit_kwargs=fit_kwargs), index_sets))
+                results = list(pool.map(
+                    lambda it: _subsample_edges(field, it[0], K=K, fit_kwargs=fit_kwargs, t_idx=it[1]),
+                    list(zip(index_sets, time_sets))))
         finally:
             if limiter is not None:
                 limiter.unregister()

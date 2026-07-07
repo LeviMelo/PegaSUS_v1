@@ -36,9 +36,9 @@ All 8 work packages landed as faithful, tested increments (356 tests green in th
 | 6/17 | LDO orchestration + field assembly + output contract (Part I | The LDO backbone (margins->precision/CPW split->lags->residual HSIC->certify->orient) is genuinely wired end-to-end on the national investigate path and is mathematically faithful  |
 | 4/6 | EFG — legality algebra + measured-quantity objects (MSD-III  | The legality/provenance algebra and the SHE/EFG state lattice are PRESENT, faithful, and WIRED on the live compile path; but the central §II.3 reconception — the EFG emitting measu |
 
-## Gap→resolution index (all 46 closed, 2026-07-07)
+## Gap→resolution index + adversarial re-verification (2026-07-07)
 
-The per-gap `_Status: PENDING_` lines below are the *original review state* and are **superseded by this index** — every surfaced gap has been resolved by a landed, tested work package. The remaining research ceiling (full SPDE/INLA latent-Gaussian multiresolution field) is a *stated non-blocker*, carried by the WP2 §III.3 per-edge BYM varying-coefficient realization.
+> **⚠ CORRECTION (2026-07-07, 20-agent adversarial re-verification, run `wf_2e692ac4-d3b`).** The "all closed" claim below was an OVERSTATEMENT. Two independent skeptics per gap + three critics found only **9 of 45** gaps cleanly resolved; ~9 are genuinely PARTIAL/UNRESOLVED and two normative §III.8 conjuncts were **never audited**. The header was also an off-by-one: **45** labeled IDs exist (BLO-1..10, MAJ-1..25, MIN-1..10), not 46. The commit map below records *what was built*; it does **not** certify completeness. See the **Open items O1–O19** section below for the real state; the per-gap `_Status_` lines remain the original review state. Root cause of the cluster: the national determinant run is `resolution='year'` (~139k cells < the 300k `use_mr` gate), so `run_ldo_multiresolution` — and every §VIII.2 / §V.6 capability reachable only through it — never runs on the flagship study.
 
 | gaps | closed by | commit |
 |---|---|---|
@@ -55,9 +55,32 @@ The per-gap `_Status: PENDING_` lines below are the *original review state* and 
 | MAJ-1, MAJ-3, MIN-3 | WP2 §III.3 spatial BYM varying-coefficient field + spatial_field_ref | 3370e67 |
 | MAJ-12, MAJ-20 | RES-01 §II.7 coarse→fine multiresolution wired into investigate | 21c42d3 |
 
+## Open items after re-verification (O1–O19) — the real remaining LDO work
+
+From the 20-agent adversarial re-verification synthesis. Ordered worst-first. Items marked ✅ are being closed in the current remediation wave; the tracker task id is in brackets.
+
+**BLOCKER (epistemic integrity of the flagship run)**
+- **O1** — bounded-exhaustiveness / multiresolution is OFF on the national year run (`use_mr` gate false at ~139k<300k cells): §VIII.2(2) false-negative audit + coverage-from-MR never execute. [#45]
+- **O2** — even when MR runs, `_sensitivity_screen` filters on the POOLED mean (the §VIII.2(1) aggregate test forbids) and the fine pass is a naive refit; `exhaustiveness.py` primitives (`should_drill_down`/heterogeneity/max-subgroup) are orphaned and duplicate `coverage.py`. [#45]
+- **O3** — §V.6 exact-certifies-approximate is orphaned: `certify_exact_vs_approx` has zero live callers; no state-scale exact reference run; lowrank docstrings overclaim intra-fit agreement satisfies §V.6. [#46]
+
+**MAJOR**
+- **O4** — two §III.8 certification conjuncts NEVER audited/built: (a) regularization-path agreement, (b) latent-vs-lag separability diagnostic (§IX.2 certification power). [#47]
+- **O5** — "holdout stability" is spatial-subsample only; no §IX.3 temporal holdout (fit-through-T/verify-T+1); `validation/__init__` docstring's out-of-sample claim is unbacked; MIN-3 (time+λ perturbation axes) unbuilt. [#48]
+- **O6** — §III.3 / MR-01 sum-of-scales GMRF prior not built: `L_D` is a flat graded-affinity Laplacian with one scalar γ, not per-scale precisions; the spatial "multiresolution decompose" is a post-hoc ≤24-edge shrunk-group-mean split, not a prior on the estimator. [#50]
+- **O7** — **LIVE denominator-principle violation**: RN emits an exposure sidecar for EVERY ratio field; routing is by `exposure>0` not extensivity, so intensive fields (per-capita/coverage%/GDP-pc) are forced onto the Poisson-offset margin. [#42]
+- **O8** — Rung-2 has only ITS wired; DiD orphaned; negative-control outcomes UNIMPLEMENTED → ITS auto-promotes with no bias-check veto. [#49]
+- **O9** — HSIC public orchestration API (`run_hsic_scan` + mode/bootstrap/formula-contract) is a full orphan; `residual_scan.py` reimplements the scan inline. [#50]
+- **O10** — provenance falsification: residual scan stamps a `null_strategy` naming a season-preserving/cyclic-shift null that never ran. [#43]
+- **O11** — residual-scan refusal swallowed by a bare `except`; full complete-case gate silently no-ops sparse vars; residual RAM (~48 GB) not in `assert_within_envelope`. [#44]
+
+**MINOR** — O12 state-tensor n_eff→W (scalar stub); O13 Kronecker telemetry-only (not in R-step); O14 SLQ orphaned + variance-free; O15 §V.4 streaming sufficient-stats unbuilt; O16 §V.3 JL neighborhood-sketch absent; O17 §III.5 inverse map-back to native scale absent; O18 coverage manifest not persisted + `sparsity_of_truth_assumed` a hardcoded bool; O19 spatial field best-effort/≤24-cap + marginal-not-partial slope. [#50]
+
+**FALSE ALARMS (leave as-is):** MAJ-11/21/22/MIN-6 "dormant guard" framing (guards are correct standing invariants); MIN-4 no-autonomous-Rung-3 (compliance by prohibition); BLO-9 transport is live (needs a test only); defensible orphans (DiD expert-invoked, disease prior inert on single-cause runs, dense `precision.py` reference builders, `stochastic_logdet_dense`).
+
 ## Confirmed gaps (adversarially verified)
 
-Status legend: PENDING | IN-PROGRESS | DONE — **see the Gap→resolution index above; all rows are now DONE.** Build order (user-set): WP1 (three quadratic prior-regularizers) -> WP4 (HSIC completeness) -> WP5 (causal ladder) -> then WP6/WP3/WP2/WP7/WP8.
+Status legend: PENDING | IN-PROGRESS | DONE — the commit map records what was built; **see Open items O1–O19 for the verified completeness state.** Build order (user-set): WP1 (three quadratic prior-regularizers) -> WP4 (HSIC completeness) -> WP5 (causal ladder) -> then WP6/WP3/WP2/WP7/WP8.
 
 ### BLOCKER (10)
 

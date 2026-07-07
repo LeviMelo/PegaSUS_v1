@@ -81,8 +81,11 @@ def _low_rank_factors(
     eigenpairs are recovered by **randomized SVD** (Halko–Martinsson–Tropp) in O(p²·r)
     instead of a dense O(p³) eigh — bounded error since ``L`` is genuinely low-rank
     (the tail past its numerical rank is zero). This is a post-convergence readout; it
-    does not touch the ADMM iteration (or the CPW S/L split), so the exact and
-    randomized paths agree to tolerance. Small ``p`` uses the exact eigh.
+    does not touch the ADMM iteration (or the CPW S/L split). The dropped-tail fraction is
+    propagated as ``numerical_error`` into each latent_shared edge's uncertainty. This
+    intra-fit noise floor is NOT itself the §V.6 exact-certifies-approximate contract — that
+    contract is enforced separately by :func:`pegasus.validation.holdout.certify_approximation_on_slice`,
+    which runs the whole pipeline exact-vs-approximate on a real slice. Small ``p`` uses the exact eigh.
     """
     p = L.shape[0]
     if randomized and p > 2 * rank_cap and rank_cap >= 1:
@@ -239,8 +242,10 @@ def fit_sparse_plus_lowrank(
     vals, vecs = _low_rank_factors(L, rank_cap=factor_rank_cap, randomized=use_randomized, seed=seed)
     # Keep only factors clearly above the noise floor (2% of the top eigenvalue). Shared
     # drivers are few and large; the fat tail of small PSD-projection eigenvalues emitted
-    # spurious latent_shared pairs and made the exact/randomized readouts disagree —
-    # dropping it cleans the readout and lets §V.6 exact-certifies-approximate hold.
+    # spurious latent_shared pairs and made the exact/randomized readouts disagree — dropping
+    # it cleans the readout so the exact and randomized low-rank factors track each other. (The
+    # §V.6 exact-certifies-approximate CONTRACT is verified separately, whole-pipeline, by
+    # validation.holdout.certify_approximation_on_slice — not by this intra-fit cleanup.)
     keep = vals > max(1e-6, 0.02 * vals.max() if vals.size else 0.0)
     factor_values = vals[keep]
     factor_loadings = vecs[:, keep]

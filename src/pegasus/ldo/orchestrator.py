@@ -123,6 +123,8 @@ def run_ldo(
     float32_bulk: bool | str = "auto",
     spatial_field_dir: str | None = None,
     max_spatial_fields: int = 24,
+    certify_approximation: bool | str = "auto",
+    certify_strict: bool = False,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass.
 
@@ -197,6 +199,24 @@ def run_ldo(
             "met": list(report.met), "approximation_limited": list(report.approximation_limited),
             "data_limited": list(report.data_limited), "escalated_to_exact": report.spent > 0,
         }
+
+    # §V.6(3) exact-certifies-approximate: when the national fit used the randomized low-rank
+    # readout (the p > 2·factor_rank_cap regime), certify that approximation on a bounded, real
+    # spatial slice by running the SAME pipeline exact vs approximate and comparing overlapping
+    # edges within propagated bounds. Records the report (never silent); ``certify_strict`` makes
+    # a disagreement a LOUD refusal. Off (skipped) for small p where the fit is already exact.
+    approx_certification = None
+    _want_certify = (p > 48) if certify_approximation == "auto" else bool(certify_approximation)
+    if _want_certify and S >= 3:
+        from pegasus.ldo.exact_certify import ApproximationRejectedError
+        from pegasus.validation.holdout import certify_approximation_on_slice
+        try:
+            approx_certification = certify_approximation_on_slice(
+                gf, K=K, fit_kwargs=fit_kwargs, seed=seed + 5, strict=certify_strict)
+        except ApproximationRejectedError:
+            raise  # §V.6(3) loud rejection in strict mode
+        except Exception as exc:
+            approx_certification = {"ran": False, "reason": f"{type(exc).__name__}", "certified": None}
 
     stability = stability_select(
         gf, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac, seed=seed + 1,
@@ -378,6 +398,9 @@ def run_ldo(
         "coverage_manifest": coverage.as_manifest(),
         # §V.5: adaptive-precision-controller verdict (None when the controller is off).
         "precision_controller": precision_report,
+        # §V.6(3): exact-certifies-approximate on a real spatial slice — the randomized low-rank
+        # readout is validated against an exact refit; certified=False flags a rejected approximation.
+        "exact_certifies_approx": approx_certification,
         # §V.2: separable joint-precision log-det via the Kronecker-factored operator (None
         # when the variable precision is not SPD or the space factor is unavailable).
         "kronecker_joint": kronecker_report,

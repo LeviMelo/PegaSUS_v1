@@ -183,6 +183,8 @@ def compute_q_state(
     provenance: list[str] | None = None,
     warnings: list[WarningRecord] | None = None,
     registries=None,
+    spatial_graph=None,
+    spatial_values=None,
 ) -> QState:
     provenance = provenance or field.provenance
     risk = provenance_risk(provenance)
@@ -200,22 +202,33 @@ def compute_q_state(
     temporal_roughness = field.support.get("temporal_roughness")
     spatial_entropy = field.support.get("spatial_entropy")
     q_warnings = list(field.warnings or [])
+    geo_n_eff = None  # geography-aware spatial effective-n (single source of truth)
     if values or denom_values:
         if values:
             cv = cv if cv is not None else _cv(values)
             temporal_roughness = temporal_roughness if temporal_roughness is not None else _temporal_roughness(values)
             spatial_entropy = spatial_entropy if spatial_entropy is not None else _spatial_entropy(values)
             if moran_i is None:
-                moran_i = _moran_contiguity(values)
-                if moran_i is not None:
-                    # Honest provenance: this Moran's I is an ordering-contiguity proxy,
-                    # not a geography-aware statistic (no adjacency matrix supplied).
-                    q_warnings.append("moran_i_ordering_contiguity_proxy")
-        # n_eff is the MSD-I §3.12.3 effective sample size: Kish (Σw)²/Σw² over the
-        # per-cell weights (denominator for rates/proportions, else numerator counts),
-        # deflated by 1/(1+max(0,MoranI)).
+                geo_vals = spatial_values if spatial_values is not None else values
+                if spatial_graph is not None:
+                    from pegasus.geo.spatial import effective_n as _geo_neff
+                    from pegasus.geo.spatial import moran_i as _geo_moran
+                    moran_i = _geo_moran(geo_vals, spatial_graph)
+                    geo_n_eff = _geo_neff(geo_vals, spatial_graph)
+                else:
+                    moran_i = _moran_contiguity(values)
+                    if moran_i is not None:
+                        q_warnings.append("moran_i_ordering_contiguity_proxy")
+        # §3.12.3 effective sample size: Kish (Σw)²/Σw² over per-cell weights, deflated by
+        # spatial autocorrelation. With a real graph the deflation is the geography-aware
+        # effective_n/n ratio; else the 1/(1+max(0,MoranI)) proxy correction.
         weights = denom_values if denom_values else values
-        n_eff = _moran_corrected_n_eff(_kish_effective_n(weights), moran_i)
+        kish = _kish_effective_n(weights)
+        if geo_n_eff is not None and kish is not None:
+            n_obs = max(1, sum(1 for v in (spatial_values.values() if spatial_values is not None else values)))
+            n_eff = float(max(1.0, kish * (geo_n_eff / n_obs)))
+        else:
+            n_eff = _moran_corrected_n_eff(kish, moran_i)
     elif n_eff is not None:
         n_eff = _moran_corrected_n_eff(float(n_eff), moran_i)
 

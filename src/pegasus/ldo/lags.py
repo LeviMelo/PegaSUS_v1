@@ -15,7 +15,7 @@ lagged edge.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -82,6 +82,7 @@ def fit_lagged_links(
     gamma_temporal: float = 0.0,
     gamma_disease: float = 0.0,
     spatial_whiten: bool = True,
+    temporal_whiten: bool = False,
     randomized_factors: bool | None = None,
     float32_bulk: bool = False,
     use_reliability_weights: bool = True,
@@ -105,6 +106,11 @@ def fit_lagged_links(
     Gaussian margin mean (0) at missing cells (a dense op cannot honour per-cell
     missingness); where the field's municipalities are absent from the adjacency the
     Laplacian term is empty and whitening reduces to a κ-scaling (a no-op at κ=1).
+
+    ``temporal_whiten`` (§III.4, opt-in) is the time-axis dual: AR(1)-whiten each variable
+    over time before lag features are built, so a shared temporal trend does not read as a
+    lagged/contemporaneous edge. Off by default (the shared-wave latent-factor semantics
+    depend on the un-whitened time structure); ``False`` is byte-identical to the prior fit.
     """
     p = len(field.variables)
     # §II.6.1 ObservationReliability contract: the per-cell reliability tensor W (provenance +
@@ -112,6 +118,16 @@ def fit_lagged_links(
     # broadcast cell informs the precision less than a directly observed one. Absent/disabled → the
     # estimators fall back to the unweighted (byte-identical) moments. W is 0 where the value is NaN.
     W = field.W if (use_reliability_weights and getattr(field, "W", None) is not None) else None
+    # §III.4 temporal pre-whitening: remove per-variable AR(1) time dependence before lag
+    # features are built, so a shared trend does not read as a lagged/contemporaneous edge.
+    # A whitened cell needs both z_t and z_{t-1} observed; W is masked to that support so a
+    # cell that whitens to NaN carries no reliability weight.
+    if temporal_whiten and field.Z.shape[2] > 1:
+        from pegasus.ldo.temporal import temporal_whiten as _tw
+        Zt, _phi = _tw(field.Z)
+        field = replace(field, Z=Zt)
+        if W is not None:
+            W = np.where(np.isfinite(Zt), W, 0.0)
     if spatial_whiten and field.Z.shape[1] > 1:
         # Spatial GMRF whitening via the sparse metric (§V.2/§V.4): matrix-free, O(F·S)
         # memory, no dense S×S whitener or O(S³) sqrt — so it scales to national S≈5570.

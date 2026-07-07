@@ -29,6 +29,7 @@ class LinkRecord:
     spatial_field_ref: str | None = None        # ref to the link's spatial heterogeneity field
     stability: float | None = None              # stability-selection frequency
     uncertainty: float | None = None
+    n_eff: float | None = None                   # per-edge effective sample size (spatial + reliability corrected)
     confounding_factor_refs: tuple[str, ...] = ()
     null_strategy: str | None = None
     fdr_method: str | None = None
@@ -61,6 +62,7 @@ class LinkRecord:
             "spatial_field_ref": self.spatial_field_ref,
             "stability": self.stability,
             "uncertainty": self.uncertainty,
+            "n_eff": self.n_eff,
             "confounding_factor_refs": list(self.confounding_factor_refs),
             "null_strategy": self.null_strategy,
             "fdr_method": self.fdr_method,
@@ -86,6 +88,7 @@ LINK_RECORD_COLUMNS: tuple[str, ...] = (
     "spatial_field_ref",
     "stability",
     "uncertainty",
+    "n_eff",
     "confounding_factor_refs",
     "null_strategy",
     "fdr_method",

@@ -117,6 +117,7 @@ def run_ldo(
     disease_scale_precisions: dict[str, float] | None = None,
     gamma_temporal: float = 0.1,
     gamma_disease: float = 0.1,
+    temporal_whiten: bool = False,
     precision_target: float | None = None,
     precision_budget: float = 1.0,
     variable_meta: dict[str, dict] | None = None,
@@ -190,7 +191,7 @@ def run_ldo(
         edge_threshold=edge_threshold, disease_penalty=disease_penalty,
         disease_laplacian=disease_laplacian,
         gamma_temporal=gamma_temporal, gamma_disease=gamma_disease,
-        float32_bulk=f32,
+        float32_bulk=f32, temporal_whiten=temporal_whiten,
     )
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
 
@@ -251,9 +252,18 @@ def run_ldo(
         gf, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac, seed=seed + 1,
         max_workers=max_workers, **fit_kwargs
     )
+    # Load the structural (contiguity) spatial graph so edge SE uses a spatially-corrected
+    # per-edge n_eff; best-effort (falls back to reliability-weighted joint count if absent).
+    _spatial_graph = None
+    try:
+        from pegasus.geo.spatial_graph import load_spatial_graph, structural_graph_available
+        if structural_graph_available():
+            _spatial_graph = load_spatial_graph()
+    except Exception:
+        _spatial_graph = None
     records = to_link_records(
         lagged, field=gf, stability=stability, stability_threshold=stability_threshold,
-        numerical_error=lagged.fit.numerical_error,
+        numerical_error=lagged.fit.numerical_error, spatial_graph=_spatial_graph,
     )
 
     # Disease-axis provenance + the mandatory shared-code overlap guard (§5.3): a link

@@ -148,8 +148,55 @@ def stability_select(
     return freq
 
 
-def _n_eff(field: GaussianField) -> int:
+def _global_n_eff(field: GaussianField) -> int:
     return int(np.isfinite(field.Z).any(axis=0).sum())
+
+
+def _node_summary(zvar: np.ndarray, wvar: np.ndarray, both: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-space reliability-weighted mean of one endpoint over joint-observed cells,
+    plus per-space summed weight. ``zvar/wvar/both`` are (S, T)."""
+    w = np.where(both, wvar, 0.0)
+    wsum = w.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.where(wsum > 0, (w * np.nan_to_num(zvar)).sum(axis=1) / wsum, np.nan)
+    return mean, wsum
+
+
+def _spatial_deflation_map(field: GaussianField, graph, provenance) -> dict[str, float]:
+    """Per-variable spatial deflation ratio effective_n/n ∈ (0,1] over each variable's marginal
+    reliability-weighted spatial support — computed ONCE per variable (not per edge), matrix-free."""
+    from pegasus.geo.spatial import effective_n as _sen
+    out: dict[str, float] = {}
+    for i, v in enumerate(field.variables):
+        both = np.isfinite(field.Z[i])
+        mean, _ = _node_summary(field.Z[i], field.W[i], both)
+        vals = {sid: mean[s] for s, sid in enumerate(field.space_ids) if np.isfinite(mean[s])}
+        n_marg = len(vals)
+        if n_marg < 3:
+            out[v] = 1.0
+            continue
+        try:
+            ne = _sen(vals, graph, variable_provenance=provenance)
+        except Exception:
+            ne = None
+        out[v] = float(ne / n_marg) if (ne is not None and n_marg > 0) else 1.0
+    return out
+
+
+def _edge_n_eff(field: GaussianField, source: str, target: str, defl: dict[str, float] | None) -> float:
+    """Effective sample size for one edge: reliability-weighted joint-observed cell count,
+    scaled by the worse endpoint's spatial deflation (positive autocorrelation shrinks it)."""
+    idx = {v: i for i, v in enumerate(field.variables)}
+    i, j = idx.get(source), idx.get(target)
+    if i is None or j is None:
+        return float(_global_n_eff(field))
+    both = np.isfinite(field.Z[i]) & np.isfinite(field.Z[j])
+    rel = float(np.where(both, np.minimum(field.W[i], field.W[j]), 0.0).sum())
+    if rel <= 0:
+        return 0.0
+    if not defl:
+        return rel
+    return float(rel * min(defl.get(source, 1.0), defl.get(target, 1.0)))
 
 
 def to_link_records(
@@ -161,19 +208,37 @@ def to_link_records(
     null_strategy: str | None = None,
     fdr_method: str | None = None,
     numerical_error: float = 0.0,
+    spatial_graph=None,
+    variable_provenance=None,
+    per_edge_n_eff: bool = True,
 ) -> list[LinkRecord]:
-    """Assemble typed LinkRecords from a lagged fit, gated by stability + power."""
+    """Assemble typed LinkRecords from a lagged fit, gated by stability + power.
+
+    ``per_edge_n_eff`` (default) sizes each edge's Fisher-z SE and low-power gate from a
+    per-edge effective-n over its two endpoints' joint-observed cells — spatially corrected via
+    ``spatial_graph`` when supplied, reliability-weighted by ``field.W`` otherwise. Off falls back
+    to the single global observed-cell count (prior behaviour)."""
     stability = stability or {}
-    n_eff = _n_eff(field) if field is not None else None
-    low_power = n_eff is not None and n_eff < _MIN_N_EFF
-    # §III.7/§V.6(2) propagated uncertainty: statistical (Fisher-z SE of a partial correlation,
-    # 1/√(n_eff−3)) combined in quadrature with the fit's numerical (randomized-SVD) error. Every
-    # promoted edge MUST carry this (certification is a conjunction of stability AND uncertainty).
     import math as _math
-    stat_se = 1.0 / _math.sqrt(max((n_eff or 0) - 3, 1)) if n_eff else None
-    edge_uncertainty = (
-        float(_math.hypot(stat_se, float(numerical_error))) if stat_se is not None else None
+    global_n = _global_n_eff(field) if field is not None else None
+
+    def _uncertainty(n: float | None) -> tuple[float | None, bool, float | None]:
+        low = n is not None and n < _MIN_N_EFF
+        se = 1.0 / _math.sqrt(max((n or 0) - 3, 1)) if n else None
+        # §III.7/§V.6(2): Fisher-z SE combined in quadrature with the fit's numerical error.
+        unc = float(_math.hypot(se, float(numerical_error))) if se is not None else None
+        return unc, low, (float(n) if n is not None else None)
+
+    use_edge = per_edge_n_eff and field is not None
+    defl = (
+        _spatial_deflation_map(field, spatial_graph, variable_provenance)
+        if use_edge and spatial_graph is not None else None
     )
+
+    def _edge_stats(source: str, target: str) -> tuple[float | None, bool, float | None]:
+        if use_edge:
+            return _uncertainty(_edge_n_eff(field, source, target, defl))
+        return _uncertainty(global_n)
 
     records: list[LinkRecord] = []
     for lk in lagged.lagged_links:
@@ -184,6 +249,7 @@ def to_link_records(
                 if s2 == lk.source and t2 == lk.target and abs(l2 - lk.peak_lag) <= 1:
                     stab = v
                     break
+        edge_uncertainty, low_power, edge_n = _edge_stats(lk.source, lk.target)
         certified = (not low_power) and (stab is None or stab >= stability_threshold)
         records.append(
             LinkRecord(
@@ -196,6 +262,7 @@ def to_link_records(
                 response_curve_ref=",".join(f"{r:.4f}" for r in lk.response_curve),
                 stability=stab,
                 uncertainty=edge_uncertainty,
+                n_eff=edge_n,
                 certification_status="selected" if certified else "descriptive",
                 null_strategy=null_strategy,
                 fdr_method=fdr_method,
@@ -203,6 +270,7 @@ def to_link_records(
             )
         )
     for source, target, pcorr in lagged.contemporaneous:
+        edge_uncertainty, low_power, edge_n = _edge_stats(source, target)
         records.append(
             LinkRecord(
                 source_var=source,
@@ -213,11 +281,13 @@ def to_link_records(
                 partial_correlation=pcorr,
                 stability=stability.get(_edge_key(source, target, 0)),
                 uncertainty=edge_uncertainty,
+                n_eff=edge_n,
                 certification_status="descriptive" if low_power else "selected",
                 warnings=("low_n_eff_descriptive_only",) if low_power else (),
             )
         )
     for source, target, loading in lagged.latent_shared:
+        edge_uncertainty, low_power, edge_n = _edge_stats(source, target)
         records.append(
             LinkRecord(
                 source_var=source,
@@ -226,6 +296,7 @@ def to_link_records(
                 weight=loading,
                 confounding_factor_refs=("ldo_low_rank_factor",),
                 uncertainty=edge_uncertainty,
+                n_eff=edge_n,
                 certification_status="descriptive" if low_power else "selected",
                 warnings=("low_n_eff_descriptive_only",) if low_power else (),
             )

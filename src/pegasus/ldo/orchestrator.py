@@ -14,7 +14,7 @@ needed. Output is a typed ``LinkRecord`` list (the enriched ``Hypotheses`` key,
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -121,6 +121,8 @@ def run_ldo(
     exposure_field_by_variable=None,
     measured_quantity_by_variable=None,
     float32_bulk: bool | str = "auto",
+    spatial_field_dir: str | None = None,
+    max_spatial_fields: int = 24,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass.
 
@@ -234,9 +236,8 @@ def run_ldo(
     # every edge read off it, backbone and residual) is unreliable — flag so the
     # certifier downgrades to descriptive rather than certifying an approximation as exact.
     if not lagged.fit.converged:
-        from dataclasses import replace as _replace
         records = [
-            _replace(r, warnings=tuple(r.warnings) + ("lowrank_unconverged_descriptive_only",))
+            replace(r, warnings=tuple(r.warnings) + ("lowrank_unconverged_descriptive_only",))
             for r in records
         ]
 
@@ -261,6 +262,36 @@ def run_ldo(
         from pegasus.causal.quasi import escalate_rung2_its
         series_by_var = {v: np.nanmean(gf.Z[i], axis=0) for i, v in enumerate(gf.variables)}
         records = escalate_rung2_its(records, series_by_var)
+
+    # §III.3/§III.7 spatial BYM varying-coefficient field: for the strongest *selected* directed
+    # / contemporaneous edges, fit the per-locality slope field β_s (GMRF-smoothed) and persist it
+    # as the edge's spatial-heterogeneity sidecar, setting spatial_field_ref. Opt-in (a dir must be
+    # given); bounded to max_spatial_fields; best-effort per edge. This is the effect-modification
+    # surface — "is X→Y stronger where …" — read at national/region/state/muni scales.
+    n_spatial_fields = 0
+    if spatial_field_dir is not None and gf.shape[1] > 1:
+        from pathlib import Path as _Path
+
+        from pegasus.ldo.spatial_field import fit_spatial_varying_coefficient, write_spatial_field
+        _sdir = _Path(spatial_field_dir)
+        _sdir.mkdir(parents=True, exist_ok=True)
+        _cands = [
+            (i, r) for i, r in enumerate(records)
+            if r.edge_type in ("lagged_directed", "contemporaneous")
+            and r.certification_status == "selected"
+        ]
+        _cands.sort(key=lambda ir: abs(ir[1].weight or 0.0), reverse=True)
+        for i, r in _cands[:max_spatial_fields]:
+            try:
+                sf = fit_spatial_varying_coefficient(gf, r.source_var, r.target_var, kappa=kappa)
+                if sf is None:
+                    continue
+                _safe = f"{r.source_var}__{r.target_var}__lag{r.lag_k}".replace("/", "_")
+                ref = write_spatial_field(sf, _sdir / f"{_safe}.spatial_field.parquet")
+                records[i] = replace(r, spatial_field_ref=ref)
+                n_spatial_fields += 1
+            except Exception:
+                continue
 
     # §III.8 standing-abort backstop over every final record: a promoted edge without holdout
     # stability AND propagated uncertainty hard-fails rather than shipping an uncertifiable claim.
@@ -337,6 +368,9 @@ def run_ldo(
         # §V.2: separable joint-precision log-det via the Kronecker-factored operator (None
         # when the variable precision is not SPD or the space factor is unavailable).
         "kronecker_joint": kronecker_report,
+        # §III.3/§III.7: number of edges given a fitted spatial BYM varying-coefficient field
+        # (0 unless spatial_field_dir was provided → edges carry spatial_field_ref).
+        "n_spatial_fields": n_spatial_fields,
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

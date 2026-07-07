@@ -220,10 +220,17 @@ def run_investigate(
     if mq_by_var is None:
         mq_by_var = measured_quantity_refs(run_dir, keep_variables) or None
 
+    # §III.3/§III.7 spatial BYM field: persist per-edge spatial-heterogeneity surfaces under the
+    # run dir so certified edges carry a spatial_field_ref (effect-modification by place).
+    spatial_field_dir = ldo_kwargs.pop("spatial_field_dir", None)
+    if spatial_field_dir is None:
+        spatial_field_dir = str(Path(run_dir) / "spatial_fields")
+
     ldo_run = run_ldo(
         panel, K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables,
         variable_meta=variable_meta, disease_graph=disease_graph,
-        measured_quantity_by_variable=mq_by_var, **ldo_kwargs,
+        measured_quantity_by_variable=mq_by_var, spatial_field_dir=spatial_field_dir,
+        **ldo_kwargs,
     )
 
     # Record the disease-axis wiring so a run's diagnostics show whether the L_D prior /

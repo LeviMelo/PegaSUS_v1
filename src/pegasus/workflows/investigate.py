@@ -152,14 +152,19 @@ def measured_quantity_refs(run_dir, keep_variables=None) -> dict[str, str]:
     return out
 
 
-def state_reliability_weights(run_dir, keep_variables=None) -> dict[str, float]:
+def state_reliability_weights(run_dir, keep_variables=None, *, spec_reliability: bool = False) -> dict[str, float]:
     """``{field_id: reliability∈(0,1]}`` from the §3.12 Q-tensor — the state-tensor uncertainty
     folded into the LDO observation weight ``W`` (§II.3 'uncertainty(state tensor)').
 
     Reliability = Kish efficiency ``n_eff/n_events`` × ``(1−denom_fragility)`` × ``(1−provenance_risk)``,
     floored at 0.1 so no field is fully zeroed. A field with a large design effect (low n_eff),
     fragile denominator, or unofficial provenance is DOWN-WEIGHTED in the precision fit — a
-    normalized/uncertain quantity is no longer modelled as if exact. Empty when Q_tensor is absent."""
+    normalized/uncertain quantity is no longer modelled as if exact. Empty when Q_tensor is absent.
+
+    Kish efficiency uses n_eff/n_denom (design/exposure weights, §3.12.3) when a denominator is
+    present. With ``spec_reliability=False`` (default) it divides by n_events, reproducing the
+    legacy weight exactly; ``spec_reliability=True`` divides by n_denom for rate/proportion fields
+    so the efficiency is the design effect over the exposure weights, not the event count."""
     path = Path(run_dir) / "Q_tensor.parquet"
     if not path.exists():
         return {}
@@ -172,8 +177,12 @@ def state_reliability_weights(run_dir, keep_variables=None) -> dict[str, float]:
         if keep_variables is not None and fid not in keep_variables:
             continue
         n_events = float(row.get("n_events") or 0.0)
+        n_denom = row.get("n_denom")
         n_eff = row.get("n_eff")
-        kish = float(n_eff) / n_events if (n_eff is not None and n_events > 0) else 1.0
+        base = float(n_denom) if (spec_reliability and n_denom is not None and float(n_denom) > 0) else n_events
+        kish = float(n_eff) / base if (n_eff is not None and base > 0) else 1.0
+        if spec_reliability:
+            kish = min(kish, 1.0)  # efficiency ≤ 1 (n_eff ≤ exposure weight count)
         frag = float(row.get("denom_fragility") or 0.0)
         prov = float(row.get("provenance_risk") or 0.0)
         rel = kish * (1.0 - min(frag, 1.0)) * (1.0 - min(prov, 1.0))
@@ -210,6 +219,7 @@ def run_investigate(
     lambda2: float = 1.0,
     write: bool = True,
     multiresolution: bool | str = "auto",
+    spec_reliability: bool = False,
     **ldo_kwargs,
 ) -> InvestigateResult:
     """Run the LDO over a compiled run and (optionally) write the Hypotheses key.
@@ -282,7 +292,7 @@ def run_investigate(
     # into the LDO reliability weight W so an uncertain/normalized field is not modelled as exact.
     field_weights = ldo_kwargs.pop("field_weights", None)
     if field_weights is None:
-        field_weights = state_reliability_weights(run_dir, keep_variables) or None
+        field_weights = state_reliability_weights(run_dir, keep_variables, spec_reliability=spec_reliability) or None
 
     _ldo_common = dict(
         K=K, lambda1=lambda1, lambda2=lambda2, keep_variables=keep_variables,

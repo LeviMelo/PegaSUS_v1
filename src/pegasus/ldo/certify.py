@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from pegasus.ldo.multiplicity import benjamini_hochberg, fisher_z_pvalue
 from pegasus.ldo.records import LinkRecord
+
+_FDR_METHOD = "benjamini_hochberg_fisherz_neff"
 
 
 class LDOCertificationError(ValueError):
@@ -25,6 +28,8 @@ class LDOCertificationError(ValueError):
 class LDOCertificationPolicy:
     min_stability: float = 0.6
     require_uncertainty_for_nonlinear: bool = True
+    fdr_q: float = 0.1
+    fdr_enforce: bool = False   # default: annotate q only, leave certification_status untouched
 
 
 def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = None) -> LinkRecord:
@@ -73,7 +78,32 @@ def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = 
 
 
 def certify_links(records: list[LinkRecord], *, policy: LDOCertificationPolicy | None = None) -> list[LinkRecord]:
-    return [certify_link(r, policy=policy) for r in records]
+    policy = policy or LDOCertificationPolicy()
+    gated = [certify_link(r, policy=policy) for r in records]
+    return _apply_fdr(gated, policy)
+
+
+def _apply_fdr(records: list[LinkRecord], policy: LDOCertificationPolicy) -> list[LinkRecord]:
+    """BH across edges with a testable partial-correlation at their effective-n. Default is
+    annotate-only (q + fdr_method); fdr_enforce additionally downgrades a *selected* edge that
+    fails FDR to descriptive. Untestable edges (no n_eff / no pcorr) are skipped (q=None)."""
+    idx = [
+        i for i, r in enumerate(records)
+        if r.n_eff is not None and r.partial_correlation is not None
+    ]
+    if not idx:
+        return records
+    pvals = [fisher_z_pvalue(records[i].partial_correlation, records[i].n_eff) for i in idx]
+    rejected, qvals = benjamini_hochberg(pvals, policy.fdr_q)
+    out = list(records)
+    for j, i in enumerate(idx):
+        r = out[i]
+        r = replace(r, fdr_qvalue=qvals[j], fdr_method=_FDR_METHOD)
+        if policy.fdr_enforce and r.certification_status == "selected" and not rejected[j]:
+            r = replace(r, certification_status="descriptive",
+                        warnings=r.warnings + ("fdr_not_significant_descriptive_only",))
+        out[i] = r
+    return out
 
 
 def assert_ldo_edge_promotion_allowed(record: LinkRecord) -> None:

@@ -98,6 +98,55 @@ def _temporal_roughness(values: list[float]) -> float | None:
     return float(math.sqrt(float(np.mean(diffs * diffs))) / denom)
 
 
+# --- §3.12 spec-correct reliability statistics (spec_reliability=True path) ---
+# The default (spec_reliability=False) path above measures dispersion/first-difference
+# proxies; these measure the spec quantities their names claim.
+
+def _denom_fragility_share(denom_values: list[float], mu_min: float = 50.0) -> float | None:
+    """§3.12.8: fraction of denominator cells with μ_den < μ_min (default 50)."""
+    if not denom_values:
+        return None
+    arr = np.asarray(denom_values, dtype=np.float64)
+    return float(np.mean(arr < mu_min))
+
+
+def _sampling_cv(values: list[float], denom_values: list[float] | None = None, eps: float = 1e-9) -> float | None:
+    """§3.12.9 sampling CV of the estimate: SE(estimate)/|estimate|.
+
+    With a denominator (rate = count/exposure), Poisson-rate SE = √count/exposure, so the
+    aggregate CV ≈ √(Σcount)/Σcount = 1/√(Σcount). For a bare count series it is the
+    Poisson 1/√(ΣY). Not the dispersion of the value series across cells.
+    """
+    if not values:
+        return None
+    counts = np.asarray(values, dtype=np.float64)
+    total_count = float(np.abs(counts).sum())
+    if denom_values:
+        exposure = float(np.abs(np.asarray(denom_values, dtype=np.float64)).sum())
+        if exposure <= 0 or total_count <= 0:
+            return None
+        se = math.sqrt(total_count) / exposure
+        est = total_count / exposure
+        return float(se / (abs(est) + eps))
+    if total_count <= 0:
+        return None
+    return float(1.0 / math.sqrt(total_count + eps))
+
+
+def _second_diff_roughness(values: list[float]) -> float | None:
+    """§3.12.11 curvature: normalized mean squared second difference, mean(Δ²x²)/scale².
+
+    Δ²xₜ = xₜ − 2xₜ₋₁ + xₜ₋₂ is zero for any straight-line trend, so a smooth trend reads
+    ~0 regardless of its variance. Scaled by the mean level to be unit-free.
+    """
+    if len(values) < 3:
+        return None
+    arr = np.asarray(values, dtype=np.float64)
+    d2 = arr[2:] - 2.0 * arr[1:-1] + arr[:-2]
+    denom = abs(float(arr.mean())) or 1.0
+    return float(math.sqrt(float(np.mean(d2 * d2))) / denom)
+
+
 def _spatial_entropy(values: list[float]) -> float | None:
     if not values:
         return None
@@ -185,6 +234,8 @@ def compute_q_state(
     registries=None,
     spatial_graph=None,
     spatial_values=None,
+    spec_reliability: bool = False,
+    mu_min: float = 50.0,
 ) -> QState:
     provenance = provenance or field.provenance
     risk = provenance_risk(provenance)
@@ -202,11 +253,21 @@ def compute_q_state(
     temporal_roughness = field.support.get("temporal_roughness")
     spatial_entropy = field.support.get("spatial_entropy")
     q_warnings = list(field.warnings or [])
+    # §3.12.8: fragility is the denominator-mass share below the small-count floor, not
+    # the boolean has-a-denominator proxy the default path carries.
+    if spec_reliability and denom_values and "denom_fragility" not in field.support:
+        _frag = _denom_fragility_share(denom_values, mu_min)
+        if _frag is not None:
+            denom_fragility = _frag
     geo_n_eff = None  # geography-aware spatial effective-n (single source of truth)
     if values or denom_values:
         if values:
-            cv = cv if cv is not None else _cv(values)
-            temporal_roughness = temporal_roughness if temporal_roughness is not None else _temporal_roughness(values)
+            if spec_reliability:
+                cv = cv if cv is not None else _sampling_cv(values, denom_values or None)
+                temporal_roughness = temporal_roughness if temporal_roughness is not None else _second_diff_roughness(values)
+            else:
+                cv = cv if cv is not None else _cv(values)
+                temporal_roughness = temporal_roughness if temporal_roughness is not None else _temporal_roughness(values)
             spatial_entropy = spatial_entropy if spatial_entropy is not None else _spatial_entropy(values)
             if moran_i is None:
                 geo_vals = spatial_values if spatial_values is not None else values

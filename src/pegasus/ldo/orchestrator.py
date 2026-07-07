@@ -101,6 +101,9 @@ def run_ldo(
     kappa: float = 1.0,
     lambda1: float = 0.1,
     lambda2: float = 0.1,
+    select_lambda: bool = False,
+    lambda_grid=None,
+    lambda_beta: float = 0.05,
     edge_threshold: float = 0.05,
     n_subsamples: int = 12,
     subsample_frac: float = 0.7,
@@ -162,6 +165,23 @@ def run_ldo(
     # than silently subsampling; the caller should tile/multi-resolve (§II.7). The guard's
     # byte model matches the fit's actual working dtype (float32_bulk).
     envelope_bytes = assert_within_envelope(p=p, S=S, T=T, K=K, float32_bulk=f32) if enforce_envelope else None
+
+    # Theme-4 StARS: pick λ₁ as the smallest penalty (densest graph) whose subsample
+    # selection instability stays ≤ lambda_beta, before the main fit. Default off →
+    # lambda1 stays as passed (0.1), zero behaviour change.
+    lambda_selection = None
+    if select_lambda:
+        from pegasus.ldo.lambda_select import select_lambda_stars
+        grid = lambda_grid if lambda_grid is not None else np.geomspace(lambda1 / 5.0, lambda1 * 5.0, 7)
+        lambda1, lam_report = select_lambda_stars(
+            gf, grid, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac,
+            seed=seed + 7, beta=lambda_beta,
+            fit_kwargs=dict(kappa=kappa, lambda2=lambda2, edge_threshold=edge_threshold),
+        )
+        lambda_selection = {
+            "method": "stars", "lambda_star": lam_report.lambda_star, "beta": lambda_beta,
+            "lambda_grid": list(lam_report.lambda_grid), "instability": list(lam_report.instability),
+        }
 
     disease_penalty = None
     disease_laplacian = None
@@ -496,6 +516,9 @@ def run_ldo(
         "n_spatial_fields": n_spatial_fields,
         "n_spatial_field_candidates": n_spatial_field_candidates,
         "spatial_field_cap": max_spatial_fields,
+        # Theme-4 StARS: the λ₁ chosen by stability-of-regularization-selection + its
+        # instability path (None when select_lambda is off — the default).
+        "lambda_selection": lambda_selection,
     }
     return LDORun(link_records=records, variables=gf.variables, diagnostics=diagnostics)
 

@@ -33,6 +33,7 @@ class LinkRecord:
     confounding_factor_refs: tuple[str, ...] = ()
     null_strategy: str | None = None
     fdr_method: str | None = None
+    fdr_qvalue: float | None = None            # BH q across discovered edges (dependence-aware, effective-n)
     # Disease-axis provenance (§II.8 / §III.7): the code system the variables live in,
     # the SIM topology role (underlying_cause vs mention), the projection status of the
     # disease concepts, and the Jaccard overlap of the two variables' code sets.
@@ -66,6 +67,7 @@ class LinkRecord:
             "confounding_factor_refs": list(self.confounding_factor_refs),
             "null_strategy": self.null_strategy,
             "fdr_method": self.fdr_method,
+            "fdr_qvalue": self.fdr_qvalue,
             "code_system": self.code_system,
             "topology_role": self.topology_role,
             "projection_status": self.projection_status,
@@ -92,6 +94,7 @@ LINK_RECORD_COLUMNS: tuple[str, ...] = (
     "confounding_factor_refs",
     "null_strategy",
     "fdr_method",
+    "fdr_qvalue",
     "code_system",
     "topology_role",
     "projection_status",

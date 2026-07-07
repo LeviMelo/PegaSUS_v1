@@ -41,13 +41,25 @@ class GaussianField:
         return self.Z.shape
 
 
-def randomized_pit_gaussianize(values: np.ndarray, *, rng: np.random.Generator) -> np.ndarray:
+def randomized_pit_gaussianize(
+    values: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    weights: np.ndarray | None = None,
+    n_pit_draws: int = 1,
+) -> np.ndarray:
     """Randomized-PIT → Gaussian for one flattened variable (NaN preserved).
 
     For each observed value ``x``: ``u = (#{obs < x} + U·#{obs = x}) / n`` with
     ``U ~ Uniform(0,1)``, then ``z = Φ^{-1}(u)``. Continuous data (no ties) reduces
     to the usual rank PIT; discrete/zero-inflated data spreads ties across their
     band.
+
+    ``weights`` (per-cell reliability, same shape) uses a weighted ECDF: the less-than
+    and tie masses are weight sums over total weight, so a low-reliability cell no
+    longer distorts every other cell's rank. ``weights=None`` reproduces the unweighted
+    ECDF exactly. ``n_pit_draws>1`` averages ``z`` over independent ``U`` draws
+    (Rubin-combines the randomized-quantile jitter), stabilizing ties.
     """
     out = np.full(values.shape, np.nan, dtype=np.float64)
     mask = np.isfinite(values)
@@ -55,13 +67,31 @@ def randomized_pit_gaussianize(values: np.ndarray, *, rng: np.random.Generator) 
     n = obs.size
     if n < 2:
         return out
-    order = np.sort(obs)
-    less = np.searchsorted(order, obs, side="left").astype(np.float64)
-    leq = np.searchsorted(order, obs, side="right").astype(np.float64)
-    eq = np.maximum(leq - less, 1.0)
-    u = (less + rng.uniform(0.0, 1.0, size=n) * eq) / n
-    u = np.clip(u, _EPS, 1.0 - _EPS)
-    out[mask] = ndtri(u)
+    order_idx = np.argsort(obs, kind="stable")
+    order = obs[order_idx]
+    if weights is None:
+        less = np.searchsorted(order, obs, side="left").astype(np.float64)
+        leq = np.searchsorted(order, obs, side="right").astype(np.float64)
+        eq = np.maximum(leq - less, 1.0)
+        denom = float(n)
+    else:
+        w = np.asarray(weights, dtype=np.float64)[mask]
+        w = np.where(np.isfinite(w) & (w > 0), w, 0.0)
+        wsorted = w[order_idx]
+        cum = np.concatenate([[0.0], np.cumsum(wsorted)])
+        lo = np.searchsorted(order, obs, side="left")
+        hi = np.searchsorted(order, obs, side="right")
+        less = cum[lo]
+        leq = cum[hi]
+        eq = np.maximum(leq - less, w)  # own-weight is the minimal tie mass for a positive-weight cell
+        denom = float(cum[-1])
+    if denom <= 0:
+        return out
+    z_acc = np.zeros(n, dtype=np.float64)
+    for _ in range(max(1, int(n_pit_draws))):
+        u = (less + rng.uniform(0.0, 1.0, size=n) * eq) / denom
+        z_acc += ndtri(np.clip(u, _EPS, 1.0 - _EPS))
+    out[mask] = z_acc / max(1, int(n_pit_draws))
     return out
 
 
@@ -161,7 +191,12 @@ def count_exposure_gaussianize(
 
 
 def gaussianize_field(
-    field: LDOField, *, seed: int = 0, exposure: np.ndarray | None = None
+    field: LDOField,
+    *,
+    seed: int = 0,
+    exposure: np.ndarray | None = None,
+    use_reliability_ecdf: bool = True,
+    n_pit_draws: int = 1,
 ) -> GaussianField:
     """Apply the copula margin to every variable of an assembled LDO field.
 
@@ -169,6 +204,9 @@ def gaussianize_field(
     with positive exposure uses the overdispersion-aware count-with-exposure margin
     (Poisson/NB/ZINB auto-selected, §III.5 / §6.2), the rest use the randomized-PIT rank
     margin. The chosen count family per variable is recorded on ``count_families``.
+
+    ``use_reliability_ecdf`` weights the rank margin by ``field.W`` (all-ones ⇒ prior
+    behavior); ``n_pit_draws`` averages the randomized-PIT jitter over independent draws.
     """
     rng = np.random.default_rng(seed)
     p, S, T = field.shape
@@ -182,7 +220,10 @@ def gaussianize_field(
             Z[j] = z.reshape(S, T)
             families[field.variables[j]] = fam
         else:
-            Z[j] = randomized_pit_gaussianize(x, rng=rng).reshape(S, T)
+            w = field.W[j].reshape(-1) if use_reliability_ecdf else None
+            Z[j] = randomized_pit_gaussianize(
+                x, rng=rng, weights=w, n_pit_draws=n_pit_draws
+            ).reshape(S, T)
     return GaussianField(
         variables=field.variables,
         space_ids=field.space_ids,

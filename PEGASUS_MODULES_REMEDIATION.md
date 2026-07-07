@@ -28,5 +28,13 @@ W7 lazy Hive views (subsumes T1.6-proper + SIDRA S3/S4 + the unwired `storage/du
 ## TIER-3 — cleanup / dead-code / drift
 `pirs/` residue · EFG materialization-manifest split · 3 fixture-only bundle writers · orphaned `curated_cause_report.py` (wire-or-delete) · `disease/variable_grammar.py` 2nd generator · `SpatialWeightGraph` view API orphaned · REG-07 3-loader unification · SIM cod7/geo-state drift · SINASC race decode divergence · `directly_standardized_rate` int truncation · SIDRA thousands-sep parse · reproducibility manifest hardcoded seed/version · empty-bundle `run_profile` under-requires keys · assorted stale annotations/egg-info.
 
-## Execution order (this wave)
-Correctness blockers first (T1.1, T1.4, T1.3), then the quick RAM/config wins (T1.9, T1.10, T1.11), then M2 float32 (T1.8), then the `datasus_combined` content-addressing (T1.6 short-term) — the biggest storage lever — building toward W7 (the definitive redesign). Each landed with a focused test.
+## Progress log
+**Landed this wave (tested, committed):**
+- ✅ **T1.1** window-safe national cache (`64b20d6`) — the silent-truncation correctness blocker.
+- ✅ **T1.4** EFG stage-workspace deleted after flush (`e999d3a`) — kills the per-run tensor-payload duplicate.
+- ✅ **T1.9** migration candidate pairs O(N²)→O(N·k) + **T1.11** DatasusConfig default unification (`80456ce`).
+- ✅ **M2 (partial)** population-problem inputs stored float32 (`ac17ac0`) — ~8 GB national RAM reclaimed, lossless (solver still f64).
+
+**Remaining, in order:** T1.6 `datasus_combined` content-addressing (biggest storage lever) → T1.3 national race-prior wiring → T1.2 fetch-completeness gate → T1.10 result-array retention → **TIER-2 W7 lazy Hive views** (the definitive storage redesign) + **GPU wiring** (STDFM `prefer_cuda`, population G1) → TIER-3 dead-code cluster. Then materialize the national cache + run the contextual determinant study (needs a persistent background job).
+
+Note: the full float32 SOLVE working-set (§V.4 mixed-precision, the other half of M2) and W7 are the two L-effort redesigns; everything above them is S/M and lands incrementally.

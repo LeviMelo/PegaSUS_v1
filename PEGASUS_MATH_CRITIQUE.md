@@ -115,7 +115,35 @@ These came from reading the actual math in `margins.py`, `covariance.py`, `lowra
 - **recommendation:** precompute the full-graph whitened features once; subsample in the whitened space (respecting A14's block structure). Candidate for GPU batching (many small refits) — see the GPU-rematch ledger.
 - **risk_if_ignored:** stability selection dominates LDO wall-clock at national scale for no benefit.
 
-*(Lead's direct reading continues in Part C after the workflow findings are merged; the modularization + GPU thrusts follow in their own ledgers.)*
+### A16 · `DIRECT-POP-01` — CRITICAL — intercensal (age×sex×race) denominators are prior-dominated ("fabricated demography"), and that uncertainty is never propagated
+- **kind:** identifiability_concern / epidemiological_risk
+- **detail:** The population tensor `P` over (S,T,A,X,R) is pinned by data only at census years (anchors: 2000/2010/2022) and by the per-(locality,time) closure total (a marginal). The full age×sex×race JOINT structure in every INTERCENSAL year is determined by the PRIORS — the cohort-aging recursion from the last census, migration/age second-difference smoothness, and the race-ILR prior — not by observation. So intercensal municipal age-sex-race denominators are substantially MODEL OUTPUT. The flagship C25 study age-standardizes on exactly these denominators, so its rates in ~22 of 25 years rest on a prior-dominated interpolation whose uncertainty is neither quantified nor propagated (compounding A1: even if it were quantified, `W` is ignored by the LDO).
+- **evidence:** `loss.py` — anchors only where observed; closure by projection; aging/race/smoothness are priors; `orchestrator.py` two-layer denominator (closed-form interp + refine).
+- **recommendation:** quantify the data-vs-prior contribution per intercensal cell (e.g. the posterior variance / effective-prior-weight), emit it as a per-cell denominator uncertainty, and propagate it into the rate margins and the LDO `W`. Consider a proper cohort-component demographic model with credible intervals rather than a penalized LS point estimate.
+- **risk_if_ignored:** age-standardized municipal trends reported with false precision; the denominator's model structure leaks into "epidemiological" findings.
+
+### A17 · `DIRECT-POP-02` — HIGH — reconstruction objective weights are hand-set magic numbers governing the data-vs-prior bias-variance tradeoff
+- **kind:** msd_theoretical_fragility / statistical_validity_risk
+- **detail:** `PopulationObjectiveWeights` fixes anchor=10, aging=1, migration=0.1, migration_total=0, race=0, age_smooth=0.05. These are the relative influence of DATA (anchor=10) vs PRIORS (age_smooth=0.05) — a 200:1 hand-chosen ratio — with no calibration to the actual variances of each term. The entire reconstruction's bias-variance tradeoff, and hence the intercensal demography, is set by unjustified constants.
+- **evidence:** `loss.py:33-46` `PopulationObjectiveWeights` defaults.
+- **recommendation:** set weights as inverse noise variances (a proper GLS/hierarchical-Bayes weighting), or profile them by cross-validating held-out census years; report sensitivity.
+- **risk_if_ignored:** reconstructed demography is an artefact of arbitrary regularization strength.
+
+### A18 · `DIRECT-POP-03` — MEDIUM — cohort survival uses `1 − nan_to_num(death_rate, 0)` → missing-mortality cells are treated as immortal
+- **kind:** computational_trap
+- **detail:** The aging recursion uses `survival = 1 − nan_to_num(death_rates, nan=0.0)`. A cell with a MISSING death rate gets `survival = 1.0` (nobody dies), so its aged population is overestimated. Missingness is silently mapped to "no mortality," a directional bias in the cohort projection precisely where mortality data is absent (small/rural municipalities).
+- **evidence:** `loss.py:143-144`.
+- **recommendation:** impute a regional/age-typical survival for missing cells (or widen its uncertainty), not survival=1.
+- **risk_if_ignored:** population over-projected in data-poor cells, deflating their apparent rates.
+
+### A19 · `DIRECT-POP-04` — MEDIUM — the migration tensor is an unidentified smoothness-prior residual reported as a specific flow field
+- **kind:** identifiability_concern
+- **detail:** Municipal age-sex-race net migration is unobserved; the solve produces a specific migration tensor `η` driven almost entirely by the 2nd-difference smoothness prior (w=0.1) plus the per-locality net-total anchor (w=0 by default). The result is a smooth but essentially fabricated flow field that then feeds the population aging recursion. The MSD notes migration unidentifiability, but the pipeline still emits and consumes a point migration field with no uncertainty flag.
+- **evidence:** `loss.py:288-312`; `migration.py` gravity prior; `migration_total` weight default 0.
+- **recommendation:** treat `η` as a nuisance with wide uncertainty (or marginalize it), and do not let its point estimate silently shape the denominator without an uncertainty band.
+- **risk_if_ignored:** the denominator inherits a fabricated migration structure as if observed.
+
+*(Lead's direct reading continues; the modularization + GPU thrusts follow in their own ledgers. Workflow findings append to Part B.)*
 
 ---
 

@@ -44,6 +44,8 @@ class SparseLowRankFit:
     cond_escalated: bool = False        # §V.4: float32 was requested but cond(C) forced float64
     direct_edges: list[tuple[int, int, float]] = field(default_factory=list)   # (i,j,partial_corr) from S
     latent_shared: list[tuple[int, int, float]] = field(default_factory=list)  # (i,j,shared_loading) from L
+    incoherence: float | None = None    # CPW identifiability score in [0,1]; None when L is rank-0
+    well_identified: bool = True        # incoherence above the CPW guard threshold (readout warns if False)
 
 
 def _soft_threshold_offdiag(M: np.ndarray, tau: float) -> np.ndarray:
@@ -109,6 +111,36 @@ def _low_rank_factors(
     return vals[::-1], vecs[:, ::-1]
 
 
+def _cpw_incoherence(
+    S: np.ndarray, factor_loadings: np.ndarray, *, edge_threshold: float
+) -> tuple[float | None, float, float]:
+    """CPW-style identifiability score of a recovered (S, L) split in [0,1].
+
+    Chandrasekaran–Parrilo–Willsky is identifiable when L is *spread* (its column space is
+    diffuse, not aligned to a handful of coordinates) and S is *spiky* (few off-diagonal
+    edges). L's spread is the effective support of the projector ``P = V Vᵀ`` onto its column
+    space: ``diag(P)`` sums to the rank ``r``, so ``k_eff = (Σ diag P)² / Σ diag(P)²`` is the
+    participation number — ``k_eff = p`` for a perfectly uniform driver, ``k_eff ≈ k`` for one
+    concentrated on ``k`` coordinates (a coherent, direct-edge-like component). ``spread =
+    k_eff/p ∈ (0,1]``. A concentrated split (sparse mass collapsed into L's span) drives spread
+    down. Discounted by S's off-diagonal edge density ``deg`` (a dense S is not the CPW spiky
+    part): score = spread·(1−deg)."""
+    p = S.shape[0]
+    r = factor_loadings.shape[1]
+    if r == 0:
+        return None, 0.0, 0.0  # rank-0 L → nothing to disambiguate
+    # Orthonormalize the loadings (randomized-SVD vectors may drift from exact orthonormal).
+    Q, _ = np.linalg.qr(factor_loadings)
+    dP = np.einsum("ij,ij->i", Q, Q)          # diag of the column-space projector, Σ = r
+    k_eff = float(dP.sum() ** 2 / max(np.sum(dP**2), 1e-12))
+    spread = k_eff / p
+    off = ~np.eye(p, dtype=bool)
+    d = np.sqrt(np.clip(np.diag(S), 1e-12, None))
+    partial = np.abs(-S / np.outer(d, d))
+    deg = float(((partial >= edge_threshold) & off).sum()) / max(1, p * (p - 1))
+    return spread * (1.0 - deg), spread, deg
+
+
 def fit_sparse_plus_lowrank(
     emp_cov: np.ndarray,
     *,
@@ -126,6 +158,8 @@ def fit_sparse_plus_lowrank(
     randomized_factors: bool | None = None,
     work_dtype=np.float64,
     cond_escalate_threshold: float = 1e8,
+    adaptive_rho: bool = False,
+    incoherence_threshold: float = 0.35,
     seed: int = 0,
 ) -> SparseLowRankFit:
     """LVGLASSO ADMM: ``Ω = S - L`` from an empirical covariance.
@@ -181,22 +215,26 @@ def fit_sparse_plus_lowrank(
             raise ValueError(f"penalty_matrix must be {(p, p)}, got {penalty_matrix.shape}")
         penalty_matrix = np.clip(0.5 * (penalty_matrix + penalty_matrix.T), 0.0, None)
     penalty = penalty_matrix if penalty_matrix is not None else lambda1
-    tau1 = penalty / rho
     G_sym: np.ndarray | None = None
-    lipschitz = rho
-    tau_pg = tau1
+    g_lmax = 0.0
     if smoothness_operator is not None:
         smoothness_operator = np.asarray(smoothness_operator, dtype=np.float64)
         if smoothness_operator.shape != (p, p):
             raise ValueError(f"smoothness_operator must be {(p, p)}, got {smoothness_operator.shape}")
         G_sym = 0.5 * (smoothness_operator + smoothness_operator.T)  # symmetrize; §III.4(5)
-        # Prox-gradient step for the S-subproblem (ℓ1 + (1/2)tr(SᵀG S) + (ρ/2)‖S−M‖²): the
-        # smooth part has Lipschitz constant ρ + λ_max(G), so a step of 1/lipschitz is
-        # contractive (the crude 1/ρ linearization diverges when λ_max(G) is not ≪ ρ).
-        lipschitz = float(rho + max(0.0, np.linalg.eigvalsh(G_sym).max()))
-        tau_pg = penalty / lipschitz
-    C_over_rho = C / rho            # loop-invariant; was recomputed every ADMM iteration
-    l2_over_rho = lambda2 / rho     # loop-invariant shift for the L-step PSD projection
+        g_lmax = float(max(0.0, np.linalg.eigvalsh(G_sym).max()))
+
+    def _rho_invariants(rho_: float):
+        # All rho-dependent step constants, recomputed together so an adaptive rho update stays
+        # coherent with the initial (fixed-rho) values — at a fixed rho this reproduces them exactly.
+        tau1_ = penalty / rho_
+        # S-subproblem Lipschitz constant ρ + λ_max(G); step 1/lipschitz is contractive (the crude
+        # 1/ρ linearization diverges when λ_max(G) is not ≪ ρ). G=None ⇒ lipschitz=ρ, tau_pg=tau1.
+        lipschitz_ = rho_ + g_lmax if G_sym is not None else rho_
+        tau_pg_ = penalty / lipschitz_
+        return tau1_, lipschitz_, tau_pg_, C / rho_, lambda2 / rho_
+
+    tau1, lipschitz, tau_pg, C_over_rho, l2_over_rho = _rho_invariants(rho)
     S = np.eye(p, dtype=work_dtype)
     L = np.zeros((p, p), dtype=work_dtype)
     U = np.zeros((p, p), dtype=work_dtype)
@@ -204,6 +242,7 @@ def fit_sparse_plus_lowrank(
     converged = False
     it = 0
     for it in range(1, max_iter + 1):
+        Z_prev = (S - L).astype(np.float64, copy=False) if adaptive_rho else None  # dual resid s = ρ(Z−Z_prev)
         # R-step: prox of -logdet + linear term. The eigh runs in float64 (reduction); cast
         # the result back to the working dtype so the stored iterate stays float32 when asked.
         R = _prox_neg_logdet(S - L - U - C_over_rho, rho).astype(work_dtype, copy=False)
@@ -229,6 +268,24 @@ def fit_sparse_plus_lowrank(
         if pn / rn < tol:
             converged = True
             break
+        # Adaptive rho (Boyd §3.4.1 residual balancing): the fixed point is rho-independent (rho
+        # only scales the dual step), so balancing primal r=R−(S−L) against dual s=ρ(Z−Z_prev)
+        # reaches the SAME converged S/L in far fewer iterations. OPT-IN (default off): at the
+        # loose production tol the two rho schedules stop at different pre-convergence iterates, so
+        # the readout is only result-preserving in the tight-tol limit — enable it with a tolerance
+        # tight enough to certify convergence. Rescale the scaled dual U by rho_old/rho_new; cap rho
+        # to a bounded window. adaptive_rho=False = the exact fixed-rho path (byte-identical).
+        if adaptive_rho:
+            dual = rho * float(np.linalg.norm((S - L).astype(np.float64, copy=False) - Z_prev))
+            new_rho = rho
+            if pn > 10.0 * dual:
+                new_rho = min(rho * 2.0, 1e6)
+            elif dual > 10.0 * pn:
+                new_rho = max(rho / 2.0, 1e-6)
+            if new_rho != rho:
+                U = (U * (rho / new_rho)).astype(work_dtype, copy=False)
+                rho = new_rho
+                tau1, lipschitz, tau_pg, C_over_rho, l2_over_rho = _rho_invariants(rho)
 
     # Promote the converged iterates to float64 for the edge/factor readout so float32
     # round-off cannot flip an edge near the selection threshold (§V.1: reductions in f64).
@@ -294,12 +351,19 @@ def fit_sparse_plus_lowrank(
         key=lambda e: e[2], reverse=True,
     )
 
+    # CPW identifiability diagnostic: score the recovered split (does NOT alter S/L). A low
+    # score means S's mass sits inside L's span — the split is arbitrary, so a downstream
+    # readout should treat latent_shared edges as suspect. Result-preserving annotation only.
+    incoherence, _mu, _deg = _cpw_incoherence(S, factor_loadings, edge_threshold=edge_threshold)
+    well_identified = incoherence is None or incoherence >= incoherence_threshold
+
     return SparseLowRankFit(
         S=S, L=L, precision=precision,
         factor_loadings=factor_loadings, factor_values=factor_values,
         converged=converged, iterations=it, numerical_error=numerical_error,
         work_dtype=str(work_dtype), cond_escalated=cond_escalated,
         direct_edges=direct_edges, latent_shared=latent_shared,
+        incoherence=incoherence, well_identified=well_identified,
     )
 
 

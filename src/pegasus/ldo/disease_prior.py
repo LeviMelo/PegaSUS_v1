@@ -107,26 +107,146 @@ def hierarchical_disease_laplacians(variables: tuple[str, ...], graph: "DiseaseG
 
 
 def sum_of_scales_disease_operator(
-    variables: tuple[str, ...], graph: "DiseaseGraph", scale_precisions: dict[str, float],
+    variables: tuple[str, ...], graph: "DiseaseGraph",
+    scale_precisions: dict[str, float] | None = None, *,
+    adaptive: bool = False,
+    field_values_by_variable: dict[str, np.ndarray] | None = None,
 ) -> np.ndarray | None:
     """The §III.3 sum-of-scales disease GMRF operator ``G_D = Σ_level τ_level · L_level``.
 
     Distinct per-scale precisions (e.g. a rare leaf shrinks strongly toward its category but weakly
     toward its chapter) replace the flat single-γ Laplacian. Returns ``None`` when no scale has a
     positive precision or the graph induces no coupling — the caller then falls back to the flat
-    ``L_D`` (or no disease prior)."""
+    ``L_D`` (or no disease prior).
+
+    Each ``L_level`` is a graph Laplacian (zero row sums), so ``G_D`` penalises only *differences*
+    between related-disease precision rows — cross-disease smoothness, never a variable's own level
+    (``xᵀG_D x`` is invariant to a constant shift of ``x``). Requirement (1) holds by construction.
+
+    ``adaptive=True`` (opt-in): estimate the per-scale precisions from ``field_values_by_variable``
+    by empirical Bayes (:func:`estimate_disease_scale_precisions`) instead of the fixed
+    ``scale_precisions`` constant, so genuinely-divergent blocks override the prior. The default
+    (``adaptive=False`` with explicit ``scale_precisions``) reproduces the original behavior exactly.
+    """
     laps = hierarchical_disease_laplacians(variables, graph)
     if not laps:
         return None
+    if adaptive:
+        if field_values_by_variable is None:
+            raise ValueError("adaptive=True requires field_values_by_variable")
+        precisions = estimate_disease_scale_precisions(field_values_by_variable, variables, graph)
+    else:
+        precisions = scale_precisions or {}
     p = len(variables)
     G = np.zeros((p, p), dtype=np.float64)
     used = False
     for name, L in laps.items():
-        tau = float(scale_precisions.get(name, 0.0))
+        tau = float(precisions.get(name, 0.0))
         if tau > 0.0:
             G = G + tau * L
             used = True
     return G if used else None
+
+
+def _scale_masks(variables: tuple[str, ...], graph: "DiseaseGraph") -> dict[str, np.ndarray]:
+    """Per-scale boolean adjacency masks (same-category / same-block / same-chapter), aligned to
+    the LDO variables. A block of related diseases at a scale is a connected component of its mask."""
+    W = variable_affinity(variables, graph)
+    return {
+        "category": W >= 0.99,
+        "block": (W >= 0.4) & (W < 0.99),
+        "chapter": (W >= 0.15) & (W < 0.4),
+    }
+
+
+def _connected_components(mask: np.ndarray) -> list[list[int]]:
+    """Blocks of mutually-related variables: connected components of a symmetric adjacency mask
+    (isolated singletons omitted — a block needs ≥2 members to borrow strength)."""
+    A = np.asarray(mask, dtype=bool).copy()
+    np.fill_diagonal(A, False)
+    n = A.shape[0]
+    seen = np.zeros(n, dtype=bool)
+    comps: list[list[int]] = []
+    for start in range(n):
+        if seen[start] or not A[start].any():
+            continue
+        stack, comp = [start], []
+        seen[start] = True
+        while stack:
+            u = stack.pop()
+            comp.append(u)
+            for v in np.nonzero(A[u] & ~seen)[0]:
+                seen[v] = True
+                stack.append(int(v))
+        if len(comp) >= 2:
+            comps.append(sorted(comp))
+    return comps
+
+
+def _block_tau2(values: list[np.ndarray]) -> float:
+    """Method-of-moments empirical-Bayes shrinkage precision for one block of related diseases.
+
+    ``τ² = max(0, between-disease var of the block's per-disease means − mean within-disease noise)``
+    normalized to the within-noise scale. A block whose diseases are genuinely alike (between ≈ noise)
+    → large τ² (strong shrinkage: the prior wins). A block whose diseases genuinely differ (between ≫
+    noise) → τ² → 0 (weak shrinkage: the data overrides the prior)."""
+    means = np.array([float(np.nanmean(v)) for v in values if v.size], dtype=np.float64)
+    if means.size < 2:
+        return 0.0
+    within = np.array(
+        [float(np.nanvar(v, ddof=1)) / max(1, v.size) for v in values if v.size > 1],
+        dtype=np.float64,
+    )
+    noise = float(np.mean(within)) if within.size else 0.0
+    between = float(np.var(means, ddof=1))
+    signal = max(0.0, between - noise)              # true between-disease dispersion
+    return noise / (noise + signal) if (noise + signal) > 0 else 0.0
+
+
+def estimate_disease_scale_precisions(
+    field_values_by_variable: dict[str, np.ndarray],
+    variables: tuple[str, ...],
+    graph: "DiseaseGraph",
+) -> dict[str, float]:
+    """Empirical-Bayes per-scale shrinkage precisions τ²_level estimated FROM THE DATA (§III.3).
+
+    For each scale (category/block/chapter) and each block of mutually-related variables at that
+    scale, method-of-moments ``τ² = noise / (noise + max(0, between − noise))`` (:func:`_block_tau2`):
+    ≈1 when the related diseases genuinely agree (shrink hard), →0 when they genuinely diverge (let
+    the data speak). The scale's precision is the mean block τ² (scales/blocks with no data or no
+    ≥2-member block contribute nothing)."""
+    masks = _scale_masks(variables, graph)
+    vals = [np.asarray(field_values_by_variable.get(v, np.empty(0)), float).ravel() for v in variables]
+    out: dict[str, float] = {}
+    for name, mask in masks.items():
+        taus = [_block_tau2([vals[i] for i in comp]) for comp in _connected_components(mask)]
+        if taus:
+            out[name] = float(np.mean(taus))
+    return out
+
+
+def heavily_shrunk_blocks(
+    field_values_by_variable: dict[str, np.ndarray],
+    variables: tuple[str, ...],
+    graph: "DiseaseGraph",
+    *, threshold: float = 0.75,
+) -> list[dict]:
+    """Flag blocks whose adaptive τ² exceeds ``threshold`` — a downstream consumer warns that these
+    variables' estimates are heavily borrowed from their hierarchical neighbours (§III.4(5)). Each
+    entry: ``{scale, variables, tau2}``."""
+    masks = _scale_masks(variables, graph)
+    vals = [np.asarray(field_values_by_variable.get(v, np.empty(0)), float).ravel() for v in variables]
+    flagged: list[dict] = []
+    for name, mask in masks.items():
+        for comp in _connected_components(mask):
+            tau2 = _block_tau2([vals[i] for i in comp])
+            if tau2 > threshold:
+                flagged.append({
+                    "scale": name,
+                    "variables": tuple(variables[i] for i in comp),
+                    "tau2": tau2,
+                })
+    return flagged
 
 
 def penalty_from_affinity(
@@ -173,6 +293,8 @@ __all__ = [
     "hierarchical_disease_laplacians_from_affinity",
     "hierarchical_disease_laplacians",
     "sum_of_scales_disease_operator",
+    "estimate_disease_scale_precisions",
+    "heavily_shrunk_blocks",
     "penalty_from_affinity",
     "disease_penalty_matrix",
     "tile_penalty_across_lags",

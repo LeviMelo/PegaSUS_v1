@@ -23,17 +23,50 @@ import numpy as np
 _EPS = 1e-12
 
 
+_ITS_MIN_SIDE = 4  # minimum pre- and post-shock run length for an identifiable segment
+
+
 @dataclass(frozen=True)
 class ITSResult:
     shock_index: int
     level_change: float      # β2: immediate jump at the shock
     slope_change: float      # β3: change in trend after the shock
-    level_t: float           # t-statistic for the level change
+    level_t: float           # OLS t-statistic for the level change (unchanged: iid-error baseline)
     slope_t: float
+    durbin_watson: float = 2.0     # ≈2 ⇒ no lag-1 autocorrelation; <2 ⇒ positive autocorrelation
+    autocorrelated: bool = False   # DW outside [dw_lo, 4−dw_lo] → single-clean-break assumption strained
+    level_t_hac: float = 0.0       # Newey–West (HAC) t: OLS t deflated for serial correlation
 
 
-def interrupted_time_series(y: np.ndarray, shock_index: int) -> ITSResult:
-    """Segmented-regression ITS effect of an interruption at ``shock_index``."""
+def _durbin_watson(resid: np.ndarray) -> float:
+    d = np.diff(resid)
+    denom = float(resid @ resid)
+    return float((d @ d) / denom) if denom > _EPS else 2.0
+
+
+def _hac_se(X: np.ndarray, resid: np.ndarray, xtx_inv: np.ndarray, *, lags: int) -> np.ndarray:
+    """Newey–West HAC standard errors (Bartlett kernel) — robust to residual autocorrelation.
+
+    ITS residuals are serially correlated when the series is not a single clean break; iid OLS
+    SEs then understate uncertainty. HAC widens them so a break riding on an autocorrelated trend
+    is not called significant on spurious precision."""
+    n = X.shape[0]
+    u = X * resid[:, None]
+    S = u.T @ u
+    for lag in range(1, lags + 1):
+        w = 1.0 - lag / (lags + 1.0)
+        g = u[lag:].T @ u[:-lag]
+        S += w * (g + g.T)
+    cov = xtx_inv @ S @ xtx_inv
+    return np.sqrt(np.clip(np.diag(cov), _EPS, None))
+
+
+def interrupted_time_series(y: np.ndarray, shock_index: int, *, dw_lo: float = 1.4) -> ITSResult:
+    """Segmented-regression ITS effect of an interruption at ``shock_index``.
+
+    Reports OLS ``level_t``/``slope_t`` (unchanged) plus a lag-1 Durbin–Watson autocorrelation
+    diagnostic and a Newey–West HAC ``level_t_hac``; ``autocorrelated`` flags a strained
+    single-clean-break assumption."""
     y = np.asarray(y, dtype=np.float64)
     n = y.size
     if not (1 <= shock_index < n - 1):
@@ -48,16 +81,23 @@ def interrupted_time_series(y: np.ndarray, shock_index: int) -> ITSResult:
     sigma2 = float(resid @ resid) / dof
     xtx_inv = np.linalg.pinv(X.T @ X)
     se = np.sqrt(np.clip(sigma2 * np.diag(xtx_inv), _EPS, None))
+    dw = _durbin_watson(resid)
+    autocorr = dw < dw_lo or dw > (4.0 - dw_lo)
+    lags = max(1, int(round(n ** 0.25)))
+    se_hac = _hac_se(X, resid, xtx_inv, lags=lags)
     return ITSResult(
         shock_index=shock_index,
         level_change=float(beta[2]),
         slope_change=float(beta[3]),
         level_t=float(beta[2] / se[2]),
         slope_t=float(beta[3] / se[3]),
+        durbin_watson=dw,
+        autocorrelated=bool(autocorr),
+        level_t_hac=float(beta[2] / se_hac[2]),
     )
 
 
-def detect_structural_break(y: np.ndarray, *, min_t: float = 3.0, margin: int = 4) -> int | None:
+def detect_structural_break(y: np.ndarray, *, min_t: float = 3.0, margin: int = _ITS_MIN_SIDE) -> int | None:
     """Return the interior index whose ITS level-change is most significant, or ``None``.
 
     A cheap trigger for ITS: scan candidate breakpoints and keep the one with the largest
@@ -65,6 +105,8 @@ def detect_structural_break(y: np.ndarray, *, min_t: float = 3.0, margin: int = 
     """
     y = np.asarray(y, dtype=np.float64)
     n = y.size
+    if n < 2 * margin:
+        return None
     best_idx, best_t = None, min_t
     for idx in range(margin, n - margin):
         res = interrupted_time_series(y, idx)
@@ -159,13 +201,22 @@ def escalate_rung2_its(records, series_by_var, *, min_level_t: float = 3.0,
                     f"rung2_its_shock_t{brk}"),
             ))
             continue
+        # Autocorrelated ITS residuals strain the single-clean-break assumption: the iid-error
+        # t is anticonservative. Annotate the HAC-deflated t and flag the widened uncertainty
+        # (result-preserving: the promotion still turns on the OLS |level_t|).
+        ac_warn = ()
+        if its.autocorrelated:
+            ac_warn = (
+                "its_autocorrelated_effect_uncertain",
+                f"rung2_its_durbin_watson_{its.durbin_watson:.2f}",
+                f"rung2_its_level_t_hac_{its.level_t_hac:.2f}")
         out.append(_replace(
             r, causal_rung=2,
             causal_assumptions=tuple(dict.fromkeys(
                 r.causal_assumptions + ("interrupted_time_series", "negative_control_outcomes"))),
             warnings=r.warnings + (
                 f"rung2_its_shock_t{brk}", f"rung2_its_level_t_{its.level_t:.2f}",
-                f"rung2_negative_control_clear:{nc_frac:.2f}"),
+                f"rung2_negative_control_clear:{nc_frac:.2f}") + ac_warn,
         ))
     return out
 

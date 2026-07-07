@@ -113,15 +113,34 @@ def _partial_correlation(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
     return float(np.mean(ra * rb) / denom)
 
 
+def _collider_signal(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> tuple[float, float]:
+    """Return ``(marginal_|corr(A,B)|, conditional_|pcorr(A,B|C)|)`` — the collider evidence."""
+    a, b, c = _standardize(a), _standardize(b), _standardize(c)
+    return abs(float(np.mean(a * b))), abs(_partial_correlation(a, b, c))
+
+
 def is_collider(
     a: np.ndarray, b: np.ndarray, c: np.ndarray, *,
     indep_threshold: float = 0.1, dep_threshold: float = 0.2,
 ) -> bool:
     """A→C←B when the parents A,B are marginally independent but dependent given C."""
-    a, b, c = _standardize(a), _standardize(b), _standardize(c)
-    marginal = abs(float(np.mean(a * b)))
-    conditional = abs(_partial_correlation(a, b, c))
+    marginal, conditional = _collider_signal(a, b, c)
     return marginal < indep_threshold and conditional > dep_threshold
+
+
+def collider_stability(
+    a: np.ndarray, b: np.ndarray, c: np.ndarray, *,
+    indep_threshold: float = 0.1, dep_threshold: float = 0.2,
+) -> float:
+    """Faithfulness margin of the v-structure signal (≤0 ⇒ not a stable collider).
+
+    How far both conditions clear their thresholds: the marginal-independence slack
+    ``(indep_threshold − |corr|)`` and the conditional-dependence slack
+    ``(|pcorr| − dep_threshold)``, taken as their minimum. A near-threshold triple —
+    where the CI calls could flip on sampling noise — scores ~0 and is left undirected
+    rather than over-committed."""
+    marginal, conditional = _collider_signal(a, b, c)
+    return min(indep_threshold - marginal, conditional - dep_threshold)
 
 
 def orient_edge(record: LinkRecord, data: dict[str, np.ndarray]) -> LinkRecord:
@@ -146,8 +165,14 @@ def orient_edge(record: LinkRecord, data: dict[str, np.ndarray]) -> LinkRecord:
     result = lingam_pairwise_direction(x, y)
     if result is None:
         # Undirected: the LDO associational baseline (Rung-0), no orientation assumption met.
-        return replace(record, causal_rung=0,
-                       warnings=record.warnings + ("orientation_undirected_unidentifiable",))
+        # LiNGAM's identifiability licence is non-Gaussianity; if BOTH endpoints are effectively
+        # Gaussian the direction is provably unrecoverable (this fires when the source was a
+        # GaussianField and raw values were unavailable) — flag it explicitly rather than
+        # letting a downstream reader mistake it for a genuinely tested-but-symmetric edge.
+        w = record.warnings + ("orientation_undirected_unidentifiable",)
+        if not (is_non_gaussian(x) or is_non_gaussian(y)):
+            w = w + ("lingam_gaussian_unidentifiable",)
+        return replace(record, causal_rung=0, warnings=w)
     direction, confidence = result
     if direction == "y->x":  # cause is the current target → swap so source = cause
         record = replace(record, source_var=record.target_var, target_var=record.source_var)
@@ -159,15 +184,17 @@ def orient_edge(record: LinkRecord, data: dict[str, np.ndarray]) -> LinkRecord:
 
 
 def apply_collider_orientation(
-    records: list[LinkRecord], data: dict[str, np.ndarray]
+    records: list[LinkRecord], data: dict[str, np.ndarray], *,
+    stability_margin: float = 0.02, apply_meek: bool = False,
 ) -> list[LinkRecord]:
     """Rung-1 collider/v-structure orientation (§IV): for every unshielded triple A–C–B (A,B
     both linked to C but NOT to each other), if A⊥B marginally yet A⊥̸B|C, orient A→C←B.
 
-    Operates over the contemporaneous skeleton; each parent edge is directed into the collider
-    C and marked Rung-1 with the ``collider_v_structure`` assumption. Machine-checkable, so it
-    is auto-applied (unlike Rung-3). Conflicting triples resolve to the last consistent
-    orientation — a conservative first pass, not a full PC constraint propagation."""
+    Faithfulness guard (default-on): only commit when the v-structure signal clears both CI
+    thresholds by ``stability_margin`` (``collider_stability > margin``). A near-threshold triple —
+    where the independence calls could flip on sampling noise — is left undirected and tagged
+    ``collider_unstable_left_undirected`` rather than over-committed. ``apply_meek`` (opt-in) then
+    runs Meek rule R1 to propagate consistency (a→c, c–x unshielded ⇒ c→x)."""
     from collections import defaultdict
 
     neighbours: dict[str, set[str]] = defaultdict(set)
@@ -178,6 +205,7 @@ def apply_collider_orientation(
             neighbours[r.target_var].add(r.source_var)
             edge_by_pair[frozenset((r.source_var, r.target_var))] = idx
     oriented: dict[int, LinkRecord] = {}
+    directed_into: dict[str, set[str]] = defaultdict(set)  # collider C -> {parents}, for Meek R1
     for c in sorted(neighbours):
         nbrs = sorted(neighbours[c])
         for i in range(len(nbrs)):
@@ -188,7 +216,16 @@ def apply_collider_orientation(
                 da, db, dc = data.get(a), data.get(b), data.get(c)
                 if da is None or db is None or dc is None:
                     continue
-                if not is_collider(da, db, dc):
+                if collider_stability(da, db, dc) <= stability_margin:
+                    # not a collider, OR too close to the CI thresholds to trust — leave undirected
+                    if is_collider(da, db, dc):
+                        for parent in (a, b):
+                            idx = edge_by_pair.get(frozenset((parent, c)))
+                            if idx is not None and idx not in oriented:
+                                r = records[idx]
+                                if "collider_unstable_left_undirected" not in r.warnings:
+                                    oriented[idx] = replace(
+                                        r, warnings=r.warnings + ("collider_unstable_left_undirected",))
                     continue
                 for parent in (a, b):  # orient parent → C (both point into the collider)
                     idx = edge_by_pair.get(frozenset((parent, c)))
@@ -201,19 +238,58 @@ def apply_collider_orientation(
                         warnings=r.warnings + ("oriented_collider",),
                     )
                     oriented[idx] = r
-    return [oriented.get(idx, r) for idx, r in enumerate(records)]
+                    directed_into[c].add(parent)
+
+    out = [oriented.get(idx, r) for idx, r in enumerate(records)]
+    if apply_meek:
+        out = _meek_r1(out, edge_by_pair, neighbours, directed_into)
+    return out
 
 
-def orient_links(records: list[LinkRecord], data: dict[str, np.ndarray]) -> list[LinkRecord]:
+def _meek_r1(records, edge_by_pair, neighbours, directed_into):
+    """Meek rule R1: for a directed a→c and an unshielded undirected c–x (a,x non-adjacent),
+    orient c→x (else a→c→x would spawn a new unshielded collider). Orients only currently
+    UNDIRECTED contemporaneous edges — never overrides an existing direction — so it completes
+    consistency without contradicting the v-structures."""
+    records = list(records)
+    directed_pairs = {frozenset((p, c)) for c, ps in directed_into.items() for p in ps}
+    for c, parents in directed_into.items():
+        for x in sorted(neighbours[c]):
+            if x in parents or x == c:
+                continue
+            key = frozenset((c, x))
+            if key in directed_pairs:
+                continue
+            if any(x in neighbours[a] for a in parents):  # shielded → R1 does not fire
+                continue
+            idx = edge_by_pair.get(key)
+            if idx is None:
+                continue
+            r = records[idx]
+            if r.edge_type != "contemporaneous" or "oriented_collider" in r.warnings:
+                continue
+            records[idx] = replace(
+                r, source_var=c, target_var=x, causal_rung=1,
+                causal_assumptions=tuple(dict.fromkeys(r.causal_assumptions + ("meek_r1",))),
+                warnings=r.warnings + ("oriented_meek_r1",))
+            directed_pairs.add(key)
+    return records
+
+
+def orient_links(
+    records: list[LinkRecord], data: dict[str, np.ndarray], *, apply_meek: bool = False,
+) -> list[LinkRecord]:
     """Apply Rung-1 orientation to every edge (§IV): pairwise non-Gaussian LiNGAM, then
     collider/v-structure detection over the contemporaneous skeleton."""
-    return apply_collider_orientation([orient_edge(r, data) for r in records], data)
+    return apply_collider_orientation(
+        [orient_edge(r, data) for r in records], data, apply_meek=apply_meek)
 
 
 __all__ = [
     "is_non_gaussian",
     "lingam_pairwise_direction",
     "is_collider",
+    "collider_stability",
     "orient_edge",
     "apply_collider_orientation",
     "orient_links",

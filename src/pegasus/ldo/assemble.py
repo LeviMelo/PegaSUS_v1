@@ -38,6 +38,7 @@ class LDOField:
     X: np.ndarray                     # (p, S, T) values (nan where absent)
     W: np.ndarray                     # (p, S, T) reliability weights in [0,1]
     resolution: str = "year"
+    exposure: np.ndarray | None = None  # (p, S, T) denominator for count-with-exposure margin (§III.5)
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -56,6 +57,7 @@ def assemble_ldo_tensor(
     *,
     field_weights: Mapping[str, float] | None = None,
     keep_variables: set[str] | frozenset[str] | None = None,
+    exposure_field_by_variable: Mapping[str, str] | None = None,
 ) -> LDOField:
     """Assemble ``X`` and ``W`` from a compiled CommonPanel.
 
@@ -93,6 +95,7 @@ def assemble_ldo_tensor(
     si_arr = si_col.to_numpy()
     ti_arr = ti_col.to_numpy()
     valid_cell = (si_arr >= 0) & (ti_arr >= 0)
+    si_arr0, ti_arr0 = si_arr, ti_arr  # value-scatter cell indices (manifest block reuses the names)
     X = np.full((p, S, T), np.nan, dtype=np.float64)
     for vi, var in enumerate(variables):
         vals = values[var].cast(pl.Float64).to_numpy()
@@ -136,7 +139,24 @@ def assemble_ldo_tensor(
 
     # A NaN value can never carry positive weight.
     W[np.isnan(X)] = 0.0
-    return LDOField(variables=variables, space_ids=space_ids, time_ids=time_ids, X=X, W=W, resolution=panel.resolution)
+
+    # §III.5 count-with-exposure: build the per-variable denominator tensor for the count
+    # variables whose exposure field is declared. The exposure field is any numeric panel
+    # column (typically the population denominator) — it need not itself be a kept variable.
+    exposure = None
+    if exposure_field_by_variable:
+        exposure = np.full((p, S, T), np.nan, dtype=np.float64)
+        for var, exp_field in exposure_field_by_variable.items():
+            vi = var_index.get(var)
+            if vi is None or exp_field not in values.columns:
+                continue
+            evals = values[exp_field].cast(pl.Float64).to_numpy()
+            ok = valid_cell & np.isfinite(evals)
+            exposure[vi, si_arr0[ok], ti_arr0[ok]] = evals[ok]
+        if not np.isfinite(exposure).any():
+            exposure = None
+    return LDOField(variables=variables, space_ids=space_ids, time_ids=time_ids,
+                    X=X, W=W, resolution=panel.resolution, exposure=exposure)
 
 
 __all__ = ["LDOField", "assemble_ldo_tensor"]

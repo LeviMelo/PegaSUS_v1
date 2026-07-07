@@ -51,15 +51,23 @@ def _prepare_ldo_inputs(
     seed: int,
     keep_variables: set[str] | frozenset[str] | None = None,
     exposure=None,
+    exposure_field_by_variable=None,
 ) -> tuple[LDOField | None, GaussianField]:
     """Return ``(raw_field, gaussian_field)``. The raw (pre-gaussianized) LDOField is
     kept for causal orientation — LiNGAM cannot identify direction on gaussianized
-    data. It is ``None`` when the source is already a GaussianField (no raw values)."""
+    data. It is ``None`` when the source is already a GaussianField (no raw values).
+
+    ``exposure_field_by_variable`` maps a count variable to its denominator field in the
+    panel; the assembled per-variable exposure tensor drives the §III.5 count-with-exposure
+    margin (extensive counts modelled net of exposure), overriding an explicit ``exposure``."""
     if isinstance(source, CommonPanel):
-        raw = assemble_ldo_tensor(source, keep_variables=keep_variables)
-        return raw, gaussianize_field(raw, seed=seed, exposure=exposure)
+        raw = assemble_ldo_tensor(source, keep_variables=keep_variables,
+                                  exposure_field_by_variable=exposure_field_by_variable)
+        exp = raw.exposure if raw.exposure is not None else exposure
+        return raw, gaussianize_field(raw, seed=seed, exposure=exp)
     if isinstance(source, LDOField):
-        return source, gaussianize_field(source, seed=seed, exposure=exposure)
+        exp = source.exposure if source.exposure is not None else exposure
+        return source, gaussianize_field(source, seed=seed, exposure=exp)
     if isinstance(source, GaussianField):
         return None, source
     raise TypeError(f"run_ldo cannot consume {type(source).__name__}")
@@ -106,6 +114,7 @@ def run_ldo(
     gamma_disease: float = 0.1,
     variable_meta: dict[str, dict] | None = None,
     exposure=None,
+    exposure_field_by_variable=None,
 ) -> LDORun:
     """Fit the LDO and read off certified LinkRecords in one pass.
 
@@ -113,7 +122,8 @@ def run_ldo(
     prior: related disease-concept variables get a lower ℓ1 penalty so their sparse
     links survive. Absent it, the estimator is the plain scalar-penalty LVGLASSO.
     """
-    raw_field, gf = _prepare_ldo_inputs(source, seed=seed, keep_variables=keep_variables, exposure=exposure)
+    raw_field, gf = _prepare_ldo_inputs(source, seed=seed, keep_variables=keep_variables,
+                                        exposure=exposure, exposure_field_by_variable=exposure_field_by_variable)
     p, S, T = gf.shape
 
     requested_K = K
@@ -244,6 +254,12 @@ def run_ldo(
         "n_rung0": sum(1 for r in records if (r.causal_rung or 0) == 0),
         "n_rung1": sum(1 for r in records if r.causal_rung == 1),
         "n_rung2": sum(1 for r in records if r.causal_rung == 2),
+        # §III.5: number of variables modelled with the count-with-exposure (Poisson-offset)
+        # margin rather than the plain rank margin (extensive counts net of exposure).
+        "count_exposure_variables": (
+            int(np.isfinite(raw_field.exposure).any(axis=(1, 2)).sum())
+            if raw_field is not None and getattr(raw_field, "exposure", None) is not None else 0
+        ),
         # §V.6(2): mean propagated numerical (randomized-SVD) error folded into edge uncertainty.
         "numerical_error": float(lagged.fit.numerical_error),
         # §VIII.2(3): typed coverage manifest (searched + explicitly-unsearched regions).

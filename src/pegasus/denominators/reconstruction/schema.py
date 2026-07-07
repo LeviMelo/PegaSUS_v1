@@ -12,16 +12,26 @@ from pegasus.core.schemas import DenominatorContract
 PopulationTensorMode = Literal["independent_denominator", "sim_informed_denominator"]
 
 
+# M2 (§V.1 memory): the problem INPUT arrays are stored float32 — they are municipality-or-smaller
+# counts/rates (a municipality-year population ≤ ~12M < the 16.7M float32 integer-exact bound), so
+# float32 storage is lossless at these magnitudes and halves the ~10-array problem-storage term
+# (national 209M cells: 16.7 GB f64 → 8.4 GB f32). The solver/loss still promote to float64 at read
+# (`np.asarray(..., float64)`), so the OPTIMIZATION is numerically unchanged — only the resident
+# input footprint shrinks. (A full float32 SOLVE working-set is the larger §V.4 mixed-precision
+# follow-on and is not this change.)
+_STORE_DTYPE = np.float32
+
+
 def _to_f64_array(value: Any) -> np.ndarray | None:
-    """Normalize an ``O(n_cells)`` value field to a float64 numpy array (``None`` elements → NaN,
+    """Normalize an ``O(n_cells)`` value field to a compact numpy array (``None`` elements → NaN,
     which every consumer treats as 'absent'). A whole-field ``None`` stays ``None`` (term skipped).
 
-    This is the §V.1 memory contract: the problem holds numpy arrays, not Python float tuples
-    (~32 B/element → tens of GB at national scale), and the solver/loss read them directly instead
-    of rebuilding a numpy array from the tuple every iteration."""
+    Stored in :data:`_STORE_DTYPE` (float32) — the problem holds numpy arrays, not Python float
+    tuples (~32 B/element → tens of GB at national scale), and the solver reads them directly (then
+    promotes to float64 for the optimization, lossless at municipality-scale magnitudes)."""
     if value is None:
         return None
-    return np.asarray(value, dtype=np.float64)  # None → NaN in a float cast
+    return np.asarray(value, dtype=_STORE_DTYPE)  # None → NaN in a float cast
 
 
 def _to_bool_array(value: Any) -> np.ndarray | None:

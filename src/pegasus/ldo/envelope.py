@@ -64,6 +64,30 @@ def estimate_ldo_bytes(*, p: int, S: int, T: int, K: int) -> int:
     return int((spatial + samples + cov) * _DTYPE_BYTES)
 
 
+def estimate_residual_scan_bytes(*, p: int, n_eff: int, budget: str = "standard", max_exact: int = 5000) -> int:
+    """Peak retained bytes of the residual-HSIC scan's per-variable representation cache.
+
+    ``scan_residual_nonlinear_edges`` precomputes and RETAINS a representation for every one
+    of ``p`` variables before pairing (residual_scan._build_var_reprs): in exact mode
+    (``n_eff <= max_exact``) two dense ``n_eff × n_eff`` float64 centered kernels per variable;
+    in the RFF/Nyström approx modes two ``n_eff × n_features`` float64 feature maps. This term
+    is absent from :func:`estimate_ldo_bytes` (which models only the fit path) yet is the
+    single largest LDO allocation at national scale — e.g. exact ``n_eff=5000, p=130`` ≈ 48 GB.
+    Float64 (numpy), not the fit path's float32.
+    """
+    if n_eff <= max_exact:
+        per_var = 2 * n_eff * n_eff  # two centered n×n kernels (x-side, y-side)
+    else:
+        import math as _math
+
+        if budget == "fast":
+            n_features = int(min(max(128, int(_math.sqrt(n_eff) * 4)), 1024))
+        else:  # nyström (standard / default)
+            n_features = int(min(max(64, int(_math.sqrt(n_eff))), 1024))
+        per_var = 2 * n_eff * n_features
+    return int(p * per_var * 8)  # float64
+
+
 def assert_within_envelope(*, p: int, S: int, T: int, K: int, envelope: ComputeEnvelope | None = None) -> int:
     """Return the estimated bytes, or refuse if the dense form exceeds the envelope."""
     envelope = envelope or load_compute_envelope()
@@ -83,5 +107,6 @@ __all__ = [
     "ScaleExceedsEnvelopeError",
     "load_compute_envelope",
     "estimate_ldo_bytes",
+    "estimate_residual_scan_bytes",
     "assert_within_envelope",
 ]

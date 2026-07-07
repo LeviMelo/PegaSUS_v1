@@ -19,6 +19,11 @@ import numpy as np
 
 import random as _random
 
+from pegasus.ldo.envelope import (
+    ScaleExceedsEnvelopeError,
+    estimate_residual_scan_bytes,
+    load_compute_envelope,
+)
 from pegasus.ldo.fdr import correct_p_values
 from pegasus.ldo.hsic import (
     _bandwidth,
@@ -33,6 +38,22 @@ import math
 
 _MIN_N_EFF = 100
 _MIN_NULL_BLOCKS = 5  # < this many spatial blocks → certify descriptive only (§6.8/§6.9)
+
+
+def _residual_scan_memory_budget() -> int:
+    """Bytes the residual-scan representation cache may use before it must refuse.
+
+    Prefer 60% of the *currently available* system RAM (the scan is a CPU/numpy
+    allocation, not a VRAM one), leaving headroom for its transient per-variable
+    ``n×n`` kernel builds and the rest of the process. Falls back to the compute
+    envelope (config/compute.yaml) if psutil is unavailable.
+    """
+    try:
+        import psutil
+
+        return int(psutil.virtual_memory().available * 0.60)
+    except Exception:
+        return int(load_compute_envelope().max_bytes)
 
 
 @dataclass
@@ -202,6 +223,23 @@ def scan_residual_nonlinear_edges(
     # §6.8/§6.9: certify a discovery only with enough spatial blocks for a valid null;
     # otherwise the edge is reported descriptive (surfaced, not certified).
     sufficient_blocks = n_spatial_blocks >= _MIN_NULL_BLOCKS
+
+    # §II.10 refuse-don't-degrade: the per-variable representation cache below retains
+    # p × 2 dense kernels/feature-maps and is the single largest LDO allocation (absent
+    # from the fit-path envelope, envelope.estimate_ldo_bytes). At national n_eff it can be
+    # tens-to-hundreds of GB; attempting it thrashes swap then raises MemoryError. Pre-check
+    # against the actually-available RAM and refuse with a clear reason (the orchestrator
+    # catches this into a residual-scan diagnostic — the nonlinear layer is honestly reported
+    # as not-computed-at-this-scale rather than silently OOM-dropped after a long thrash).
+    _scan_bytes = estimate_residual_scan_bytes(p=p, n_eff=n_eff, budget=budget)
+    if _scan_bytes > _residual_scan_memory_budget():
+        raise ScaleExceedsEnvelopeError(
+            "residual_hsic_scan_exceeds_memory: estimated "
+            f"{_scan_bytes / 1024**3:.1f} GB HSIC representation cache "
+            f"(p={p}, n_eff={n_eff}, budget={budget}) exceeds the available-memory budget; "
+            "nonlinear residual edges not computed at this scale (§II.7 multi-resolution / "
+            "§II.10 refuse-don't-degrade)."
+        )
 
     # Precompute each variable's HSIC representation ONCE (O(p) builds), then score every
     # pair from the cache. The old loop re-derived per-variable kernels/features inside

@@ -135,11 +135,20 @@ def temporal_holdout(
         return {"ran": True, "persistence_rate": None, "n_train_edges": 0,
                 "n_persisted": 0, "reason": "no_train_edges"}
     persisted = sum(1 for k, s in train.items() if test.get(k) == s and s != 0.0)
+    n = len(train)
+    # §LDO-CERT-HOLDOUT-NULL-10: sign-persistence has a chance baseline — a fluke edge's sign recurs in
+    # the holdout with probability ~0.5. Report the persistence AGAINST that null via a one-sided
+    # binomial test (is the observed count beyond chance sign-matching?), not the bare rate, which is
+    # otherwise uninterpretable (0.6 could be pure chance).
+    from scipy.stats import binom
+    p_value = float(binom.sf(persisted - 1, n, 0.5)) if n > 0 else None
     return {
         "ran": True,
-        "n_train_edges": len(train),
+        "n_train_edges": n,
         "n_persisted": persisted,
-        "persistence_rate": float(persisted) / float(len(train)),
+        "persistence_rate": float(persisted) / float(n),
+        "persistence_null_rate": 0.5,
+        "persistence_pvalue": p_value,
         "holdout_years": holdout_years,
     }
 

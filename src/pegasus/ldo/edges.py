@@ -283,15 +283,22 @@ def to_link_records(
             w.append("poorly_identified_split")
         return tuple(w)
 
-    def _uncertainty(n: float | None) -> tuple[float | None, bool, float | None, bool]:
+    def _uncertainty(n: float | None, r: float | None) -> tuple[float | None, bool, float | None, bool]:
         if n is None:
             return None, False, None, False
         dof = n - k_cond - 3.0
         if dof < 1.0:  # partial correlation not identifiable at this effective-n → refuse a finite SE
             return None, True, float(n), True
-        se = 1.0 / _math.sqrt(dof)
-        # §III.7/§V.6(2): Fisher-z SE combined in quadrature with the fit's numerical error.
-        unc = float(_math.hypot(se, float(numerical_error)))
+        # §LDO-CERT-UNITS-02: report uncertainty on the PARTIAL-CORRELATION (weight) scale — the scale
+        # the band is compared against in exact_certify and the scale edge weights live on. The Fisher-z
+        # SE 1/√dof is on the atanh(r) scale; map it to r by the delta method (dr=(1−r²)dz). The fit's
+        # randomized-SVD error is a RELATIVE truncation error, so its absolute contribution to r is
+        # |r|·numerical_error. Both terms are then on the r scale (previously a z-scale SE and a
+        # dimensionless spectral ratio were summed in quadrature — a category error).
+        rr = min(abs(float(r or 0.0)), 0.999)
+        se_r = (1.0 - rr * rr) / _math.sqrt(dof)
+        num_r = rr * float(numerical_error)
+        unc = float(_math.hypot(se_r, num_r))
         return unc, n < _MIN_N_EFF, float(n), False
 
     use_edge = per_edge_n_eff and field is not None
@@ -304,10 +311,23 @@ def to_link_records(
     # wide SE (and fails certification) instead of spuriously-tight iid significance.
     phi_map = _temporal_phi_map(field) if (use_edge and not temporally_whitened) else None
 
-    def _edge_stats(source: str, target: str) -> tuple[float | None, bool, float | None, bool]:
+    def _edge_stats(source: str, target: str, r: float | None) -> tuple[float | None, bool, float | None, bool]:
         if use_edge:
-            return _uncertainty(_edge_n_eff(field, source, target, defl, phi_map))
-        return _uncertainty(global_n)
+            return _uncertainty(_edge_n_eff(field, source, target, defl, phi_map), r)
+        return _uncertainty(global_n, r)
+
+    # §LDO-LAG-ANNUAL-04: annual aggregation aliases sub-annual delays into lag-0 and makes multi-year
+    # lags implausible for most exposures. Stamp each record's time unit and warn so a lag_k is never
+    # misread as months, and a lag-0 edge is never silently read as "no delay".
+    _res = str(getattr(field, "resolution", None) or "") if field is not None else ""
+
+    def _res_warnings(lag_k: int) -> tuple[str, ...]:
+        if "year" in _res.lower() or _res == "":       # annual is the default grain
+            if lag_k == 0:
+                return ("lag0_subannual_aliased",)      # a ≤1yr delay is unresolved at annual aggregation
+            if lag_k >= 3:
+                return ("multiyear_lag_at_annual",)     # a ≥3-year distributed lag is implausible for most exposures
+        return ()
 
     records: list[LinkRecord] = []
     for lk in lagged.lagged_links:
@@ -318,7 +338,7 @@ def to_link_records(
                 if s2 == lk.source and t2 == lk.target and abs(l2 - lk.peak_lag) <= 1:
                     stab = v
                     break
-        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(lk.source, lk.target)
+        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(lk.source, lk.target, lk.peak_partial_correlation)
         certified = (not low_power) and (stab is None or stab >= stability_threshold)
         records.append(
             LinkRecord(
@@ -328,6 +348,7 @@ def to_link_records(
                 lag_k=lk.peak_lag,
                 weight=lk.peak_partial_correlation,
                 partial_correlation=lk.peak_partial_correlation,
+                resolution=_res or None,
                 response_curve_ref=",".join(f"{r:.4f}" for r in lk.response_curve),
                 stability=stab,
                 uncertainty=edge_uncertainty,
@@ -336,11 +357,11 @@ def to_link_records(
                 certification_status="selected" if certified else "descriptive",
                 null_strategy=null_strategy,
                 fdr_method=fdr_method,
-                warnings=_power_warnings(low_power, underdet),
+                warnings=_power_warnings(low_power, underdet) + _res_warnings(lk.peak_lag),
             )
         )
     for source, target, pcorr in lagged.contemporaneous:
-        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(source, target)
+        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(source, target, pcorr)
         records.append(
             LinkRecord(
                 source_var=source,
@@ -349,16 +370,17 @@ def to_link_records(
                 lag_k=0,
                 weight=pcorr,
                 partial_correlation=pcorr,
+                resolution=_res or None,
                 stability=stability.get(_edge_key(source, target, 0)),
                 uncertainty=edge_uncertainty,
                 n_eff=edge_n,
                 n_conditioning=k_cond,
                 certification_status="descriptive" if low_power else "selected",
-                warnings=_power_warnings(low_power, underdet),
+                warnings=_power_warnings(low_power, underdet) + _res_warnings(0),
             )
         )
     for source, target, loading in lagged.latent_shared:
-        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(source, target)
+        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(source, target, loading)
         records.append(
             LinkRecord(
                 source_var=source,

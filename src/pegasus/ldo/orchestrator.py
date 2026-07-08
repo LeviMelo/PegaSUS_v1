@@ -118,7 +118,8 @@ def run_ldo(
     adaptive_k: bool = True,
     disease_graph=None,
     disease_scale_precisions: dict[str, float] | None = None,
-    gamma_temporal: float = 0.1,
+    gamma_temporal: float = 0.0,   # §LDO-LAG-SMOOTH-03: no lag-smoothness prior by default — it biases the
+    # discovered response-curve peak (the headline output). Opt in to γ>0 for a smoothed robustness variant.
     gamma_disease: float = 0.1,
     temporal_whiten: bool = False,
     spatial_kernel: str = "contiguity",

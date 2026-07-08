@@ -137,5 +137,9 @@ def test_per_edge_off_is_uniform_noop():
     import math
     n_global = int(np.isfinite(field.Z).any(axis=0).sum())
     k_cond = max(len(fit.fit.S) - 2, 0)          # partial-correlation conditioning set (q − 2)
-    expected = 1.0 / math.sqrt(max(n_global - k_cond - 3, 1))
+    # §LDO-CERT-UNITS-02: uncertainty is on the partial-correlation (weight) scale — the Fisher-z SE
+    # 1/√dof mapped by the delta method to (1−r²)/√dof (numerical_error=0 here → no |r|·num term).
+    # Both edges have r=0.5, so they still share one global value (the noop is preserved).
+    r = 0.5
+    expected = (1.0 - r * r) / math.sqrt(max(n_global - k_cond - 3, 1))
     assert abs(next(iter(uncs)) - expected) < 1e-12

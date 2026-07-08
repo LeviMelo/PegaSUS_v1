@@ -151,15 +151,18 @@ def test_end_to_end_recorded_uncertainty_understates_partial_corr_se():
         if r.partial_correlation is None or r.n_eff is None or r.uncertainty is None:
             continue
         n_eff = float(r.n_eff)
-        se_live = r.uncertainty  # 1/sqrt(max(n_eff-3,1)) (numerical_error=0 here)
+        se_live = r.uncertainty  # §LDO-CERT-UNITS-02: on the partial-corr (weight) scale, (1−ρ²)/√dof
         dof_correct = n_eff - k_cond - 3.0
-        # honest SE: larger when it exists; undefined (should refuse) when dof<1.
+        rp = min(abs(float(r.partial_correlation)), 0.999)
+        # Honest partial SE at the correct dof, on the SAME (weight) scale as the recorded value:
+        # the Fisher-z SE 1/√dof mapped by the delta method to (1−ρ²)/√dof (numerical_error=0 here).
         if dof_correct >= 1.0:
-            se_correct = 1.0 / math.sqrt(dof_correct)
+            se_correct = (1.0 - rp * rp) / math.sqrt(dof_correct)
             if se_live < se_correct - 1e-9:
                 offenders.append((r.source_var, r.target_var, se_live, se_correct, dof_correct))
         else:
-            # dof < 1: partial corr not identifiable, yet a finite SE was recorded.
+            # dof < 1: partial corr not identifiable — the code must refuse (uncertainty None, skipped
+            # above), never a finite SE. If a finite SE reached here it is an offender.
             offenders.append((r.source_var, r.target_var, se_live, float("inf"), dof_correct))
 
     if not recs or all(r.partial_correlation is None for r in recs):

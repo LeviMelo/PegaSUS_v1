@@ -25,6 +25,7 @@ class LinkRecord:
     lag_k: int = 0
     weight: float = 0.0
     partial_correlation: float | None = None
+    resolution: str | None = None               # time unit of lag_k (year/month) — a lag-6 in years ≠ months (§LDO-LAG-ANNUAL-04)
     response_curve_ref: str | None = None      # ref to the distributed-lag profile {S^{(k,0)}_ij}
     spatial_field_ref: str | None = None        # ref to the link's spatial heterogeneity field
     stability: float | None = None              # stability-selection frequency
@@ -60,6 +61,7 @@ class LinkRecord:
             "lag_k": self.lag_k,
             "weight": self.weight,
             "partial_correlation": self.partial_correlation,
+            "resolution": self.resolution,
             "response_curve_ref": self.response_curve_ref,
             "spatial_field_ref": self.spatial_field_ref,
             "stability": self.stability,
@@ -88,6 +90,7 @@ LINK_RECORD_COLUMNS: tuple[str, ...] = (
     "lag_k",
     "weight",
     "partial_correlation",
+    "resolution",
     "response_curve_ref",
     "spatial_field_ref",
     "stability",

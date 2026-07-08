@@ -172,7 +172,9 @@ def reconstruct_migration_flows_for_year(
     nodes = list(nodes)
     if len(nodes) < 2:
         raise MigrationFlowError("migration flow reconstruction needs >= 2 nodes")
-    hops = hops if hops is not None else hop_distances(adjacency, nodes)
+    # Bounded even on the direct-call fallback: _candidate_pairs keeps only 1..max_hops pairs, so
+    # passing max_hops here is result-identical while avoiding the O(N²) all-pairs dict at scale.
+    hops = hops if hops is not None else hop_distances(adjacency, nodes, max_hops=max_hops)
     pairs = _candidate_pairs(nodes, hops, max_hops)
     # Ensure any census-anchored pair is in the candidate support even if beyond max_hops.
     if census_flows:

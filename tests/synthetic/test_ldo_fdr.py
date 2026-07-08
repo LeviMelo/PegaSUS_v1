@@ -1,8 +1,10 @@
-"""Theme-5 — dependence-aware FDR over LDO edges.
+"""Theme-5 / W4 — dependence-aware FDR over LDO edges.
 
-BH on Fisher-z p-values at the dependence-corrected effective-n: strong edges (high |pcorr|,
-high n_eff) get small q, null-ish edges (tiny pcorr) get large q. Annotate-only is the default
-(certification_status untouched); fdr_enforce downgrades a selected null edge to descriptive.
+Fisher-z p-values at the dependence-corrected effective-n, controlled across the p²·(K+1) edge
+panel. The DEFAULT is dependence-robust (Benjamini-Yekutieli, PRDS-free) AND enforced: strong
+edges (high |pcorr|, high n_eff) get small q and stay selected, null-ish edges (tiny pcorr) get
+large q and fall to descriptive. `fdr_enforce=False` opts back to annotate-only; `fdr_dependence=
+'prds'` opts into plain BH when positive dependence is assumed.
 """
 
 from __future__ import annotations
@@ -21,25 +23,32 @@ def _edge(name, pcorr, n_eff):
     )
 
 
-def test_bh_separates_strong_from_null_and_enforce_downgrades():
+def test_by_separates_strong_from_null_and_enforce_is_default():
     strong = [_edge("S%d" % i, 0.45, 900.0) for i in range(3)]
     nulls = [_edge("N%d" % i, 0.01, 900.0) for i in range(6)]
     records = strong + nulls
 
-    # annotate-only default: q computed, certification_status untouched
-    annotated = certify_links(records)
-    by = {r.source_var: r for r in annotated}
-    assert all(r.certification_status == "selected" for r in annotated)  # no-op on status
-    assert all(r.fdr_method == "benjamini_hochberg_fisherz_neff" for r in annotated)
-    assert max(by["S%d" % i].fdr_qvalue for i in range(3)) < 0.05   # strong → small q
-    assert min(by["N%d" % i].fdr_qvalue for i in range(6)) > 0.5    # null → large q
-
-    # enforce: null edges that were selected fall to descriptive; strong stay selected
-    enforced = certify_links(records, policy=LDOCertificationPolicy(fdr_enforce=True))
+    # DEFAULT: dependence-robust (Benjamini-Yekutieli) AND enforced — strong stay selected, null
+    # selected edges fall to descriptive; q + method annotated on every testable edge.
+    enforced = certify_links(records)
     by = {r.source_var: r for r in enforced}
+    assert all(r.fdr_method == "benjamini_yekutieli_fisherz_neff" for r in enforced)
+    assert max(by["S%d" % i].fdr_qvalue for i in range(3)) < 0.05   # strong → small q (survives BY c(m))
+    assert min(by["N%d" % i].fdr_qvalue for i in range(6)) > 0.5    # null → large q
     assert all(by["S%d" % i].certification_status == "selected" for i in range(3))
     assert all(by["N%d" % i].certification_status == "descriptive" for i in range(6))
     assert "fdr_not_significant_descriptive_only" in by["N0"].warnings
+
+    # opt-out: fdr_enforce=False computes q but leaves certification_status alone (annotate-only)
+    annotated = certify_links(records, policy=LDOCertificationPolicy(fdr_enforce=False))
+    assert all(r.certification_status == "selected" for r in annotated)
+
+    # opt into plain BH (assumes PRDS): method label switches, q-values are the un-inflated BH ones
+    bh = certify_links(records, policy=LDOCertificationPolicy(fdr_dependence="prds"))
+    by_bh = {r.source_var: r for r in bh}
+    assert all(r.fdr_method == "benjamini_hochberg_fisherz_neff" for r in bh)
+    # BY q ≥ BH q for the same edge (the harmonic factor only inflates), so BY is monotone-stricter
+    assert by["N0"].fdr_qvalue >= by_bh["N0"].fdr_qvalue
 
 
 def test_untestable_edges_skipped_and_default_is_byte_identical():

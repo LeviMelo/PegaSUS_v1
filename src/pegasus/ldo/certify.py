@@ -14,10 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from pegasus.ldo.multiplicity import benjamini_hochberg, fisher_z_pvalue
+from pegasus.ldo.multiplicity import benjamini_hochberg, benjamini_yekutieli, fisher_z_pvalue
 from pegasus.ldo.records import LinkRecord
-
-_FDR_METHOD = "benjamini_hochberg_fisherz_neff"
 
 
 class LDOCertificationError(ValueError):
@@ -29,7 +27,10 @@ class LDOCertificationPolicy:
     min_stability: float = 0.6
     require_uncertainty_for_nonlinear: bool = True
     fdr_q: float = 0.1
-    fdr_enforce: bool = False   # default: annotate q only, leave certification_status untouched
+    fdr_enforce: bool = True    # the p²·(K+1) edge panel is a massive multiple-testing space; a
+    # certified edge MUST clear FDR, not just per-edge stability+uncertainty. Enforced by default.
+    fdr_dependence: str = "arbitrary"  # "arbitrary" → Benjamini-Yekutieli (PRDS-free, correct for the
+    # dependent edge panel); "prds" → plain BH (assumes positive dependence). BY is monotone-stricter.
 
 
 def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = None) -> LinkRecord:
@@ -84,9 +85,11 @@ def certify_links(records: list[LinkRecord], *, policy: LDOCertificationPolicy |
 
 
 def _apply_fdr(records: list[LinkRecord], policy: LDOCertificationPolicy) -> list[LinkRecord]:
-    """BH across edges with a testable partial-correlation at their effective-n. Default is
-    annotate-only (q + fdr_method); fdr_enforce additionally downgrades a *selected* edge that
-    fails FDR to descriptive. Untestable edges (no n_eff / no pcorr) are skipped (q=None)."""
+    """FDR across edges with a testable partial-correlation at their (dependence-deflated) effective-n.
+    ``fdr_enforce`` downgrades a *selected* edge that fails FDR to descriptive; the q-value + method are
+    always annotated. Under ``fdr_dependence='arbitrary'`` the control is Benjamini-Yekutieli (valid
+    without PRDS — appropriate here since the edge p-values are correlated through shared latent factors,
+    spatial contiguity and overlapping lag windows). Untestable edges (no n_eff / no pcorr) skipped."""
     idx = [
         i for i, r in enumerate(records)
         if r.n_eff is not None and r.partial_correlation is not None
@@ -95,11 +98,16 @@ def _apply_fdr(records: list[LinkRecord], policy: LDOCertificationPolicy) -> lis
         return records
     pvals = [fisher_z_pvalue(records[i].partial_correlation, records[i].n_eff,
                              records[i].n_conditioning or 0) for i in idx]
-    rejected, qvals = benjamini_hochberg(pvals, policy.fdr_q)
+    if policy.fdr_dependence == "arbitrary":
+        rejected, qvals = benjamini_yekutieli(pvals, policy.fdr_q)
+        method = "benjamini_yekutieli_fisherz_neff"
+    else:
+        rejected, qvals = benjamini_hochberg(pvals, policy.fdr_q)
+        method = "benjamini_hochberg_fisherz_neff"
     out = list(records)
     for j, i in enumerate(idx):
         r = out[i]
-        r = replace(r, fdr_qvalue=qvals[j], fdr_method=_FDR_METHOD)
+        r = replace(r, fdr_qvalue=qvals[j], fdr_method=method)
         if policy.fdr_enforce and r.certification_status == "selected" and not rejected[j]:
             r = replace(r, certification_status="descriptive",
                         warnings=r.warnings + ("fdr_not_significant_descriptive_only",))

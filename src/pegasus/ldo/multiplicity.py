@@ -45,8 +45,30 @@ def benjamini_hochberg(pvalues: list[float], q: float) -> tuple[list[bool], list
     return rejected, qvals
 
 
+def benjamini_yekutieli(pvalues: list[float], q: float) -> tuple[list[bool], list[float]]:
+    """BH under ARBITRARY dependence (Benjamini–Yekutieli 2001). The step-up threshold is
+    deflated by the harmonic factor c(m)=Σ_{i=1}^m 1/i, so FDR ≤ q holds WITHOUT the positive-
+    regression-dependence (PRDS) assumption that plain BH needs — the correct choice for the LDO
+    edge panel, whose p-values are correlated through shared latent factors, spatial contiguity
+    and overlapping lag windows (there is no guarantee that dependence is positive). Monotone-
+    conservative: it can only shrink the rejection set relative to BH, never enlarge it."""
+    m = len(pvalues)
+    if m == 0:
+        return [], []
+    c_m = sum(1.0 / i for i in range(1, m + 1))
+    order = sorted(range(m), key=lambda i: pvalues[i])
+    qvals = [0.0] * m
+    running = 1.0
+    for rank in range(m, 0, -1):
+        i = order[rank - 1]
+        running = min(running, pvalues[i] * m * c_m / rank)
+        qvals[i] = min(1.0, running)
+    rejected = [qvals[i] <= q for i in range(m)]
+    return rejected, qvals
+
+
 def block_permutation_qhook(pvalues, q, permute):  # optional refinement hook (unused by default)
     return benjamini_hochberg(pvalues, q)
 
 
-__all__ = ["fisher_z_pvalue", "benjamini_hochberg", "block_permutation_qhook"]
+__all__ = ["fisher_z_pvalue", "benjamini_hochberg", "benjamini_yekutieli", "block_permutation_qhook"]

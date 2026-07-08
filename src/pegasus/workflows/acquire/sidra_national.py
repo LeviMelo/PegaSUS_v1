@@ -181,6 +181,7 @@ def _acquire_national(
     *, intent: UserIntent, ufs: list[str], systems: list[str], years: str,
     data_root: Path, sidra_metadata_dir: Path,
     datasus_client: MicrodatasusClient | None, sidra_client: SidraClient | None,
+    require_complete: bool = False,
 ) -> tuple[list[SourceArtifact], list[SourceArtifact], dict[str, Any]]:
     """National acquisition (SCALE-01): acquire every UF, then combine into national
     per-(system,role) artifacts. DATASUS runs per UF (R subprocess, internally parallel); SIDRA is
@@ -200,7 +201,7 @@ def _acquire_national(
     if datasus_cached is None:
         for uf in ufs:
             per_uf_datasus.extend(
-                _acquire_datasus(systems=systems, uf=uf, years=years, data_root=data_root, client=datasus_client)
+                _acquire_datasus(systems=systems, uf=uf, years=years, data_root=data_root, client=datasus_client, require_complete=require_complete)
             )
 
     # Warm the SIDRA metadata cache ONCE (single-threaded) so the parallel UF fetches only READ it --

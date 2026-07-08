@@ -194,32 +194,55 @@ def _acquire_datasus(
     years: str,
     data_root: Path,
     client: MicrodatasusClient | None,
+    require_complete: bool = False,
 ) -> list[dict[str, Any]]:
     client = client or MicrodatasusClient(data_root=str(data_root), manifest_root=data_root / "manifests" / "datasus")
     # Fetch all systems in one global worker pool (parallel across systems AND
     # years) instead of one system at a time.
     batches = client.fetch_systems(systems=systems, uf=uf, years=years)
-    # Tolerate per-chunk unavailability: a DATASUS system simply lacks its earliest years
-    # (CNES-ST begins ~2005, not 2000; SIH/SINASC start later than SIM-DO), or a whole system
-    # is absent for a UF. An exhaustive engine uses ALL AVAILABLE data and MUST NOT abort the
-    # national run over year-UF chunks that do not exist in DATASUS. A system with ≥1 successful
-    # chunk is normalized over exactly those; a system with zero is skipped (logged); only ALL
-    # systems failing for a UF is a hard error.
+    # Availability windows (manifests._availability_windows) already drop (system,year) that DATASUS
+    # does not publish (CNES-ST begins ~2005; SIH/SINASC start after SIM-DO), so a chunk that reaches
+    # fetch and does NOT succeed is data that SHOULD exist — a transient timeout, a fine-grained
+    # UF-month gap, or a broken bridge — NOT the coarse "system starts late" absence. Therefore (T1.2):
+    #   * `blocked` (the R bridge script is missing/broken) is HARD-FAIL: proceeding yields a garbage
+    #     partial run, never a legitimate coverage gap.
+    #   * `timeout`/`failed` chunks are recorded as an EXPLICIT partial-coverage fact (never a silent
+    #     skip — MSD full-data mandate / §V never-silently-truncate), and fail closed when the caller
+    #     sets `require_complete` (strict full-data runs).
+    # Only when every system has zero usable chunks is it an unconditional hard error.
     usable_systems: list[str] = []
+    blocked_systems: list[tuple[str, str]] = []
+    partial_coverage: list[tuple[str, int, int, str]] = []
     for system in systems:
         batch = batches[system]
         ok = [r for r in batch.requests if r.status in {"success", "cached"}]
-        failed = [r for r in batch.requests if r.status not in {"success", "cached"}]
+        blocked = [r for r in batch.requests if r.status == "blocked"]
+        failed = [r for r in batch.requests if r.status not in {"success", "cached", "blocked"}]
+        if blocked:
+            blocked_systems.append((system, blocked[0].error_message or "R bridge blocked"))
         if failed:
             example = failed[0].error_message or failed[0].status
+            partial_coverage.append((system, len(failed), len(batch.requests), str(example)))
             warnings.warn(
-                f"DATASUS {system} {uf} {years}: {len(failed)}/{len(batch.requests)} chunks "
-                f"unavailable (e.g. {example}); normalizing the {len(ok)} available chunk(s).",
+                f"DATASUS {system} {uf} {years}: PARTIAL COVERAGE — {len(failed)}/{len(batch.requests)} "
+                f"chunk(s) did not materialize (e.g. {example}); normalizing the {len(ok)} available "
+                f"chunk(s). This run is NOT full coverage for {system}.",
                 RuntimeWarning,
                 stacklevel=2,
             )
         if ok:
             usable_systems.append(system)
+    if blocked_systems:
+        raise LivePipelineError(
+            "DATASUS acquisition aborted: the R bridge is BLOCKED (missing/broken) for "
+            f"{[s for s, _ in blocked_systems]} — an environment failure, not a coverage gap "
+            f"(e.g. {blocked_systems[0][1]}). Fix the bridge; do not proceed on a partial run."
+        )
+    if require_complete and partial_coverage:
+        raise LivePipelineError(
+            "DATASUS acquisition is incomplete and require_complete=True (strict full-data run): "
+            + "; ".join(f"{s} {nf}/{nt} chunks failed (e.g. {ex})" for s, nf, nt, ex in partial_coverage)
+        )
     if not usable_systems:
         raise LivePipelineError(
             f"DATASUS acquisition failed: no available chunks for ANY of {systems} in {uf} {years}"
@@ -433,6 +456,7 @@ def run_live_pipeline(
     datasus_client: MicrodatasusClient | None = None,
     sidra_client: SidraClient | None = None,
     dry_run: bool = False,
+    require_complete_datasus: bool = False,
 ) -> LivePipelineResult:
     """Acquire all required live sources, merge one manifest, and compile.
 
@@ -470,6 +494,7 @@ def run_live_pipeline(
             intent=intent, ufs=ufs, systems=systems, years=years, data_root=data_root,
             sidra_metadata_dir=Path(sidra_metadata_dir),
             datasus_client=datasus_client, sidra_client=sidra_client,
+            require_complete=require_complete_datasus,
         )
         sidra_artifact = next((a for a in sidra_artifacts if a.artifact_role == "normalized_facts"), None)
         race_prior_artifact = None  # national race prior selection is UF-independent; wired later
@@ -495,7 +520,8 @@ def run_live_pipeline(
         )
 
     datasus_artifacts = _acquire_datasus(
-        systems=systems, uf=uf, years=years, data_root=data_root, client=datasus_client
+        systems=systems, uf=uf, years=years, data_root=data_root, client=datasus_client,
+        require_complete=require_complete_datasus,
     )
     sidra_artifact = _acquire_sidra_population(
         intent=intent, uf=uf, data_root=data_root,

@@ -78,4 +78,65 @@ def temporal_whiten(
     return out, phi
 
 
-__all__ = ["temporal_whiten"]
+def detrend_latent_field(Z: np.ndarray, *, degree: int | None = None) -> np.ndarray:
+    """Remove a per-(variable, municipality) smooth polynomial time trend from the latent field ``Z``
+    (LDO-LAG-CONF-01 / LDO-LAG-STAT-02). Each muni's series is residualized against a low-order poly in
+    time, so the latent scale carries the within-muni ANOMALY net of (a) the time-invariant municipal
+    baseline — the degree-0 term is the municipality fixed effect, extending the count-margin's per-muni
+    baseline to every variable — and (b) the secular/reporting-completeness trend that otherwise makes
+    two independently-trending series show a spurious contemporaneous or lagged edge (Yule's nonsense
+    correlation). A LOW-order poly is deliberate: it captures the smooth secular trend but CANNOT fit an
+    epidemic spike, so anomalies (the actual epidemiological signal — e.g. the 2015 Zika wave) survive.
+
+    ``degree`` auto-scales with the span (2 if ``T≥10``, 1 if ``T≥6``, else 0 = per-muni de-mean only)
+    so short panels are not over-fit. Missing cells stay NaN (they are 0-imputed only for the shared
+    projection — a smooth low-order fit is barely moved by a few imputed cells, verified immaterial for
+    the whitener). Correlations are scale-free, so the variance the detrend removes does not bias edges.
+    Vectorized as a residual off the polynomial column space: ``resid = Z − Z·P``, ``P=V(VᵀV)⁻¹Vᵀ``."""
+    Z = np.asarray(Z, dtype=np.float64)
+    p, S, T = Z.shape
+    if T < 3:
+        return Z
+    if degree is None:
+        degree = 2 if T >= 10 else (1 if T >= 6 else 0)
+    t = np.arange(T, dtype=np.float64)
+    V = np.vander(t, degree + 1)                      # (T, degree+1) polynomial basis
+    P = V @ np.linalg.pinv(V)                          # (T, T) projector onto the poly column space
+    finite = np.isfinite(Z)
+    Zc = np.where(finite, Z, 0.0)
+    resid = Zc - np.einsum("pst,tu->psu", Zc, P)       # (p,S,T) residual off the trend, all series at once
+    return np.where(finite, resid, np.nan)
+
+
+def remove_common_trend(Z: np.ndarray, *, k: int = 1) -> np.ndarray:
+    """Remove the leading ``k`` SHARED temporal factors from the latent field (LDO-LAG-CONF-01 /
+    LDO-LAG-STAT-02) — the surgical alternative to per-series detrending.
+
+    The confounding that manufactures spurious contemporaneous/lagged edges is the trend COMMON across
+    variables (the secular epidemiological transition, the SUS reporting-completeness ramp). This
+    estimates that common component as the leading right-singular vector(s) of the ``(p×T)`` national-
+    mean-per-variable matrix (centered over time) and projects it out of every ``Z_{j,s,·}``. Because it
+    removes only the SHARED temporal pattern — not each variable's own low-frequency band — a
+    variable-specific lagged relationship (which is orthogonal to the common factor) is preserved, unlike
+    the blunter :func:`detrend_latent_field` (verified: planted lag-6 corr 0.73→0.72 here vs a per-series
+    detrend that tipped it out of recovery; a shared-trend spurious lag 0.91→0.01). Missing cells stay NaN."""
+    Z = np.asarray(Z, dtype=np.float64)
+    p, S, T = Z.shape
+    if T < 3 or k < 1:
+        return Z
+    finite = np.isfinite(Z)
+    with np.errstate(invalid="ignore"):
+        M = np.where(np.isfinite(np.nanmean(np.where(finite, Z, np.nan), axis=1)),
+                     np.nanmean(np.where(finite, Z, np.nan), axis=1), 0.0)   # (p,T) national mean/var
+    Mc = M - M.mean(axis=1, keepdims=True)
+    if not np.any(np.abs(Mc) > 1e-12):
+        return Z                                              # no shared temporal structure → no-op
+    _, _, Vt = np.linalg.svd(Mc, full_matrices=False)
+    G = Vt[: min(k, Vt.shape[0])]                             # (k,T) orthonormal shared temporal factors
+    Zc = np.where(finite, Z, 0.0)
+    proj = np.einsum("pst,kt->psk", Zc, G)                    # coordinates on the shared factors
+    resid = Zc - np.einsum("psk,kt->pst", proj, G)
+    return np.where(finite, resid, np.nan)
+
+
+__all__ = ["temporal_whiten", "detrend_latent_field", "remove_common_trend"]

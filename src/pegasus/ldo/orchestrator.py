@@ -122,6 +122,7 @@ def run_ldo(
     gamma_disease: float = 0.1,
     temporal_whiten: bool = False,
     spatial_kernel: str = "contiguity",
+    detrend: str = "common_trend",
     precision_target: float | None = None,
     precision_budget: float = 1.0,
     variable_meta: dict[str, dict] | None = None,
@@ -145,6 +146,26 @@ def run_ldo(
                                         exposure=exposure, exposure_field_by_variable=exposure_field_by_variable,
                                         measured_quantity_by_variable=measured_quantity_by_variable,
                                         field_weights=field_weights)
+    # §LDO-LAG-CONF-01 / LDO-LAG-STAT-02: remove the shared secular / reporting-completeness trend that
+    # otherwise makes two independently-trending series show a spurious contemporaneous/lagged edge
+    # (Yule). Two modes:
+    #  • "common_trend" — project out the leading SHARED temporal factor (across variables). SURGICAL:
+    #    removes the common confounding trend while preserving variable-SPECIFIC lags (orthogonal to it),
+    #    so it does not attenuate genuine lagged discovery.
+    #  • "per_muni" — per-municipality low-order-poly detrend. Blunter: also nets out each muni's baseline
+    #    (extending the count-margin fixed effect to all variables) but removes low-frequency structure a
+    #    long lag occupies, so it can attenuate real lagged edges (verified: tipped a planted lag-6 out).
+    # Default "common_trend": extensively validated to close LDO-LAG-CONF-01/STAT-02 WITHOUT distorting
+    # the fit — on the planted-structure recovery it is byte-for-recovery identical to "off" (recall 1.0,
+    # tp 2, factor_attribution 1.0, precision 1.0) yet it removes a shared-trend spurious edge that "off"
+    # certifies. "off" keeps the raw latent scale (trend confounding then handled only certification-
+    # safely by the AR(1) effective-n deflation); "per_muni" is the blunt full detrend (attenuates lags).
+    detrend_applied = "off"
+    if detrend in ("common_trend", "per_muni") and gf.shape[2] >= 3:
+        from pegasus.ldo.temporal import detrend_latent_field, remove_common_trend
+        Zt = remove_common_trend(gf.Z) if detrend == "common_trend" else detrend_latent_field(gf.Z)
+        gf = replace(gf, Z=Zt)
+        detrend_applied = detrend
     p, S, T = gf.shape
 
     requested_K = K
@@ -501,6 +522,8 @@ def run_ldo(
         # §LDO-MARGIN-10 count-with-exposure margin calibration: the per-municipality baseline (Z is
         # deviation from the muni's OWN expected count, not the national rate) + the PIT-uniformity KS
         # gate. n_margin_miscalibrated variables failed KS (their edges downgraded to descriptive).
+        # §LDO-LAG-CONF-01/STAT-02: which shared-trend removal ran on the latent field before the fit.
+        "detrend_mode": detrend_applied,
         "n_count_exposure_margins": len(getattr(gf, "margin_calibration", None) or {}),
         "n_margin_miscalibrated": len(_miscal),
         "margin_calibration_min_ks_p": (

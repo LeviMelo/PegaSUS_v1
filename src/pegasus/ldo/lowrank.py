@@ -272,11 +272,12 @@ def fit_sparse_plus_lowrank(
         if pn / rn < tol:
             converged = True
             break
-        # Adaptive rho (Boyd §3.4.1 residual balancing) is OPT-IN (default off). NOTE: LDO-ADMM-06
-        # prescribes a primal+dual convergence certificate + adaptive ρ; a naive drop-in of that here
-        # took ~433 iters on a 14×14 problem (4-5× SLOWER, opposite of the intended speedup) and
-        # shifted the S/L split — a correct+fast implementation (proper residual normalization and
-        # ρ warm-start so adaptive ρ genuinely reduces iterations) is a careful follow-up.
+        # LDO-ADMM-06 EMPIRICAL FINDING (do not "fix" naively): the primal-only tol=1e-5 stop is
+        # loosely converged (~7% init-dependent S; the true fixed point is ~2377 iters away) — BUT
+        # it sits at the speed/recovery sweet spot. A primal+dual certificate at ε_abs=1e-4 stops
+        # EARLIER (~100 iters) → shrinks the sparse planted edges away (recall 0); a tighter tol
+        # recovers but is far slower. So the current tuning is kept. adaptive_rho (opt-in, default
+        # off) only rebalances ρ under the same primal-only stop.
         if adaptive_rho:
             dual = rho * float(np.linalg.norm((S - L).astype(np.float64, copy=False) - Z_prev))
             new_rho = rho

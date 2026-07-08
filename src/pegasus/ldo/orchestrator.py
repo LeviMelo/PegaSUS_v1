@@ -412,7 +412,14 @@ def run_ldo(
                     continue
                 _safe = f"{r.source_var}__{r.target_var}__lag{r.lag_k}".replace("/", "_")
                 ref = write_spatial_field(sf, _sdir / f"{_safe}.spatial_field.parquet")
-                records[i] = replace(r, spatial_field_ref=ref)
+                # LDO-SEP-08(c): if the coupling's sign FLIPS across space (material β mass on both
+                # sides of zero) surface it as a first-class warning — the single national partial
+                # correlation is then a cancellation-prone average, and the edge is effect-modified,
+                # not homogeneous. The β field sidecar carries the per-locality detail.
+                _warns = r.warnings
+                if sf.heterogeneity.get("sign_heterogeneous"):
+                    _warns = _warns + ("spatial_sign_heterogeneous_coupling",)
+                records[i] = replace(r, spatial_field_ref=ref, warnings=_warns)
                 n_spatial_fields += 1
             except Exception:
                 continue

@@ -162,12 +162,24 @@ def _heterogeneity_summary(beta: np.ndarray, weight: np.ndarray,
     for scale in ("region", "state", "muni"):
         shares[f"{scale}_var"] = _weighted_var(components[scale], weight)
     denom = sum(shares.values()) or 1.0
+    # LDO-SEP-08(c): sign-heterogeneity. A coupling whose β FLIPS SIGN across space (strong-positive
+    # in one region, negative in another) is a first-class effect-modification finding, not noise — the
+    # single national partial correlation the base LDO fits is a cancellation-prone average of it. Flag
+    # when a MATERIAL share of the weighted β mass sits on each side of zero (≥10% on the minority side,
+    # so a lone outlier cell does not trip it). The raw masses are emitted too, so a reader is not bound
+    # to the 10% convention.
+    wsum = float(weight.sum()) or 1.0
+    pos_mass = float(weight[beta > 0.0].sum()) / wsum
+    neg_mass = float(weight[beta < 0.0].sum()) / wsum
     out = {
         "beta_mean": float((beta * weight).sum() / (weight.sum() or 1.0)),
         "beta_std": float(np.sqrt(max(total_var, 0.0))),
         "beta_min": float(beta.min()),
         "beta_max": float(beta.max()),
         "total_var": total_var,
+        "beta_pos_mass": pos_mass,
+        "beta_neg_mass": neg_mass,
+        "sign_heterogeneous": bool(min(pos_mass, neg_mass) >= 0.10),
     }
     for scale in ("region", "state", "muni"):
         out[f"{scale}_var_share"] = float(shares[f"{scale}_var"] / denom)

@@ -49,6 +49,34 @@ def classify_q_state(
     return FieldState.quarantined_descriptive
 
 
+def _is_count_field(field: Any) -> bool:
+    """An extensive/count field carries no denominator by nature (§I.2 denominator principle):
+    its reliability rests on n_eff/missingness, not on a (nonexistent) denominator."""
+    unit = str(getattr(field, "unit", "") or "").lower()
+    kind = str(getattr(field, "kind", "") or "").lower()
+    roles = {str(r) for r in (getattr(field, "role", None) or [])}
+    return (
+        kind == "extensive_measure"
+        or unit in {"count", "counts", "events", "admissions", "births", "deaths"}
+        or "source_event_count" in roles
+        or "restricted_count" in roles
+    )
+
+
+def default_denom_fragility(field: Any, support: dict) -> float:
+    """§3.12.8 denominator fragility with a correct no-denominator convention. A recorded value
+    wins. A field WITH a denominator (``n_denom`` present) is non-fragile (0). A bare COUNT has no
+    denominator by nature → 0 (n_eff/missingness govern its reliability). Only a rate/ratio whose
+    denominator is ABSENT (``n_denom`` None and not a count) is maximally fragile → 1. Replaces the
+    prior blanket ``1.0 if n_denom is None`` default, which wrongly quarantined every count field."""
+    recorded = support.get("denom_fragility")
+    if recorded is not None:
+        return float(recorded)
+    if support.get("n_denom") is not None:
+        return 0.0
+    return 0.0 if _is_count_field(field) else 1.0
+
+
 def _numeric_values(tensor: Any) -> list[float]:
     if tensor is None:
         return []
@@ -244,7 +272,7 @@ def compute_q_state(
     n_denom = field.support.get("n_denom")
     n_eff = field.support.get("n_eff", n_events)
     missingness = min(1.0, field.support.get("missingness", 0.0) + field.support.get("invalid_flag_share", 0.0))
-    denom_fragility = field.support.get("denom_fragility", 1.0 if n_denom is None else 0.0)
+    denom_fragility = default_denom_fragility(field, field.support)
     zero_inflation = field.support.get("zero_inflation", 0.0)
     values = _numeric_values(tensor)
     denom_values = _numeric_values(denominator)

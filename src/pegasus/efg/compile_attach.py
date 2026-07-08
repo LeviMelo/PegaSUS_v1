@@ -21,6 +21,9 @@ from pegasus.efg.q_tensor import (
     _moran_corrected_n_eff,
     _sampling_cv,
     _second_diff_roughness,
+    classify_q_state,
+    default_denom_fragility,
+    provenance_risk,
 )
 from pegasus.geo.adjacency import load_adjacency
 from pegasus.geo.spatial_graph import structural_cod6_adjacency
@@ -318,6 +321,27 @@ def _q_row(
         n_events = materialized_count_total
     elif n_events is None:
         n_events = support.get("row_count")
+    # §3.12 data-reliability verdict (EFG-QT / DIRECT-QT-01): the Q-tensor `state` is the canonical
+    # classify_q_state applied to the COMPUTED diagnostics — not the declaration-time field.state this
+    # row used to pass through (which made the canonical classifier a zero-caller orphan). Reclassify
+    # only when a materialized vector produced real diagnostics (`diag`); a metadata-only field keeps
+    # its declared state. denom_fragility + provenance risk follow the compute_q_state conventions so
+    # this live verdict equals the canonical producer's. Only the Q-tensor state/provenance_risk columns
+    # change — field.dashboard_safe / QuarantinedFields (declaration-time gating) are untouched.
+    n_eff_val = diag.get("n_eff", support.get("n_eff"))
+    missingness_val = diag.get("missingness", support.get("missing_rate") or support.get("missingness"))
+    denom_fragility_val = default_denom_fragility(field, support)
+    provenance_risk_val = provenance_risk(list(field.provenance or []))
+    state_val = (
+        classify_q_state(
+            n_eff=n_eff_val,
+            denom_fragility=denom_fragility_val,
+            missingness=missingness_val,
+            risk=provenance_risk_val,
+        ).value
+        if diag
+        else (field.state.value if hasattr(field.state, "value") else str(field.state))
+    )
     row = {
         "field_id": field.id,
         "n_events": float(n_events or 0.0),
@@ -332,7 +356,7 @@ def _q_row(
         "moran_i": diag.get("moran_i", support.get("moran_i")),
         "temporal_roughness": diag.get("temporal_roughness", support.get("temporal_roughness")),
         "spatial_entropy": diag.get("spatial_entropy", support.get("spatial_entropy")),
-        "provenance_risk": 0.0 if "official" in set(field.provenance or []) else 0.5,
+        "provenance_risk": provenance_risk_val,
         "race_axis_source": field.axes.get("race_axis_type") or field.axes.get("race_axis"),
         "race_axis_target": field.axes.get("race_axis_target"),
         "missing_race_share": support.get("missing_race_share"),
@@ -340,7 +364,7 @@ def _q_row(
         "race_bridge_cv": support.get("race_bridge_cv"),
         "sensitivity_width": support.get("sensitivity_width"),
         "bridge_mode": support.get("bridge_mode"),
-        "state": field.state.value if hasattr(field.state, "value") else str(field.state),
+        "state": state_val,
         "dashboard_safe": str(field.dashboard_safe),
         "warnings": _json(list(dict.fromkeys(str(w) for w in warnings))),
         "computed_at": _now(),

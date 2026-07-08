@@ -35,20 +35,39 @@ class PairwiseCovariance:
     coverage: np.ndarray             # per-kept-variable observed-sample count
 
 
-def _nearest_correlation(C: np.ndarray, *, floor: float = 1e-3) -> np.ndarray:
-    """PSD correlation projection: one eigen-clip (floor the spectrum) + renormalize to unit diag.
+def _nearest_correlation(C: np.ndarray, *, rel_floor: float = 1e-6) -> np.ndarray:
+    """Shrinkage-to-PSD-target correlation repair (LDO-PSD-01 / LDO-NCORR-02).
 
-    Not the exact Frobenius-nearest correlation (Higham's alternating projections), but the inputs
-    here already carry a unit diagonal (callers ``fill_diagonal(1.0)``), so the renormalize is
-    near-PSD-preserving and the downstream ADMM adds its own regularization. Full Higham was tried
-    and reverted: it cost ~15-18 O(q³) eigh iterations per call (14.5 s at q=700 vs ~0.5 s here),
-    ×~15 fits/run — a large real-panel slowdown for a benefit that is theoretical on these inputs."""
+    A pairwise-complete correlation is generically indefinite (entries from incompatible cell
+    sub-samples). Per the math audit's recommended alternative to the eigen-clip+rescale (which is
+    not the metric-nearest correlation and can re-introduce indefiniteness on the diagonal
+    renormalize), shrink toward the identity — a PSD target, Ledoit-Wolf style — by the MINIMAL
+    amount ``δ`` that lifts the spectrum to a RELATIVE floor ``rel_floor·λ_max``:
+    ``(1−δ)C + δI`` has ``λ_min → (1−δ)λ_min + δ`` and preserves the unit diagonal EXACTLY (so no
+    PSD-breaking rescale). Fast — one ``eigvalsh`` — vs Higham's ~15 alternating projections
+    (measured 14.5 s at q=700, prohibitive ×~15 fits/run). A large move (δ) flags a data-quality
+    problem (the correlation was far from PSD)."""
     C = 0.5 * (C + C.T)
-    vals, vecs = np.linalg.eigh(C)
-    vals = np.clip(vals, floor, None)
-    psd = (vecs * vals) @ vecs.T
-    d = np.sqrt(np.clip(np.diag(psd), 1e-12, None))
-    return psd / np.outer(d, d)
+    n = C.shape[0]
+    if n == 0:
+        return C
+    evals = np.linalg.eigvalsh(C)
+    lam_min, lam_max = float(evals[0]), float(evals[-1])
+    floor = rel_floor * max(lam_max, 1e-12)
+    if lam_min >= floor:
+        np.fill_diagonal(C, 1.0)
+        return C
+    delta = min(max((floor - lam_min) / (1.0 - lam_min), 0.0), 1.0)
+    if delta > 0.25:  # a big shrink means the pairwise matrix was far from any valid correlation
+        import warnings
+        warnings.warn(
+            f"nearest_correlation shrank δ={delta:.2f} toward I (min eigenvalue {lam_min:.3g}); "
+            "the pairwise-complete correlation was strongly indefinite — edges are less reliable.",
+            RuntimeWarning, stacklevel=2,
+        )
+    out = (1.0 - delta) * C + delta * np.eye(n)
+    np.fill_diagonal(out, 1.0)
+    return out
 
 
 def pairwise_correlation(

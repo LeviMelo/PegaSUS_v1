@@ -52,29 +52,39 @@ def build_spatial_precision(space_ids: tuple[str, ...], *, kappa: float = 1.0) -
 
 
 def build_spatial_precision_sparse(space_ids: tuple[str, ...], *, kappa: float = 1.0):
-    """GMRF spatial precision ``κ I + L_W`` as ``scipy.sparse`` CSR (§V.2 sparsity).
+    """GMRF spatial precision ``κ I + L_sym`` as ``scipy.sparse`` CSR (§V.2 sparsity).
 
-    ``L_W = D − A`` from the municipality structural adjacency (~6 nnz/row); ``0.3 MB``
-    sparse at national ``S≈5570`` vs ``0.2 GB`` dense. Never densified.
+    Uses the SYMMETRIC-NORMALIZED Laplacian ``L_sym = I − D^{-1/2} A D^{-1/2}`` (LDO-WHITEN-04):
+    the unnormalized combinatorial ``L_W = D − A`` has eigenvalues that scale with node DEGREE, so
+    ``κI + L_W`` whitens high-degree (interior, ~6-neighbour) municipalities far more aggressively
+    than low-degree (coastal/border) ones — confounding the whitening strength with the very spatial
+    geography it removes. ``L_sym`` has eigenvalues in ``[0,2]`` regardless of degree (diagonal 1 for
+    a connected node, off-diagonal ``−1/√(dᵢdⱼ)``), so the whitening is degree-consistent. ~6 nnz/row.
     """
     import scipy.sparse as sp
 
     adjacency = structural_cod6_adjacency()
     S = len(space_ids)
     idx = {s: i for i, s in enumerate(space_ids)}
+    deg = {s: sum(1 for nb in adjacency.get(s, ()) if nb in idx) for s in space_ids}
     rows: list[int] = []
     cols: list[int] = []
     data: list[float] = []
     for s in space_ids:
         i = idx[s]
-        neighbours = [idx[nb] for nb in adjacency.get(s, ()) if nb in idx]
+        di = deg[s]
         rows.append(i)
         cols.append(i)
-        data.append(kappa + float(len(neighbours)))  # (κ + degree) diagonal
-        for j in neighbours:
-            rows.append(i)
-            cols.append(j)
-            data.append(-1.0)
+        data.append(kappa + (1.0 if di > 0 else 0.0))  # κ + L_sym diagonal (1 connected, 0 isolated)
+        if di == 0:
+            continue
+        for nb in adjacency.get(s, ()):
+            j = idx.get(nb)
+            dj = deg.get(nb, 0)
+            if j is not None and dj > 0:
+                rows.append(i)
+                cols.append(j)
+                data.append(-1.0 / (di * dj) ** 0.5)  # −A_ij/√(dᵢdⱼ)
     return sp.csr_matrix((data, (rows, cols)), shape=(S, S), dtype=np.float64)
 
 

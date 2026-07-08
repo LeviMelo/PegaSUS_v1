@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pegasus.core.enums import FieldState, MaterializationState
 from pegasus.efg.lineage import make_lineage
 from pegasus.efg.node import make_field_node
@@ -33,4 +35,24 @@ def test_compute_q_state_populates_diagnostics_and_moran_corrects_n_eff() -> Non
     assert q.temporal_roughness is not None and q.temporal_roughness > 0
     assert q.spatial_entropy is not None and q.spatial_entropy > 0
     assert q.n_eff is not None and q.n_eff < 6.0
+
+
+def _mk_field(state):
+    return make_field_node(
+        name="x", kind="extensive_measure", carrier="Population", unit="persons",
+        support={}, axes={}, aggregation="additive", role=["r"], source=["s"],
+        operator="op", provenance=["p"], state=state, warnings=[],
+        lineage=make_lineage(parent_ids=[], operator_type="op", operator_params={}),
+        materialization_state=MaterializationState.metadata_only, dashboard_safe=False,
+    )
+
+
+def test_field_node_state_must_be_a_valid_fieldstate() -> None:
+    # Regression (EFG-QT-residual): materialize.py's sim_informed_denominator branch set
+    # state="warning", which is NOT a FieldState member and crashed make_field_node's
+    # FieldState(state) coercion. Pin the contract: the fix value is valid; a bogus string
+    # is rejected so the crash cannot silently return.
+    assert _mk_field("forced_fragile").state is FieldState.forced_fragile
+    with pytest.raises(ValueError):
+        _mk_field("warning")
 

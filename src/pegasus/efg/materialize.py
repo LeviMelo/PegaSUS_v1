@@ -517,7 +517,12 @@ def _population_solver_materialized_fields(bundle: SubstrateBundle) -> list[Subs
                 source=["SIDRA", str(artifact.path), "SIDRA_9606_POPULATION_SOLVER"],
                 operator="population_tensor_solver",
                 provenance=["SHE_SubstrateBundle", "population_tensor", "solver", "SIDRA_9606"],
-                state="warning" if mode == "sim_informed_denominator" else "verified",
+                # forced_fragile (a valid FieldState) — the sim-informed denominator carries a
+                # circularity/feedback risk, so it is forced fragile regardless of its stats. The
+                # prior "warning" string was NOT a FieldState member and crashed make_field_node's
+                # FieldState(state) coercion (node.py) on this mode; dashboard_safe keeps its own
+                # free-valued "warning" tri-state below (it is not coerced to FieldState).
+                state="forced_fragile" if mode == "sim_informed_denominator" else "verified",
                 warnings=["sim_informed_population_feedback_risk"] if mode == "sim_informed_denominator" else [],
                 lineage=lineage,
                 materialization_state="metadata_only",

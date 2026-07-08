@@ -89,6 +89,7 @@ def assemble_ldo_tensor(
     keep_variables: set[str] | frozenset[str] | None = None,
     exposure_field_by_variable: Mapping[str, str] | None = None,
     measured_quantity_by_variable: Mapping[str, str] | None = None,
+    denominator_min: float = 50.0,
 ) -> LDOField:
     """Assemble ``X`` and ``W`` from a compiled CommonPanel.
 
@@ -203,6 +204,15 @@ def assemble_ldo_tensor(
             exposure = None
     if exposure is not None:
         W[np.isnan(X)] = 0.0
+        # §3.12.8 denominator fragility, live per-cell in the reliability weight: a rate/count from a
+        # small exposure is statistically fragile (Poisson CV ∝ 1/√exposure), so a cell whose
+        # denominator is below ``denominator_min`` informs the precision less. Full weight at
+        # exposure ≥ μ_min, linearly ramped below; cells without exposure info are unaffected.
+        if denominator_min > 0:
+            with np.errstate(invalid="ignore", divide="ignore"):
+                frag = np.clip(exposure / float(denominator_min), 0.0, 1.0)
+            W *= np.where(np.isfinite(frag), frag, 1.0)
+            W[np.isnan(X)] = 0.0
     return LDOField(variables=variables, space_ids=space_ids, time_ids=time_ids,
                     X=X, W=W, resolution=panel.resolution, exposure=exposure)
 

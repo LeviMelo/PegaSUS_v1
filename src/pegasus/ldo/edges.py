@@ -211,13 +211,20 @@ def to_link_records(
     spatial_graph=None,
     variable_provenance=None,
     per_edge_n_eff: bool = True,
+    spatially_whitened: bool = False,
 ) -> list[LinkRecord]:
     """Assemble typed LinkRecords from a lagged fit, gated by stability + power.
 
     ``per_edge_n_eff`` (default) sizes each edge's Fisher-z SE and low-power gate from a
     per-edge effective-n over its two endpoints' joint-observed cells — spatially corrected via
     ``spatial_graph`` when supplied, reliability-weighted by ``field.W`` otherwise. Off falls back
-    to the single global observed-cell count (prior behaviour)."""
+    to the single global observed-cell count (prior behaviour).
+
+    ``spatially_whitened`` (Theme-6 double-correction guard): when the fit was GMRF-whitened across
+    space the whitened observations are already ~spatially independent, so the effective-n must NOT
+    also be Moran-deflated (that would count the spatial dependence twice and over-inflate the SE).
+    In that case only the reliability weighting is applied; the ``spatial_graph`` deflation is used
+    only for a non-whitened fit."""
     stability = stability or {}
     import math as _math
     global_n = _global_n_eff(field) if field is not None else None
@@ -256,7 +263,7 @@ def to_link_records(
     use_edge = per_edge_n_eff and field is not None
     defl = (
         _spatial_deflation_map(field, spatial_graph, variable_provenance)
-        if use_edge and spatial_graph is not None else None
+        if use_edge and spatial_graph is not None and not spatially_whitened else None
     )
 
     def _edge_stats(source: str, target: str) -> tuple[float | None, bool, float | None, bool]:

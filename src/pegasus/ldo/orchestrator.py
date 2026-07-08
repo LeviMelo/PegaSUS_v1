@@ -272,18 +272,23 @@ def run_ldo(
         gf, K=K, n_subsamples=n_subsamples, subsample_frac=subsample_frac, seed=seed + 1,
         max_workers=max_workers, **fit_kwargs
     )
-    # Load the structural (contiguity) spatial graph so edge SE uses a spatially-corrected
-    # per-edge n_eff; best-effort (falls back to reliability-weighted joint count if absent).
+    # The live fit GMRF-whitens across space when S>1 (fit_lagged_links spatial_whiten default), so
+    # spatial dependence is already removed from the correlation — the edge effective-n must NOT be
+    # Moran-deflated again (Theme-6 double-correction). Only load/apply the structural graph's
+    # spatial deflation for a NON-whitened fit; when whitened, edge n_eff is reliability-weighted only.
+    _whitened = gf.shape[1] > 1
     _spatial_graph = None
-    try:
-        from pegasus.geo.spatial_graph import load_spatial_graph, structural_graph_available
-        if structural_graph_available():
-            _spatial_graph = load_spatial_graph()
-    except Exception:
-        _spatial_graph = None
+    if not _whitened:
+        try:
+            from pegasus.geo.spatial_graph import load_spatial_graph, structural_graph_available
+            if structural_graph_available():
+                _spatial_graph = load_spatial_graph()
+        except Exception:
+            _spatial_graph = None
     records = to_link_records(
         lagged, field=gf, stability=stability, stability_threshold=stability_threshold,
         numerical_error=lagged.fit.numerical_error, spatial_graph=_spatial_graph,
+        spatially_whitened=_whitened,
     )
 
     # Disease-axis provenance + the mandatory shared-code overlap guard (§5.3): a link

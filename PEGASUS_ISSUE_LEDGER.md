@@ -68,7 +68,7 @@ resolved. The remainder is best sequenced WITH the study greenlight so it is bui
 | 2 | SIDRA-CTX-01 | Context (ST-DFM) routed to the EFG | sidra/efg | **DEFENSIBLE/DONE** | verified WIRED (`sidra_context._run_stdfm_for_context` → `field.support["stdfm"]` → EFG); `skipped` is intentional profile/regime gating, not an orphan |
 | 3 | FEAT-P4 | **Multi-denominator declaration** (per-query default-denominator override) | denominators | OPEN | `exposure_ref` exists; no per-query override mechanism |
 | 4 | DIS-06 + ZIKA-ACCPT | Disease variable-grammar + Zika acceptance | disease/efg | **DEFERRED** | DIS-06 intentionally unwired (σ_C is the canonical generator; grammar docstring warns vs a 2nd); ZIKA aspirational (Q02↔A92 graph edge 0.0, needs off-limits flagship inference) |
-| 5 | POP-02 M6 (POPT-3/4/5) | Population build: numpy-native scatter, per-block build-solve-emit, parallel blocks | denominators | OPEN | perf/memory, not correctness; the tuple round-trip (POPT-1/2) is already fixed |
+| 5 | POP-02 M6 (POPT-3) | Population build: numpy-native O(n_cells) construction | denominators | **VERIFIED-DONE** | `priors.py`/`layer1.py` use vectorized flat-index `np.add.at` scatter (byte-identical to the old `_cell_index` fill); only small S×T closure lists remain. Per-block emit (POPT-5) + parallel blocks (POPT-4) are low-value incremental perf, study-gated. |
 | 6 | RACE-01 | RaceBridge region-conditioning | measurement | **DEFERRED (data-blocked)** | registry supports it (`region_scope`); needs empirical region-specific C (PNS/PNAD linkage) not in-repo + not fabricatable; study-adjacent |
 | 7 | STOR-05 | Delete DATASUS stdout/stderr/heartbeat ancillaries on success | datasus | VERIFIED-DONE | already handled by `subprocess._cleanup_chunk_ephemera` on success |
 | 8 | PERF-02 | Bounded-radius BFS in migration `hop_distances` | denominators | VERIFIED-DONE + hardened | live national path threads bounded `max_hops`; hardened the direct-call fallback (result-identical, drops O(N²) footgun) |
@@ -118,9 +118,9 @@ the verified bottleneck was a Python `tuple(float(...))` round-trip, since fixed
 | FAL-POP-SV | single-vintage census-anchored closure | LIKELY-DONE (task #16; 6579 kept as recency anchor by design) |
 | FAL-POP-AMC | municipality boundary-change harmonization | LIKELY-DONE `dcee9f1`,`b6e8d08` |
 | FAL-POP-RECON | census undeclared-race reconciliation | LIKELY-DONE `ae04ff5` |
-| POP-02 M6 / POPT-3 | numpy-native container construction (drop `[None]*n_cells`, `_cell_index` loops) | OPEN |
-| POPT-4 | parallelize the locality-separable blocked solve (ProcessPool) | OPEN |
-| POPT-5 | per-block build-solve-emit (input-prep peak O(block)) | OPEN |
+| POP-02 M6 / POPT-3 | numpy-native container construction | VERIFIED-DONE — `priors.py`/`layer1.py` vectorized flat-index `np.add.at` scatter, byte-identical; only negligible S×T closure lists remain |
+| POPT-4 | parallelize the locality-separable blocked solve (ProcessPool) | OPEN (incremental perf; study-gated; the numpy-object→array win already landed the big reduction) |
+| POPT-5 | per-block build-solve-emit (input-prep peak O(block)) | OPEN (large; low incremental value after vectorization; study-gated) |
 | POPT-6 | document age×sex/race×age joints as IPF/independence reconstructions | OPEN (small) |
 | PERF-02 | bounded-radius BFS in `migration.hop_distances` | VERIFIED-DONE + fallback hardened (result-identical) |
 | POPT-8 / POP-02 GPU | torch port of `loss.py`+SPG (f32-bulk/f64-reduction) | DEFERRED `gated on measured CPU baseline` |

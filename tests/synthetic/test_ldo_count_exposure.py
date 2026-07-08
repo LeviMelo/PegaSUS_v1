@@ -35,11 +35,13 @@ def _count_field_with_exposure(seed: int = 0) -> LDOField:
 def test_exposure_drives_count_with_exposure_margin():
     field = _count_field_with_exposure()
     gf = gaussianize_field(field, seed=1, exposure=field.exposure)
-    # variable 0 (count + exposure) must match the Poisson-offset margin exactly, and NOT the
-    # plain rank margin — dependence on exposure is netted out in the latent Z.
+    # variable 0 (count + exposure) must match the count-with-exposure margin exactly, and NOT the
+    # plain rank margin — dependence on exposure is netted out in the latent Z. The margin uses the
+    # per-municipality baseline (LDO-MARGIN-10), so the expectation is over the 2-D (S,T) field (the
+    # same call gaussianize_field makes), not a flattened pooled-λ path.
     rng = np.random.default_rng(1)
-    expect0 = count_exposure_gaussianize(field.X[0].reshape(-1), field.exposure[0].reshape(-1), rng=rng)
-    assert np.allclose(np.nan_to_num(gf.Z[0].reshape(-1)), np.nan_to_num(expect0), atol=1e-9)
+    expect0 = count_exposure_gaussianize(field.X[0], field.exposure[0], rng=rng)
+    assert np.allclose(np.nan_to_num(gf.Z[0]), np.nan_to_num(expect0), atol=1e-9)
 
 
 def test_run_ldo_threads_exposure_and_reports_it():

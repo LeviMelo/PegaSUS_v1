@@ -46,6 +46,12 @@ def certify_link(record: LinkRecord, *, policy: LDOCertificationPolicy | None = 
     if "lowrank_unconverged_descriptive_only" in record.warnings:
         return replace(record, certification_status="descriptive")
 
+    # §LDO-MARGIN-10 PIT-uniformity gate: an endpoint's count-with-exposure margin failed the
+    # KS-uniformity test — the latent Z for that variable is distorted (mis-specified family/baseline),
+    # so any edge touching it is not certifiable. Surface descriptive.
+    if "margin_miscalibrated_descriptive_only" in record.warnings:
+        return replace(record, certification_status="descriptive")
+
     # §III.8 conjuncts (certgates.py): an edge that survives only a single λ operating point
     # (regularization-path disagreement) or a directed lag whose endpoints share a latent factor
     # (latent-vs-lag confound, §IX.2) is not a certifiable discovery — surface descriptive.

@@ -301,6 +301,16 @@ def run_ldo(
         numerical_error=lagged.fit.numerical_error, spatial_graph=_spatial_graph,
         spatially_whitened=_whitened, temporally_whitened=temporal_whiten,
     )
+    # §LDO-MARGIN-10 PIT-uniformity gate: flag edges whose endpoint count-exposure variable failed
+    # the KS margin-calibration test (p<1e-3, strict to avoid chance failures) so certification
+    # downgrades them — a distorted latent Z must not yield a certified edge.
+    _miscal = {v for v, ksp in (getattr(gf, "margin_calibration", None) or {}).items() if ksp < 1e-3}
+    if _miscal:
+        records = [
+            replace(r, warnings=r.warnings + ("margin_miscalibrated_descriptive_only",))
+            if (r.source_var in _miscal or r.target_var in _miscal) else r
+            for r in records
+        ]
 
     # Disease-axis provenance + the mandatory shared-code overlap guard (§5.3): a link
     # between concept-variables built on overlapping codes is mechanical, not a discovery.
@@ -488,6 +498,15 @@ def run_ldo(
         },
         # Disease-axis effects (visible only when variable_meta/disease_graph were threaded):
         # the mechanical-overlap guard's re-typings and the disease-informed penalty.
+        # §LDO-MARGIN-10 count-with-exposure margin calibration: the per-municipality baseline (Z is
+        # deviation from the muni's OWN expected count, not the national rate) + the PIT-uniformity KS
+        # gate. n_margin_miscalibrated variables failed KS (their edges downgraded to descriptive).
+        "n_count_exposure_margins": len(getattr(gf, "margin_calibration", None) or {}),
+        "n_margin_miscalibrated": len(_miscal),
+        "margin_calibration_min_ks_p": (
+            float(min((getattr(gf, "margin_calibration", None) or {}).values()))
+            if getattr(gf, "margin_calibration", None) else None
+        ),
         "disease_prior_applied": disease_penalty is not None,
         # §III.3/P2 adaptive disease shrinkage: whether the per-scale τ was data-estimated (vs the
         # flat γ), and the blocks whose borrow-strength is heavy (τ²>0.75) — their estimates lean on

@@ -35,31 +35,18 @@ class PairwiseCovariance:
     coverage: np.ndarray             # per-kept-variable observed-sample count
 
 
-def _nearest_correlation(C: np.ndarray, *, floor: float = 1e-3, max_iter: int = 100, tol: float = 1e-7) -> np.ndarray:
-    """Higham (2002) nearest correlation matrix in Frobenius norm — alternating projections onto
-    the PSD cone and the unit-diagonal set with Dykstra's correction. Replaces the one-shot
-    eigen-clip+renormalize, which is NOT the nearest correlation and can return an INDEFINITE
-    matrix (renormalizing the diagonal after the PSD clip breaks positive-semidefiniteness, then
-    feeds an invalid input to the sparse+low-rank ADMM). The final ``floor`` lifts the spectrum
-    off zero so the downstream log-det stays finite (same regularization level as before)."""
+def _nearest_correlation(C: np.ndarray, *, floor: float = 1e-3) -> np.ndarray:
+    """PSD correlation projection: one eigen-clip (floor the spectrum) + renormalize to unit diag.
+
+    Not the exact Frobenius-nearest correlation (Higham's alternating projections), but the inputs
+    here already carry a unit diagonal (callers ``fill_diagonal(1.0)``), so the renormalize is
+    near-PSD-preserving and the downstream ADMM adds its own regularization. Full Higham was tried
+    and reverted: it cost ~15-18 O(q³) eigh iterations per call (14.5 s at q=700 vs ~0.5 s here),
+    ×~15 fits/run — a large real-panel slowdown for a benefit that is theoretical on these inputs."""
     C = 0.5 * (C + C.T)
-    n = C.shape[0]
-    if n == 0:
-        return C
-    Y = C.copy()
-    dS = np.zeros_like(C)
-    for _ in range(max_iter):
-        R = Y - dS                                       # Dykstra correction
-        vals, vecs = np.linalg.eigh(0.5 * (R + R.T))
-        X = (vecs * np.clip(vals, 0.0, None)) @ vecs.T   # project onto the PSD cone
-        dS = X - R
-        Y = X.copy()
-        np.fill_diagonal(Y, 1.0)                          # project onto unit diagonal
-        if np.linalg.norm(Y - X) <= tol * max(np.linalg.norm(Y), 1e-12):
-            break
-    # strict-PD floor for the log-det consumer (Y is already the nearest correlation).
-    vals, vecs = np.linalg.eigh(0.5 * (Y + Y.T))
-    psd = (vecs * np.clip(vals, floor, None)) @ vecs.T
+    vals, vecs = np.linalg.eigh(C)
+    vals = np.clip(vals, floor, None)
+    psd = (vecs * vals) @ vecs.T
     d = np.sqrt(np.clip(np.diag(psd), 1e-12, None))
     return psd / np.outer(d, d)
 

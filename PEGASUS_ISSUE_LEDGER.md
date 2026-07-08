@@ -37,11 +37,11 @@ source docs, and re-verify any **OPEN?** before building.
 | Rank | ID | Item | Module | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | FEAT-P3 / ROAD-W12 | **Export / materialization layer** — user-controllable datasets carrying uncertainty/code_system/projection_status | output | OPEN | no such layer exists; the biggest real architectural gap |
-| 2 | SIDRA-CTX-01 | **Context (ST-DFM) never routed to the EFG** — `compile.py` sets `stdfm=skipped` | sidra/efg | OPEN? | matches the `efg-domain-machinery-orphaned` seam; verify intent before wiring |
+| 2 | SIDRA-CTX-01 | Context (ST-DFM) routed to the EFG | sidra/efg | **DEFENSIBLE/DONE** | verified WIRED (`sidra_context._run_stdfm_for_context` → `field.support["stdfm"]` → EFG); `skipped` is intentional profile/regime gating, not an orphan |
 | 3 | FEAT-P4 | **Multi-denominator declaration** (per-query default-denominator override) | denominators | OPEN | `exposure_ref` exists; no per-query override mechanism |
-| 4 | DIS-06 + ZIKA-ACCPT | **Disease variable-grammar → live compile** + autonomous Zika→microcephaly acceptance gate | disease/efg | OPEN? | variable generator built (task #9); "wired into live pipeline" unverified |
+| 4 | DIS-06 + ZIKA-ACCPT | Disease variable-grammar + Zika acceptance | disease/efg | **DEFERRED** | DIS-06 intentionally unwired (σ_C is the canonical generator; grammar docstring warns vs a 2nd); ZIKA aspirational (Q02↔A92 graph edge 0.0, needs off-limits flagship inference) |
 | 5 | POP-02 M6 (POPT-3/4/5) | Population build: numpy-native scatter, per-block build-solve-emit, parallel blocks | denominators | OPEN | perf/memory, not correctness; the tuple round-trip (POPT-1/2) is already fixed |
-| 6 | RACE-01 | RaceBridge region-conditioning of the per-source confusion matrix | measurement | OPEN? | literature matrices seeded; region-conditioning reported open |
+| 6 | RACE-01 | RaceBridge region-conditioning | measurement | **DEFERRED (data-blocked)** | registry supports it (`region_scope`); needs empirical region-specific C (PNS/PNAD linkage) not in-repo + not fabricatable; study-adjacent |
 | 7 | STOR-05 | Delete DATASUS stdout/stderr/heartbeat ancillaries on success | datasus | VERIFIED-DONE | already handled by `subprocess._cleanup_chunk_ephemera` on success |
 | 8 | PERF-02 | Bounded-radius BFS in migration `hop_distances` | denominators | VERIFIED-DONE + hardened | live national path threads bounded `max_hops`; hardened the direct-call fallback (result-identical, drops O(N²) footgun) |
 
@@ -104,8 +104,8 @@ the verified bottleneck was a Python `tuple(float(...))` round-trip, since fixed
 | ID | Item | Status |
 |---|---|---|
 | RACE-01..07 | RaceBridge redesign (per-source C, literature prior, never identity, uncertainty) | LIKELY-DONE (tasks #4,#20) except… |
-| RACE-01-REGION | …region-conditioning of the confusion matrix | OPEN? |
-| EFG-DECL-02 | race-declaration gate when race axis absent | OPEN? |
+| RACE-01-REGION | …region-conditioning of the confusion matrix | **DEFERRED (data-blocked + study-adjacent)** — registry already supports it (`region_scope` gating), but region-specific C needs empirical matrices (PNS/PNAD linkage by region) not in-repo and not fabricatable; national matrix is honestly flagged (`race_bridge_prior_uncalibrated_assessment_only`) |
+| EFG-DECL-02 | race-declaration gate when race axis absent | VERIFIED-DONE — fails closed (`race_axis_metadata_missing_fail_closed`) |
 
 ## §Disease semantic axis
 
@@ -114,16 +114,16 @@ the verified bottleneck was a Python `tuple(float(...))` round-trip, since fixed
 | DIS-01/02/03 | concept registry, ICD/CID adapter, DiseaseGraph | LIKELY-DONE |
 | DIS-04 | L_D prior in LDO precision | DONE `f774e28` (quadratic) + adaptive-ℓ1 |
 | DIS-05 | shared-code overlap accounting (`mechanical_overlap`) | LIKELY-DONE (enforcement gate unverified) |
-| DIS-06 | semantic-expansion variable-grammar wired into live compile | OPEN? |
-| DIS-07 | build-time label embeddings (Qwen3-0.6B cached asset) | OPEN (large feature) |
-| ZIKA-ACCPT | autonomous Zika→microcephaly acceptance test | OPEN? |
+| DIS-06 | semantic-expansion variable-grammar wired into live compile | **DEFERRED-by-design** — verified: `variable_grammar.py` is built+tested but intentionally NOT wired (its docstring warns against a *second* live generator; the EFG σ_C-restriction path is the canonical one). Wiring it as the sole generator is a future refactor needing a V_fields-equivalence pinning test, not a bug. |
+| DIS-07 | build-time label embeddings (Qwen3-0.6B cached asset) | OPEN (large feature; low priority) |
+| ZIKA-ACCPT | autonomous Zika→microcephaly acceptance test | **DEFERRED** — no test exists; risk HIGH: cross-chapter Q02↔A92 DiseaseGraph edge is 0.0 (weak/absent coupling → discoverability uncertain, possibly aspirational), and the full-stack test needs the off-limits flagship inference. Revisit with the study. |
 
 ## §SIDRA / context
 
 | ID | Item | Status |
 |---|---|---|
-| SIDRA-CTX-01 | route ST-DFM context into the EFG (`compile.py` `stdfm=skipped`) | OPEN? (priority-2) |
-| SIDRA-CTX-02 | enforce high-cardinality axis bound / bounded pushforward on the legality path | OPEN? |
+| SIDRA-CTX-01 | route ST-DFM context into the EFG | **DEFENSIBLE / DONE** — verified WIRED: `sidra_context._run_stdfm_for_context` runs the ST-DFM pipeline in-band; results embed in `field.support["stdfm"]` → reach the EFG; `compile.py:719` sets stage from the executed count. The `skipped` status is intentional gating (core_vital profile / direct-regime / no-context-artifact), not an orphan. |
+| SIDRA-CTX-02 | high-cardinality axis bound / bounded pushforward on legality path | VERIFIED-DONE — `legality._high_dimensional_axes_ok` fails closed on unbounded high-dim SIDRA axes; seeded by `project_and_bound_context_facts` |
 
 ## §Output / schema
 
@@ -138,10 +138,10 @@ the verified bottleneck was a Python `tuple(float(...))` round-trip, since fixed
 | ID | Item | Status |
 |---|---|---|
 | STOR-01/02/07 | raw.rds decoupled; microdatasus audit-only; manifest tensor reference-only | DONE `61746bb` + v4 bridge |
-| STORE-02 | lazy `scan_parquet` views (retire re-materialization) | OPEN? (agent self-conflicted; verify) |
-| STOR-03 | processed.parquet ZSTD vs SNAPPY | OPEN? |
+| STORE-02 / T1.6 | lazy `scan_parquet` views (retire re-materialization) | VERIFIED-DONE — `_combine_processed_datasus_chunks` uses `scan_parquet`→`sink_parquet`; content-addressed `combined_hash` skips re-materialization on identical intent |
+| STOR-03 | processed.parquet ZSTD vs SNAPPY | VERIFIED-DONE — `storage/parquet.write_table` defaults `compression="zstd"`; explicit in the combine write |
 | STOR-05 | delete stdout/stderr/heartbeat ancillaries on success | VERIFIED-DONE (`_cleanup_chunk_ephemera`) |
-| STOR-06 | SIDRA cache/facts duplication | OPEN? |
+| STOR-06 | SIDRA cache/facts duplication | VERIFIED-DONE — `extract.py` writes a slim provenance record (payload_sha256 + archive pointer); full payload only on HTTP error |
 | GPU-01..08, LDO-NUM-01, LDO-DESIGN-01/02 | LDO perf: batched/truncated eigh, warm-start, whitening reuse, GPU HSIC | DEFERRED `GPU gated; perf not correctness` |
 | DISCO-01 / FAL-02 | continuous-discovery scheduler + incremental update | OPEN (§VI.4 future) |
 
@@ -165,7 +165,7 @@ verification.
 | T1.3 | national race-prior `= None` before UF fan-out (`pipeline.py:475`) | **DEFENSIBLE-BY-DESIGN** — verified: comment "UF-independent; wired later"; `compile.py:524` re-resolves via `race_bridge_plan`. Study-adjacent (race-stratified national) → off-limits scope; re-verify when that path is exercised. |
 | **★ EFG-QT — canonical §3.12 Q-state now wired (DONE `11fce28`):** | | |
 | EFG-QT / DIRECT-QT-01 | `_q_row` now derives the Q-tensor `state` from the canonical `classify_q_state` on the COMPUTED diagnostics (was a zero-caller orphan; state was the ad-hoc materialize-time `field.state`). Surfaced + fixed a latent denom_fragility bug: bare COUNT fields (n_denom None) were quarantined by a `1.0` default — now count-aware (0.0 for counts, 1.0 only for a rate missing its denominator), via shared `default_denom_fragility` used by both `_q_row` and `compute_q_state`. | DONE `11fce28` — 502 tests pass; probe confirms count→verified, broken-rate→quarantined |
-| EFG-QT-residual | materialize-time `field.state`/`dashboard_safe` are still set by ad-hoc literals (incl. a non-enum `"warning"`); these drive `QuarantinedFields`/dashboard gating (a declaration-soundness axis, distinct from the now-correct Q-tensor data-reliability verdict) | OPEN (lower priority — tighten the loosely-typed state model + reconcile declaration vs data-reliability gating) |
+| EFG-QT-residual | materialize-time `field.state` ad-hoc literals | DONE `cfda05d` — the non-enum `"warning"` state was an ACTIVE crash (FieldState("warning") ValueError on sim_informed_denominator mode; hidden because tests only use official_sidra_anchor) → `forced_fragile`; regression test pins the enum-coercion contract. Remaining declaration-vs-data-reliability gating reconciliation is a design nicety, not a bug (dashboard_safe tri-state is intentional). |
 | **Megazord decomps (behavior-preserving splits):** | | |
 | WF-07 | `compile.py` 1036-LOC god-module | OPEN |
 | EFG-08 | `executor/kernels.py` 838 LOC, stringly-typed dispatch | OPEN (partial split done) |
@@ -173,10 +173,10 @@ verification.
 | EFG-07 | `FieldNode.support/axes` untyped dict, 136 alias-probes | OPEN? |
 | MOD-03 | layering inversion: `geo/migration_affinity` imports `denominators` | OPEN? |
 | WF-08/09 | untyped compile→pipeline handoff; stage predicates derived twice | OPEN? |
-| T1.6 / STORE-02 | `datasus_combined` re-materialized per run (combined_hash folds fetched_at) | OPEN? |
-| T1.8 / POP-02 M2 | float32 denominator solver never built (peak RAM ~2× floor) | OPEN |
+| T1.6 / STORE-02 | `datasus_combined` re-materialized per run | VERIFIED-DONE — content-addressed combine (`combined_hash`) skips re-materialization on identical intent |
+| T1.8 / POP-02 M2 | float32 denominator solver never built (peak RAM ~2× floor) | OPEN (perf; folds into POP-02 M6 build-memory) |
 | REG-07-LOADER | registries still 21 files; Stack A/B duplication + codegen cruft (decode-path rewrite) | OPEN (task #28) |
-| MOD-HELD | §1b straggler dead-code (WF-03..06/EFG-05/WF-10 likely-dead CLI/test-only) | OPEN? (task #27) |
-| ARCH-REG-02 | declarative `source_routing.yaml` (routing hardcoded in normalizers) | OPEN? |
-| SCOPE-01 / ARCH-PROFILE-01 | decouple DataScope × ExecutionStage axes in UserIntent | OPEN? |
-| PANEL-01 | CommonPanel wired (op-plan §1c "pre-builds") | OPEN? |
+| MOD-HELD | §1b straggler dead-code | VERIFIED test-only — `run_attach_race_bridge`, `build_sim_fixture_efg_run`, `ingest_sidra` have ZERO production callers (test/CLI-only; no integrity impact). Deletion is optional low-value hygiene, DEFERRED (needs per-test review to avoid breaking fixtures — don't trash working test infra). |
+| ARCH-REG-02 | declarative source routing | VERIFIED-DONE — `config/registries/datasus/source_fields.yaml` declares a per-field `route` (Decode/Parse/PreserveMark); not hardcoded |
+| SCOPE-01 / ARCH-PROFILE-01 | decouple DataScope × ExecutionStage | VERIFIED-DONE — `core/schemas.py` `run_profile` and `execution_stage` are orthogonal axes (documented) |
+| PANEL-01 | CommonPanel wired | VERIFIED-DONE — `compile_common_panel()` built + called in `investigate.py:235`; consumed by `ldo/assemble.py` |

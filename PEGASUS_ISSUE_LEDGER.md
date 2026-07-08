@@ -43,7 +43,7 @@ source docs, and re-verify any **OPEN?** before building.
 | 5 | POP-02 M6 (POPT-3/4/5) | Population build: numpy-native scatter, per-block build-solve-emit, parallel blocks | denominators | OPEN | perf/memory, not correctness; the tuple round-trip (POPT-1/2) is already fixed |
 | 6 | RACE-01 | RaceBridge region-conditioning of the per-source confusion matrix | measurement | OPEN? | literature matrices seeded; region-conditioning reported open |
 | 7 | STOR-05 | Delete DATASUS stdout/stderr/heartbeat ancillaries on success | datasus | VERIFIED-DONE | already handled by `subprocess._cleanup_chunk_ephemera` on success |
-| 8 | PERF-02 | Bounded-radius BFS in migration `hop_distances` before the dense-pairs guard | denominators | OPEN? | memory says "M4 bounded-BFS done" — reconcile before touching |
+| 8 | PERF-02 | Bounded-radius BFS in migration `hop_distances` | denominators | VERIFIED-DONE + hardened | live national path threads bounded `max_hops`; hardened the direct-call fallback (result-identical, drops O(N²) footgun) |
 
 **Deferred by policy:** causal installment (FEAT-P5 / CAUSAL-THEME15 — Meek/faithfulness/DiD),
 LDO-W11 Moran/HSIC dedup (behavior-identity check first), all LDO perf/GPU (LDO-NUM-01,
@@ -94,7 +94,7 @@ the verified bottleneck was a Python `tuple(float(...))` round-trip, since fixed
 | POPT-4 | parallelize the locality-separable blocked solve (ProcessPool) | OPEN |
 | POPT-5 | per-block build-solve-emit (input-prep peak O(block)) | OPEN |
 | POPT-6 | document age×sex/race×age joints as IPF/independence reconstructions | OPEN (small) |
-| PERF-02 | bounded-radius BFS in `migration.hop_distances` | OPEN? (reconcile w/ memory "M4 done") |
+| PERF-02 | bounded-radius BFS in `migration.hop_distances` | VERIFIED-DONE + fallback hardened (result-identical) |
 | POPT-8 / POP-02 GPU | torch port of `loss.py`+SPG (f32-bulk/f64-reduction) | DEFERRED `gated on measured CPU baseline` |
 | FEAT-P4 | per-query multi-denominator declaration | OPEN |
 | ARCH-CTR-01 | unify `she/population` + `denominators/reconstruction` | OPEN? |
@@ -159,7 +159,7 @@ verification.
 | WF-02 | name collision `_race_bridge_prior_artifact` (producer vs finder, opposite logic) | WIP |
 | LDO-B08 | Laplacian `L=D−W` hand-rolled 4× (disease_prior/lowrank/geo) → shared helper (`normalized=` flag) | WIP |
 | MOD-01/EFG-03 / MATH-22 | Moran's I: q_tensor's 1-D `_moran_contiguity` vs compile_attach adjacency | **DEFENSIBLE** — verified: the LIVE path uses geography-aware `_moran_i_adjacency`; the 1-D proxy is only q_tensor's documented no-graph fallback (emits `moran_i_ordering_contiguity_proxy`). n_eff also already unified (shared `_kish_effective_n`+`_moran_corrected_n_eff`). |
-| LDO-B03/B04 | `residual_scan` forks the HSIC kernel + imports hsic privates (must stay bit-identical) | OPEN (dedup w/ numeric-identity test) |
+| LDO-B03/B04 | HSIC kernel "fork" | **DEFENSIBLE / FALSE lead** — `residual_scan` imports hsic's PUBLIC API (`build_hsic_representation`/`hsic_pair_stat_and_null`/`hsic_mode_for_n`/`_gpu`); no duplicate kernel, clean boundary (matches O9 intentional split). W11 cluster (task #53) fully dissolved: HSIC false, Moran defensible, core.text false. |
 | **Data-integrity (silent-loss — matches full-data mandate):** | | |
 | T1.2 | DATASUS per-chunk fail-closed completeness gate | DONE `56f0bdc` — `blocked`→hard-fail (broken bridge); `timeout`/`failed`→explicit PARTIAL-COVERAGE (not silent); opt-in `require_complete` threaded to national |
 | T1.3 | national race-prior `= None` before UF fan-out (`pipeline.py:475`) | **DEFENSIBLE-BY-DESIGN** — verified: comment "UF-independent; wired later"; `compile.py:524` re-resolves via `race_bridge_plan`. Study-adjacent (race-stratified national) → off-limits scope; re-verify when that path is exercised. |

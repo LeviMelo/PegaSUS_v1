@@ -42,7 +42,7 @@ source docs, and re-verify any **OPEN?** before building.
 | 4 | DIS-06 + ZIKA-ACCPT | **Disease variable-grammar → live compile** + autonomous Zika→microcephaly acceptance gate | disease/efg | OPEN? | variable generator built (task #9); "wired into live pipeline" unverified |
 | 5 | POP-02 M6 (POPT-3/4/5) | Population build: numpy-native scatter, per-block build-solve-emit, parallel blocks | denominators | OPEN | perf/memory, not correctness; the tuple round-trip (POPT-1/2) is already fixed |
 | 6 | RACE-01 | RaceBridge region-conditioning of the per-source confusion matrix | measurement | OPEN? | literature matrices seeded; region-conditioning reported open |
-| 7 | STOR-05 | Delete DATASUS stdout/stderr/heartbeat ancillaries on success | datasus | OPEN | trivial, low-value hygiene |
+| 7 | STOR-05 | Delete DATASUS stdout/stderr/heartbeat ancillaries on success | datasus | VERIFIED-DONE | already handled by `subprocess._cleanup_chunk_ephemera` on success |
 | 8 | PERF-02 | Bounded-radius BFS in migration `hop_distances` before the dense-pairs guard | denominators | OPEN? | memory says "M4 bounded-BFS done" — reconcile before touching |
 
 **Deferred by policy:** causal installment (FEAT-P5 / CAUSAL-THEME15 — Meek/faithfulness/DiD),
@@ -140,7 +140,7 @@ the verified bottleneck was a Python `tuple(float(...))` round-trip, since fixed
 | STOR-01/02/07 | raw.rds decoupled; microdatasus audit-only; manifest tensor reference-only | DONE `61746bb` + v4 bridge |
 | STORE-02 | lazy `scan_parquet` views (retire re-materialization) | OPEN? (agent self-conflicted; verify) |
 | STOR-03 | processed.parquet ZSTD vs SNAPPY | OPEN? |
-| STOR-05 | delete stdout/stderr/heartbeat ancillaries on success | OPEN |
+| STOR-05 | delete stdout/stderr/heartbeat ancillaries on success | VERIFIED-DONE (`_cleanup_chunk_ephemera`) |
 | STOR-06 | SIDRA cache/facts duplication | OPEN? |
 | GPU-01..08, LDO-NUM-01, LDO-DESIGN-01/02 | LDO perf: batched/truncated eigh, warm-start, whitening reuse, GPU HSIC | DEFERRED `GPU gated; perf not correctness` |
 | DISCO-01 / FAL-02 | continuous-discovery scheduler + incremental update | OPEN (§VI.4 future) |
@@ -161,7 +161,7 @@ verification.
 | MOD-01/EFG-03 / MATH-22 | Moran's I: q_tensor's 1-D `_moran_contiguity` vs compile_attach adjacency | **DEFENSIBLE** — verified: the LIVE path uses geography-aware `_moran_i_adjacency`; the 1-D proxy is only q_tensor's documented no-graph fallback (emits `moran_i_ordering_contiguity_proxy`). n_eff also already unified (shared `_kish_effective_n`+`_moran_corrected_n_eff`). |
 | LDO-B03/B04 | `residual_scan` forks the HSIC kernel + imports hsic privates (must stay bit-identical) | OPEN (dedup w/ numeric-identity test) |
 | **Data-integrity (silent-loss — matches full-data mandate):** | | |
-| T1.2 | no fail-closed completeness gate on per-chunk DATASUS timeouts → transient chunk loss | OPEN? (verify `datasus/subprocess.py`, `pipeline.py:202`) |
+| T1.2 | DATASUS per-chunk fail-closed completeness gate | DONE `56f0bdc` — `blocked`→hard-fail (broken bridge); `timeout`/`failed`→explicit PARTIAL-COVERAGE (not silent); opt-in `require_complete` threaded to national |
 | T1.3 | national race-prior `= None` before UF fan-out (`pipeline.py:475`) | **DEFENSIBLE-BY-DESIGN** — verified: comment "UF-independent; wired later"; `compile.py:524` re-resolves via `race_bridge_plan`. Study-adjacent (race-stratified national) → off-limits scope; re-verify when that path is exercised. |
 | **★ EFG-QT — canonical §3.12 Q-state now wired (DONE `11fce28`):** | | |
 | EFG-QT / DIRECT-QT-01 | `_q_row` now derives the Q-tensor `state` from the canonical `classify_q_state` on the COMPUTED diagnostics (was a zero-caller orphan; state was the ad-hoc materialize-time `field.state`). Surfaced + fixed a latent denom_fragility bug: bare COUNT fields (n_denom None) were quarantined by a `1.0` default — now count-aware (0.0 for counts, 1.0 only for a rate missing its denominator), via shared `default_denom_fragility` used by both `_q_row` and `compute_q_state`. | DONE `11fce28` — 502 tests pass; probe confirms count→verified, broken-rate→quarantined |

@@ -121,6 +121,7 @@ def run_ldo(
     gamma_temporal: float = 0.1,
     gamma_disease: float = 0.1,
     temporal_whiten: bool = False,
+    spatial_kernel: str = "contiguity",
     precision_target: float | None = None,
     precision_budget: float = 1.0,
     variable_meta: dict[str, dict] | None = None,
@@ -211,7 +212,7 @@ def run_ldo(
         edge_threshold=edge_threshold, disease_penalty=disease_penalty,
         disease_laplacian=disease_laplacian,
         gamma_temporal=gamma_temporal, gamma_disease=gamma_disease,
-        float32_bulk=f32, temporal_whiten=temporal_whiten,
+        float32_bulk=f32, temporal_whiten=temporal_whiten, spatial_kernel=spatial_kernel,
     )
     lagged = fit_lagged_links(gf, K=K, **fit_kwargs)
 

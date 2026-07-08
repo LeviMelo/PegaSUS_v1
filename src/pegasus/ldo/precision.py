@@ -51,7 +51,10 @@ def build_spatial_precision(space_ids: tuple[str, ...], *, kappa: float = 1.0) -
     return build_spatial_precision_sparse(space_ids, kappa=kappa).toarray()
 
 
-def build_spatial_precision_sparse(space_ids: tuple[str, ...], *, kappa: float = 1.0):
+def build_spatial_precision_sparse(
+    space_ids: tuple[str, ...], *, kappa: float = 1.0,
+    edge_weights: dict[str, dict[str, float]] | None = None,
+):
     """GMRF spatial precision ``κ I + L_sym`` as ``scipy.sparse`` CSR (§V.2 sparsity).
 
     Uses the SYMMETRIC-NORMALIZED Laplacian ``L_sym = I − D^{-1/2} A D^{-1/2}`` (LDO-WHITEN-04):
@@ -59,14 +62,33 @@ def build_spatial_precision_sparse(space_ids: tuple[str, ...], *, kappa: float =
     ``κI + L_W`` whitens high-degree (interior, ~6-neighbour) municipalities far more aggressively
     than low-degree (coastal/border) ones — confounding the whitening strength with the very spatial
     geography it removes. ``L_sym`` has eigenvalues in ``[0,2]`` regardless of degree (diagonal 1 for
-    a connected node, off-diagonal ``−1/√(dᵢdⱼ)``), so the whitening is degree-consistent. ~6 nnz/row.
+    a connected node, off-diagonal ``−w_ij/√(dᵢdⱼ)``), so the whitening is degree-consistent. ~6 nnz/row.
+
+    ``edge_weights`` (P1/M1 — richer adjacency kernel): an optional symmetric edge-weight kernel
+    ``{cod6: {neighbour_cod6: w>0}}`` that REWEIGHTS the structural contiguity edges — a distance-decay
+    ``exp(-d/ρ)``, gravity ``popᵢpopⱼ/d²`` or flow affinity — so nearby/strongly-coupled neighbours
+    whiten more than distant/weak ones (the LDO-WHITEN-04 "spatial range" the crude binary graph lacks).
+    The weighted degree is ``dᵢ=Σⱼ wᵢⱼ`` and the off-diagonal ``−wᵢⱼ/√(dᵢdⱼ)``. ``None`` ⇒ every edge
+    weight 1.0 ⇒ **byte-identical** to the binary structural default. A weighted kernel is inherently
+    ``context_derived``; the CALLER must clear the §II.4.1 circularity guard before passing one (never
+    a population/flow-derived kernel as the prior for a variable sharing that provenance).
     """
     import scipy.sparse as sp
 
     adjacency = structural_cod6_adjacency()
     S = len(space_ids)
     idx = {s: i for i, s in enumerate(space_ids)}
-    deg = {s: sum(1 for nb in adjacency.get(s, ()) if nb in idx) for s in space_ids}
+
+    def _w(s: str, nb: str) -> float:
+        if edge_weights is None:
+            return 1.0
+        return float(edge_weights.get(s, {}).get(nb, 0.0))
+
+    # Weighted in-panel degree dᵢ = Σⱼ wᵢⱼ over present, in-panel neighbours (w=1 ⇒ neighbour count).
+    deg = {
+        s: sum(_w(s, nb) for nb in adjacency.get(s, ()) if nb in idx)
+        for s in space_ids
+    }
     rows: list[int] = []
     cols: list[int] = []
     data: list[float] = []
@@ -76,15 +98,16 @@ def build_spatial_precision_sparse(space_ids: tuple[str, ...], *, kappa: float =
         rows.append(i)
         cols.append(i)
         data.append(kappa + (1.0 if di > 0 else 0.0))  # κ + L_sym diagonal (1 connected, 0 isolated)
-        if di == 0:
+        if di <= 0:
             continue
         for nb in adjacency.get(s, ()):
             j = idx.get(nb)
-            dj = deg.get(nb, 0)
-            if j is not None and dj > 0:
+            dj = deg.get(nb, 0.0)
+            wij = _w(s, nb)
+            if j is not None and dj > 0 and wij > 0:
                 rows.append(i)
                 cols.append(j)
-                data.append(-1.0 / (di * dj) ** 0.5)  # −A_ij/√(dᵢdⱼ)
+                data.append(-wij / (di * dj) ** 0.5)  # −wᵢⱼ/√(dᵢdⱼ)
     return sp.csr_matrix((data, (rows, cols)), shape=(S, S), dtype=np.float64)
 
 

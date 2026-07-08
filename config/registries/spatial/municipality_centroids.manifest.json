@@ -1,0 +1,11 @@
+{
+  "artifact": "municipality_centroids.parquet",
+  "description": "IBGE municipality polygon centroids for distance-weighted spatial kernels (P1 / LDO-WHITEN-04 spatial range).",
+  "provenance": "geobr Python read_municipality(code_muni='all', year=2020) — IBGE malhas municipal polygons; centroids computed after reprojection to SIRGAS 2000 / Brazil Polyconic.",
+  "crs_metric": "EPSG:5880",
+  "key": "municipality_cod6 (IBGE cod7 minus check digit; matches structural_cod6 adjacency keying)",
+  "columns": ["municipality_cod6", "x_m", "y_m"],
+  "vintage_year": 2020,
+  "coverage_note": "5570 municipalities; covers 100% of the municipality_contiguity_queen graph nodes. Rebuild via pegasus.geo.centroids.build_centroids_artifact().",
+  "units": "metres"
+}

@@ -82,6 +82,7 @@ def fit_lagged_links(
     gamma_temporal: float = 0.0,
     gamma_disease: float = 0.0,
     spatial_whiten: bool = True,
+    spatial_kernel: str = "contiguity",
     temporal_whiten: bool = False,
     randomized_factors: bool | None = None,
     float32_bulk: bool = False,
@@ -132,7 +133,23 @@ def fit_lagged_links(
         # Spatial GMRF whitening via the sparse metric (§V.2/§V.4): matrix-free, O(F·S)
         # memory, no dense S×S whitener or O(S³) sqrt — so it scales to national S≈5570.
         from pegasus.ldo.precision import build_spatial_precision_sparse
-        Q_space = build_spatial_precision_sparse(field.space_ids, kappa=kappa)
+        # ``spatial_kernel="distance_decay"`` (P1) reweights the contiguity edges by geobr
+        # municipality-centroid distance exp(-d/ρ) so a huge Amazon muni's far neighbour couples
+        # less than a dense-cluster's near one — the LDO-WHITEN-04 "spatial range" the binary graph
+        # lacks. It is a STRUCTURAL (geographic) kernel ⇒ circularity-safe as a default prior.
+        # Off by default: empirically distance-decay only clearly beats binary for SHORT-range
+        # spatial structure (+14% at L≈15 km) and marginally under-whitens long-range regional
+        # gradients (−1.6% at L≥60 km) — which the low-rank L absorbs anyway. Falls back to binary
+        # if the centroid artifact is absent (never fabricated).
+        edge_weights = None
+        if spatial_kernel == "distance_decay":
+            try:
+                from pegasus.geo.centroids import distance_decay_edge_weights
+                from pegasus.geo.spatial_graph import structural_cod6_adjacency
+                edge_weights, _rho = distance_decay_edge_weights(structural_cod6_adjacency())
+            except Exception:
+                edge_weights = None  # centroids missing / fetch failed → binary contiguity
+        Q_space = build_spatial_precision_sparse(field.space_ids, kappa=kappa, edge_weights=edge_weights)
         pw = whitened_lagged_correlation(field.Z, Q_space, K, min_coverage=min_coverage, weights=W)
     else:
         feat = _build_lagged_feature_matrix(field.Z, K)  # (p*(K+1), n)

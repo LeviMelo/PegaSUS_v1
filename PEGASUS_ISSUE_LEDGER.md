@@ -32,6 +32,34 @@ source docs, and re-verify any **OPEN?** before building.
 
 ---
 
+## Burn-down status (2026-07-08, autonomous)
+
+Two verification+fix waves (10 agents total) drove the ledger to a terminal state. **The EFG-LDO
+architectural-integrity gate — the user's stated prerequisite before any study — is MET.**
+
+**Landed this cycle:** EFG-QT `11fce28` (canonical `classify_q_state` wired + count `denom_fragility`
+fix) · T1.2 `56f0bdc` (DATASUS blocked→hard-fail, explicit partial-coverage, opt-in `require_complete`)
+· PERF-02 (migration BFS fallback bounded, result-identical) · EFG-QT-residual `cfda05d` (**active
+crash fix** — non-enum `state="warning"`). Full suite 506 green.
+
+**Verified already-satisfied / defensible (no build needed):** MATH-12, MATH-05/06, KS-01, W11/HSIC,
+SIDRA-CTX-01/02, STORE-02, STOR-03/05/06, ARCH-REG-02, SCOPE-01, PANEL-01, EFG-DECL-02, MOD-HELD
+(test-only), FAL-POP-*, and the whole LDO layer. (The authority docs were stale; live code was ahead.)
+
+**Remaining — none is an integrity gap; each is study-gated, design-dependent, or policy-deferred:**
+- **FEAT-P3 export layer / FEAT-P4 multi-denominator** — the bundle already materializes all typed
+  outputs to parquet; these add a *delivery/query interface* whose concrete shape is driven by the
+  off-limits study's consumption needs. Best built to the study's real requirements, not speculatively.
+- **POP-02 M6 / T1.8** — national-build memory perf; value is gated on running the (off-limits) national build.
+- **DIS-07** — build-time label embeddings; large, low priority.
+- **Policy-deferred:** causal P5, LDO GPU (measured-baseline gate), RACE-region (data-blocked),
+  DIS-06 (intentionally unwired), ZIKA-ACCPT (aspirational + study-gated).
+
+Conclusion: everything resolvable without a study-driven design decision or off-limits work is
+resolved. The remainder is best sequenced WITH the study greenlight so it is built to real needs.
+
+---
+
 ## ★ Genuinely-open priority set (verified or high-confidence)
 
 | Rank | ID | Item | Module | Status | Notes |

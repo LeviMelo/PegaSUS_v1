@@ -186,25 +186,35 @@ def run_ldo(
 
     disease_penalty = None
     disease_laplacian = None
+    disease_shrink_flags: tuple[dict, ...] = ()
     if disease_graph is not None:
         from pegasus.ldo.disease_prior import (
             disease_laplacian_matrix,
             disease_penalty_matrix,
+            heavily_shrunk_blocks,
             sum_of_scales_disease_operator,
         )
         disease_penalty = disease_penalty_matrix(gf.variables, disease_graph, lambda1=lambda1)
-        # §III.3/§III.4(5) disease smoothing operand. With disease_scale_precisions the §III.3
-        # SUM-OF-SCALES GMRF (per-scale τ: θ_leaf = μ_chapter+δ_block+δ_category+δ_leaf) is used so
-        # each scale shrinks at its own rate; otherwise the flat single-γ L_D. Absent a graph, only
-        # temporal smoothing applies. When sum-of-scales is used, gamma_disease is baked into the τ
-        # so it is set to 1.0 downstream.
+        # §III.3 sum-of-scales disease GMRF (θ_leaf = μ_chapter+δ_block+δ_category+δ_leaf). The per-
+        # scale shrinkage τ_level is DATA-ESTIMATED by empirical Bayes from the RAW field values — NOT
+        # the Gaussianized gf.Z, whose per-variable standardization zeroes every disease mean and would
+        # force τ²→1 (over-shrink) everywhere (verified) — so a block of genuinely-alike diseases
+        # shrinks hard and a divergent block lets the data speak. This replaces the flat γ_disease=0.1
+        # magic constant (LDO-DIS-MAGIC-06 / P2) with an auto-determined, data-driven strength. An
+        # explicit disease_scale_precisions overrides with fixed τ; absent a raw field, the flat L_D.
         disease_laplacian = None
         if disease_scale_precisions:
             disease_laplacian = sum_of_scales_disease_operator(
                 gf.variables, disease_graph, disease_scale_precisions)
+        elif raw_field is not None:
+            _dvals = {v: raw_field.X[i].reshape(-1) for i, v in enumerate(raw_field.variables)}
+            disease_laplacian = sum_of_scales_disease_operator(
+                gf.variables, disease_graph, adaptive=True, field_values_by_variable=_dvals)
             if disease_laplacian is not None:
-                gamma_disease = 1.0  # precisions carried inside G_D
-        if disease_laplacian is None:
+                disease_shrink_flags = tuple(heavily_shrunk_blocks(_dvals, gf.variables, disease_graph))
+        if disease_laplacian is not None:
+            gamma_disease = 1.0  # per-scale τ baked into G_D
+        else:
             disease_laplacian = disease_laplacian_matrix(gf.variables, disease_graph)
 
     fit_kwargs = dict(
@@ -472,6 +482,14 @@ def run_ldo(
         # Disease-axis effects (visible only when variable_meta/disease_graph were threaded):
         # the mechanical-overlap guard's re-typings and the disease-informed penalty.
         "disease_prior_applied": disease_penalty is not None,
+        # §III.3/P2 adaptive disease shrinkage: whether the per-scale τ was data-estimated (vs the
+        # flat γ), and the blocks whose borrow-strength is heavy (τ²>0.75) — their estimates lean on
+        # hierarchical neighbours and must be read as shrunk, not independently measured.
+        "disease_shrinkage_adaptive": disease_laplacian is not None and not disease_scale_precisions and raw_field is not None,
+        "disease_heavily_shrunk_blocks": [
+            {"scale": f["scale"], "variables": list(f["variables"]), "tau2": round(float(f["tau2"]), 3)}
+            for f in disease_shrink_flags
+        ],
         "n_mechanical_overlap": sum(1 for r in records if r.edge_type == "mechanical_overlap"),
         "n_disease_provenanced": sum(1 for r in records if r.code_system is not None),
         # §IV causal ladder: edges by rung (0 associational / 1 oriented LiNGAM+collider /

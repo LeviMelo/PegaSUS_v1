@@ -271,6 +271,15 @@ def scan_residual_nonlinear_edges(
             )
 
     n = int(E.shape[1])
+    # Theme-13 in-sample-residual guard: the residuals e=ΩZ/diag are formed with a precision fit on
+    # these SAME cells, so when the sample is small relative to the model dimension the in-sample
+    # residual dependence is biased — the fit "explains away" ~p/n of the structure and induces
+    # O(p/n) spurious residual correlation, which the HSIC then reads without genuine cross-fitting.
+    # Require n ≥ 10·p (⟺ induced spurious correlation ≲ 0.1, well under any real edge) to CERTIFY;
+    # otherwise surface the residual edges descriptive. At national scale (n≫p) this never binds — it
+    # protects small state panels (p/n≈0.4) from double-dip certification. (A genuine orchestrator-
+    # level fold cross-fit is the follow-up that would let these edges be certified at small n.)
+    insample_biased = n < 10 * p
     n_spatial_blocks = len(set(uf_of_cell.tolist()))
     n_temporal_blocks = len(set(bucket_of_cell.tolist()))
     # Fine grain: swap within (spatial-block × temporal-bucket) — preserves both. Coarse grain:
@@ -340,6 +349,11 @@ def scan_residual_nonlinear_edges(
     edge_warnings: tuple[str, ...] = (f"panel_type:{panel_type}", *regime.warnings)
     if within_block_only:
         edge_warnings = (*edge_warnings, f"multiresolution_coarsened:{scan_resolution}")
+    if insample_biased:
+        edge_warnings = (*edge_warnings, f"residual_insample_bias_descriptive_only[n={n},p={p}]")
+    # A residual edge is certifiable only with a valid structured null AND a residual sample large
+    # enough that the in-sample fit did not bias the HSIC (n ≥ 10·p); otherwise it is a hypothesis.
+    certifiable = sufficient_blocks and not insample_biased
     records: list[LinkRecord] = []
     for (i, j), stat, pv, qv in zip(pairs, stats, pvals, qvals):
         if qv is not None and qv <= alpha:
@@ -352,7 +366,7 @@ def scan_residual_nonlinear_edges(
                     uncertainty=float(qv),
                     null_strategy=null_strategy,
                     fdr_method=regime.fdr_method,
-                    certification_status="selected" if sufficient_blocks else "descriptive",
+                    certification_status="selected" if certifiable else "descriptive",
                     warnings=edge_warnings,
                 )
             )

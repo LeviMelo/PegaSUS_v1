@@ -51,6 +51,35 @@ _MIN_N_EFF = 100
 _MIN_NULL_BLOCKS = 5  # < this many spatial blocks → certify descriptive only (§6.8/§6.9)
 
 
+def _spatial_block_labels(space_ids: tuple[str, ...], cell_space_idx) -> np.ndarray:
+    """Spatial-block label per cell for the §6.8 structured null (MSD-II §II.4 line 201: the HSIC
+    null uses the SHARED SpatialWeightGraph's ``blocks()``, not an ad-hoc UF adjacency). Contiguity
+    blocks respect the actual disease spatial structure across administrative borders — two adjacent
+    municipalities in different states stay in one block, so their correlation is correctly treated
+    as spatial clustering (null), not surprise. Falls back to the UF (state) prefix when the
+    structural graph is unavailable or does not cover the field."""
+    n_muni = len(space_ids)
+    cell_space_idx = np.asarray(cell_space_idx)
+    try:
+        from pegasus.geo.spatial_graph import load_spatial_graph, structural_graph_available
+        if not structural_graph_available():
+            raise RuntimeError("no structural graph")
+        graph = load_spatial_graph()
+        n_blocks = max(_MIN_NULL_BLOCKS, n_muni // 200)  # ~UF-count granularity at national S
+        block_of_node = {
+            str(node): f"B{bi}" for bi, members in enumerate(graph.blocks(n_blocks)) for node in members
+        }
+        labels = np.array([
+            block_of_node.get(str(space_ids[s]) if s < n_muni else "00", "") for s in cell_space_idx
+        ])
+        if np.mean(labels != "") >= 0.5:  # graph meaningfully covers the field → use contiguity blocks
+            uf = np.array([f"UF{str(space_ids[s])[:2]}" if s < n_muni else "UF00" for s in cell_space_idx])
+            return np.where(labels != "", labels, uf)  # graph-absent munis keep a UF label
+    except Exception:
+        pass
+    return np.array([str(space_ids[s])[:2] if s < n_muni else "00" for s in cell_space_idx])
+
+
 def _residual_scan_memory_budget() -> int:
     """Bytes the residual-scan representation cache may use before it must refuse.
 
@@ -219,10 +248,9 @@ def scan_residual_nonlinear_edges(
     regime = select_null_regime(panel_type)
     permutations = int(regime.permutations)
     observed_idx = np.where(observed)[0]
-    uf_of_cell = np.array([
-        str(field.space_ids[s])[:2] if s < len(field.space_ids) else "00"
-        for s in (observed_idx // T)
-    ])
+    # §II.4 line 201: the null's spatial block is the SHARED graph's contiguity blocks() (falls
+    # back to the UF prefix when the graph is unavailable) — not an ad-hoc UF adjacency.
+    uf_of_cell = _spatial_block_labels(field.space_ids, observed_idx // T)
     bucket_of_cell = _temporal_bucket(observed_idx % T, panel_type)
 
     # §II.7 multi-resolution continuation: if the fine-cell HSIC representation cache would

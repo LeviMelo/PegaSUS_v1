@@ -93,7 +93,8 @@ def _apply_fdr(records: list[LinkRecord], policy: LDOCertificationPolicy) -> lis
     ]
     if not idx:
         return records
-    pvals = [fisher_z_pvalue(records[i].partial_correlation, records[i].n_eff) for i in idx]
+    pvals = [fisher_z_pvalue(records[i].partial_correlation, records[i].n_eff,
+                             records[i].n_conditioning or 0) for i in idx]
     rejected, qvals = benjamini_hochberg(pvals, policy.fdr_q)
     out = list(records)
     for j, i in enumerate(idx):

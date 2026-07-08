@@ -118,18 +118,35 @@ def inverse_gaussianize(z: np.ndarray, observed_values: np.ndarray) -> np.ndarra
 
 
 def _select_family(x: np.ndarray, mu: np.ndarray) -> tuple[str, float, float]:
-    """Return (family, r, pi) from Pearson dispersion and excess zeros. r=inf → Poisson."""
+    """Return (family, r, pi) from Pearson dispersion and excess zeros. r=inf → Poisson.
+
+    ``mu`` is the MARGINAL expected count (from the exposure offset ``lam=Σx/ΣE``). Under
+    zero-inflation the offset estimates ``(1−π)·λ_nb``, so the NB-component mean is ``μ/(1−π)``
+    and the Pearson dispersion is inflated by the excess zeros. For ZINB we fit (π, r) jointly by
+    fixed-point iteration: r from the NB-component dispersion at ``μ/(1−π)``, π so the model zero
+    fraction ``π+(1−π)·NB₀`` matches observed. The zinb caller uses ``μ/(1−π)`` in the NB CDF."""
     phi = float(np.mean((x - mu) ** 2 / mu))
     if phi <= 1.0:
         return "poisson", np.inf, 0.0
     r = float(np.clip(np.mean(mu) / (phi - 1.0), _R_MIN, _R_MAX))
-    p_nb = r / (r + mu)
     zero_obs = float(np.mean(x == 0))
-    zero_nb = float(np.mean(p_nb**r))
-    if zero_obs > zero_nb + 1e-3 and zero_nb < 1.0 - 1e-9:
-        pi = float(np.clip((zero_obs - zero_nb) / (1.0 - zero_nb), 0.0, 1.0 - _EPS))
-        return "zinb", r, pi
-    return "nb", r, 0.0
+    zero_nb = float(np.mean((r / (r + mu)) ** r))
+    if not (zero_obs > zero_nb + 1e-3 and zero_nb < 1.0 - 1e-9):
+        return "nb", r, 0.0
+    pi = float(np.clip((zero_obs - zero_nb) / (1.0 - zero_nb), 0.0, 0.95))
+    for _ in range(100):
+        mu_nb = mu / (1.0 - pi)
+        var = float(np.mean((x - (1.0 - pi) * mu_nb) ** 2))          # marginal variance about the ZINB mean
+        mbar = float(np.mean(mu_nb))
+        phi_nb = var / max((1.0 - pi) * mbar, _EPS)
+        r = float(np.clip(mbar / max(phi_nb - 1.0, 1e-3), _R_MIN, _R_MAX))
+        nb0 = float(np.mean((r / (r + mu_nb)) ** r))
+        new_pi = float(np.clip((zero_obs - nb0) / (1.0 - nb0), 0.0, 0.95)) if nb0 < 1.0 - 1e-9 else pi
+        if abs(new_pi - pi) < 1e-7:
+            pi = new_pi
+            break
+        pi = new_pi
+    return "zinb", r, pi
 
 
 def count_exposure_gaussianize(
@@ -176,15 +193,17 @@ def count_exposure_gaussianize(
     if chosen == "poisson":
         u = poisson.cdf(x - 1, mu) + U * poisson.pmf(x, mu)
     else:
-        p_nb = r / (r + mu)
+        # ZINB: the NB component's mean is μ/(1−π) (the offset estimates the marginal (1−π)·λ_nb).
+        mu_c = mu / (1.0 - pi) if chosen == "zinb" else mu
+        p_nb = r / (r + mu_c)
         cdf_lo = nbinom.cdf(x - 1, r, p_nb)
         pmf = nbinom.pmf(x, r, p_nb)
         if chosen == "zinb":
-            # ZINB: inflation mass π added at 0, NB mass scaled by (1-π).
+            # ZINB CDF F(k)=π·[k≥0]+(1-π)·F_NB(k). Randomized-PIT lower cdf F(k-1):
+            # k==0 → 0; k≥1 → π+(1-π)·F_NB(k-1). pmf: p0=π+(1-π)·NB(0), else (1-π)·NB(k).
             is0 = x == 0
-            cdf_lo = (1.0 - pi) * cdf_lo
-            pmf = (1.0 - pi) * pmf
-            pmf = np.where(is0, pmf + pi, pmf)
+            cdf_lo = np.where(is0, 0.0, pi + (1.0 - pi) * cdf_lo)
+            pmf = np.where(is0, pi + (1.0 - pi) * pmf, (1.0 - pi) * pmf)
         u = cdf_lo + U * pmf
     out[mask] = ndtri(np.clip(u, _EPS, 1.0 - _EPS))
     return (out, chosen) if return_family else out

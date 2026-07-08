@@ -190,15 +190,21 @@ def whitened_lagged_correlation(
     spatial operator cannot honour per-cell missingness (§III.4 whitened estimator).
 
     ``weights`` (the §II.6.1 ObservationReliability contract, ``(p, S, T)`` in [0,1], 0
-    where unobserved) reliability-scales each feature-cell before the whitened Gram, so a
-    reconstructed/broadcast cell contributes proportionally less to every whitened
-    cross-moment. With ``weights=None`` (⇒ scale 1 on observed cells, the missing cells
-    already zeroed by the impute) ``Ft`` is unchanged, so the estimate is byte-identical
-    to the unweighted whitened correlation. **Ceiling:** this is the feature-scaling form
-    of reliability down-weighting (a low-reliability cell's *signal* is attenuated); the
-    metric ``Q`` and the constant mean-centering count ``n_cells`` are unchanged, so an
-    exact heteroscedastic-GLS whitening (reliability folded into ``Q`` and a per-feature
-    effective count) is a documented refinement, not implemented here.
+    where unobserved) reliability-weights each feature-cell in the whitened Gram, so a
+    reconstructed/broadcast cell contributes proportionally less to every cross-moment.
+
+    Two regimes. **Uniform / absent** (``weights=None`` or the observed weights vary by
+    <1e-9): reliability carries no differential information and correlation is
+    scale-invariant, so the estimate is byte-identical to the unweighted whitened path —
+    features scaled by the constant weight, mean-centered by the constant ``n_cells``. **Non-
+    uniform:** a constant-``n_cells`` centering of ``W``-scaled features subtracts (weighted
+    sum)/(raw count), NOT a weighted mean, so the shared reliability-pattern×data-mean term
+    survives and two independent variables acquire a spurious edge (audit W1). The fix is a
+    proper weighted covariance: center each feature by its WEIGHTED mean
+    ``m_v = Σ(W_v·Z_v)/ΣW_v`` over observed cells, then carry the weight as ``√W`` on each
+    side (a weighted second moment ``Σ W (x−m)(y−m)`` = ``⟨√W(x−m), √W(y−m)⟩``). The
+    raw-weighted-mean centering removes the shared mean up front, so no constant-``n``
+    whitened re-centering is applied.
 
     ``Z`` is ``(p, S, T)``; feature ``f = lag·p + var``; returns the same
     :class:`PairwiseCovariance` contract as :func:`pairwise_correlation`.
@@ -210,39 +216,61 @@ def whitened_lagged_correlation(
     Zc = np.where(np.isfinite(Z), Z, 0.0)
     finite = np.isfinite(Z)
     F = p * (K + 1)
-    # Per-cell reliability scale, forced to 0 off-mask (a NaN cell carries no weight).
-    # None → unweighted (Ft stays = Zc slice), so the fit is byte-identical.
+
+    # Non-uniform reliability requires the weighted-covariance path; None or (near-)uniform
+    # weights carry no differential info, so keep the current constant-n path byte-identical.
     Wc = None
+    nonuniform = False
     if weights is not None:
         Wc = np.where(finite, np.clip(np.asarray(weights, dtype=np.float64), 0.0, None), 0.0)
+        obs_w = Wc[finite]
+        nonuniform = obs_w.size > 0 and float(obs_w.max() - obs_w.min()) >= 1e-9
 
     # observed-cell count per feature (from the true mask, before impute) — RAW, governs kept
     obs = np.empty(F, dtype=np.int64)
     for lag in range(K + 1):
         obs[lag * p:(lag + 1) * p] = finite[:, :, K - lag: T - lag].sum(axis=(1, 2))
 
-    # Gram matrix G[f,g] = sum_cells whitened(feat_f)·whitened(feat_g) = sum_t feat_tᵀ Q feat_t
-    # accumulated slice-by-slice so only an (F,S) block is held, never (F,T·S) or (S,S) dense.
-    # R accumulates each feature's spatial sum-over-time, for mean-centering below.
-    G = np.zeros((F, F), dtype=np.float64)
-    R = np.zeros((F, S), dtype=np.float64)
-    Ft = np.empty((F, S), dtype=np.float64)
-    for t in range(K, T):
+    if not nonuniform:
+        # ── uniform / absent: unchanged constant-n whitened path (byte-identical) ──
+        G = np.zeros((F, F), dtype=np.float64)
+        R = np.zeros((F, S), dtype=np.float64)
+        Ft = np.empty((F, S), dtype=np.float64)
+        for t in range(K, T):
+            for lag in range(K + 1):
+                blk = Zc[:, :, t - lag]
+                if Wc is not None:
+                    blk = blk * Wc[:, :, t - lag]     # reliability-scale the feature-cell signal
+                Ft[lag * p:(lag + 1) * p] = blk
+            G += Ft @ (Q_sparse @ Ft.T)  # Q@Ft.T is a sparse (S×S)·(S×F) matvec
+            R += Ft
+        # Mean-center in the WHITENED space so this equals the Pearson correlation of
+        # Σ_space^{-1/2}·Z. Whitened-feature mean = (1/n)·hᵀ·rowsum, h = Q^{1/2}·1 (Lanczos);
+        # G_centered = G − H Hᵀ/n.
+        n_cells = S * T_eff
+        h = _sqrt_matvec(Q_sparse, np.ones(S, dtype=np.float64))
+        H = R @ h
+        G = G - np.outer(H, H) / n_cells
+    else:
+        # ── non-uniform: proper weighted covariance ──
+        # Weighted mean per feature m_v = Σ(W·Z)/ΣW over the lag-aligned observed cells.
+        num = np.zeros(F, dtype=np.float64)   # Σ W·Z
+        den = np.zeros(F, dtype=np.float64)   # Σ W
         for lag in range(K + 1):
-            blk = Zc[:, :, t - lag]
-            if Wc is not None:
-                blk = blk * Wc[:, :, t - lag]     # reliability-scale the feature-cell signal
-            Ft[lag * p:(lag + 1) * p] = blk
-        G += Ft @ (Q_sparse @ Ft.T)  # Q@Ft.T is a sparse (S×S)·(S×F) matvec
-        R += Ft
-
-    # Mean-center in the WHITENED space so this equals the Pearson correlation of
-    # Σ_space^{-1/2}·Z (not the uncentered second moment). The whitened-feature mean is
-    # (1/n)·hᵀ·rowsum with h = Q^{1/2}·1 (Lanczos, matrix-free); G_centered = G − H Hᵀ/n.
-    n_cells = S * T_eff
-    h = _sqrt_matvec(Q_sparse, np.ones(S, dtype=np.float64))
-    H = R @ h
-    G = G - np.outer(H, H) / n_cells
+            sl = slice(K - lag, T - lag)
+            num[lag * p:(lag + 1) * p] = (Wc[:, :, sl] * Zc[:, :, sl]).sum(axis=(1, 2))
+            den[lag * p:(lag + 1) * p] = Wc[:, :, sl].sum(axis=(1, 2))
+        m = np.where(den > 0.0, num / den, 0.0)   # (F,)
+        sqrtW = np.sqrt(Wc)
+        # Feature at time t: √W ⊙ (Z − m), zeroed off-mask (√W already 0 there).
+        G = np.zeros((F, F), dtype=np.float64)
+        Ft = np.empty((F, S), dtype=np.float64)
+        for t in range(K, T):
+            for lag in range(K + 1):
+                off = lag * p
+                sw = sqrtW[:, :, t - lag]
+                Ft[off:off + p] = sw * (Zc[:, :, t - lag] - m[off:off + p, None])
+            G += Ft @ (Q_sparse @ Ft.T)
 
     diag = np.clip(np.diag(G), 0.0, None)
     kept = [f for f in range(F) if obs[f] >= min_coverage and diag[f] > 1e-9]

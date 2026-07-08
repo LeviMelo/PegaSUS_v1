@@ -104,8 +104,8 @@ def test_records_carry_distinct_per_edge_n_eff():
     rng = np.random.default_rng(2)
     Z = rng.standard_normal((3, S, T))          # A, B, C
     W = np.ones((3, S, T))
-    W[2] = 0.02                                 # C rests on heavily down-weighted cells
-    field = _field(Z, node_ids, W=W)
+    W[2] = 0.5                                  # C rests on down-weighted cells (kept above the
+    field = _field(Z, node_ids, W=W)            # partial-corr identifiability floor: dof = n_eff-q-1 ≥ 1)
 
     fit = _lagged_fit(("A", "B", "C"), links=[], contemporaneous=[("A", "B", 0.5), ("A", "C", 0.5)])
     recs = to_link_records(fit, field=field)
@@ -115,6 +115,7 @@ def test_records_carry_distinct_per_edge_n_eff():
     ac = by_pair[("A", "C")]
     assert ab.n_eff is not None and ac.n_eff is not None
     assert ac.n_eff < ab.n_eff, "the down-weighted-endpoint edge must carry a smaller n_eff"
+    # smaller effective-n → wider Fisher-z SE at the partial-correlation dof (n_eff − q − 1).
     assert ac.uncertainty > ab.uncertainty, "smaller n_eff must inflate the Fisher-z SE"
     assert ab.n_eff != ac.n_eff  # not one global constant
 
@@ -135,5 +136,6 @@ def test_per_edge_off_is_uniform_noop():
 
     import math
     n_global = int(np.isfinite(field.Z).any(axis=0).sum())
-    expected = 1.0 / math.sqrt(max(n_global - 3, 1))
+    k_cond = max(len(fit.fit.S) - 2, 0)          # partial-correlation conditioning set (q − 2)
+    expected = 1.0 / math.sqrt(max(n_global - k_cond - 3, 1))
     assert abs(next(iter(uncs)) - expected) < 1e-12

@@ -30,6 +30,7 @@ class LinkRecord:
     stability: float | None = None              # stability-selection frequency
     uncertainty: float | None = None
     n_eff: float | None = None                   # per-edge effective sample size (spatial + reliability corrected)
+    n_conditioning: int | None = None            # partial-correlation conditioning-set size (Fisher-z dof = n_eff − n_conditioning − 3)
     confounding_factor_refs: tuple[str, ...] = ()
     null_strategy: str | None = None
     fdr_method: str | None = None
@@ -64,6 +65,7 @@ class LinkRecord:
             "stability": self.stability,
             "uncertainty": self.uncertainty,
             "n_eff": self.n_eff,
+            "n_conditioning": self.n_conditioning,
             "confounding_factor_refs": list(self.confounding_factor_refs),
             "null_strategy": self.null_strategy,
             "fdr_method": self.fdr_method,
@@ -91,6 +93,7 @@ LINK_RECORD_COLUMNS: tuple[str, ...] = (
     "stability",
     "uncertainty",
     "n_eff",
+    "n_conditioning",
     "confounding_factor_refs",
     "null_strategy",
     "fdr_method",

@@ -122,9 +122,10 @@ def _cpw_incoherence(
     space: ``diag(P)`` sums to the rank ``r``, so ``k_eff = (Σ diag P)² / Σ diag(P)²`` is the
     participation number — ``k_eff = p`` for a perfectly uniform driver, ``k_eff ≈ k`` for one
     concentrated on ``k`` coordinates (a coherent, direct-edge-like component). ``spread =
-    k_eff/p ∈ (0,1]``. A concentrated split (sparse mass collapsed into L's span) drives spread
-    down. Discounted by S's off-diagonal edge density ``deg`` (a dense S is not the CPW spiky
-    part): score = spread·(1−deg)."""
+    k_eff/p ∈ (0,1]``. Identifiability ALSO fails when S's off-diagonal mass sits inside L's
+    column span (then the split is non-unique) — the cross term ``overlap = ‖P_L S_off P_L‖/
+    ‖S_off‖``, which a marginal spread·(1−deg) product cannot see. score = spread·(1−deg)·(1−overlap):
+    high needs a spread L, a sparse S, AND its edges outside L's span."""
     p = S.shape[0]
     r = factor_loadings.shape[1]
     if r == 0:
@@ -138,7 +139,10 @@ def _cpw_incoherence(
     d = np.sqrt(np.clip(np.diag(S), 1e-12, None))
     partial = np.abs(-S / np.outer(d, d))
     deg = float(((partial >= edge_threshold) & off).sum()) / max(1, p * (p - 1))
-    return spread * (1.0 - deg), spread, deg
+    S_off = np.where(off, S, 0.0)
+    s_norm = float(np.linalg.norm(S_off))
+    overlap = float(np.linalg.norm(Q @ (Q.T @ S_off @ Q) @ Q.T) / s_norm) if s_norm > 1e-12 else 0.0
+    return spread * (1.0 - deg) * (1.0 - overlap), spread, deg
 
 
 def fit_sparse_plus_lowrank(

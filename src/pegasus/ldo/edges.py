@@ -221,13 +221,37 @@ def to_link_records(
     stability = stability or {}
     import math as _math
     global_n = _global_n_eff(field) if field is not None else None
+    # Each edge is a PARTIAL correlation off the precision matrix, conditioning on the other
+    # q−2 kept features (q = precision dimension). The Fisher-z dof is n_eff − (q−2) − 3 = n_eff −
+    # q − 1, not n_eff − 3; using the marginal dof understates the SE (anticonservative FDR).
+    _q = int(len(lagged.fit.S)) if getattr(lagged, "fit", None) is not None and getattr(lagged.fit, "S", None) is not None else 0
+    k_cond = max(_q - 2, 0)
 
-    def _uncertainty(n: float | None) -> tuple[float | None, bool, float | None]:
-        low = n is not None and n < _MIN_N_EFF
-        se = 1.0 / _math.sqrt(max((n or 0) - 3, 1)) if n else None
+    # §III.4.2 identifiability: when the sparse+low-rank split is poorly identified (S mass sits
+    # inside L's span, CPW incoherence low) every edge read off it is suspect — flag them so a
+    # reader does not treat a possibly-arbitrary direct/latent edge as certified structure.
+    _split_suspect = getattr(getattr(lagged, "fit", None), "well_identified", True) is False
+
+    def _power_warnings(low: bool, underdet: bool) -> tuple[str, ...]:
+        w: list[str] = []
+        if underdet:
+            w.append("partial_corr_underdetermined")
+        elif low:
+            w.append("low_n_eff_descriptive_only")
+        if _split_suspect:
+            w.append("poorly_identified_split")
+        return tuple(w)
+
+    def _uncertainty(n: float | None) -> tuple[float | None, bool, float | None, bool]:
+        if n is None:
+            return None, False, None, False
+        dof = n - k_cond - 3.0
+        if dof < 1.0:  # partial correlation not identifiable at this effective-n → refuse a finite SE
+            return None, True, float(n), True
+        se = 1.0 / _math.sqrt(dof)
         # §III.7/§V.6(2): Fisher-z SE combined in quadrature with the fit's numerical error.
-        unc = float(_math.hypot(se, float(numerical_error))) if se is not None else None
-        return unc, low, (float(n) if n is not None else None)
+        unc = float(_math.hypot(se, float(numerical_error)))
+        return unc, n < _MIN_N_EFF, float(n), False
 
     use_edge = per_edge_n_eff and field is not None
     defl = (
@@ -235,7 +259,7 @@ def to_link_records(
         if use_edge and spatial_graph is not None else None
     )
 
-    def _edge_stats(source: str, target: str) -> tuple[float | None, bool, float | None]:
+    def _edge_stats(source: str, target: str) -> tuple[float | None, bool, float | None, bool]:
         if use_edge:
             return _uncertainty(_edge_n_eff(field, source, target, defl))
         return _uncertainty(global_n)
@@ -249,7 +273,7 @@ def to_link_records(
                 if s2 == lk.source and t2 == lk.target and abs(l2 - lk.peak_lag) <= 1:
                     stab = v
                     break
-        edge_uncertainty, low_power, edge_n = _edge_stats(lk.source, lk.target)
+        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(lk.source, lk.target)
         certified = (not low_power) and (stab is None or stab >= stability_threshold)
         records.append(
             LinkRecord(
@@ -263,14 +287,15 @@ def to_link_records(
                 stability=stab,
                 uncertainty=edge_uncertainty,
                 n_eff=edge_n,
+                n_conditioning=k_cond,
                 certification_status="selected" if certified else "descriptive",
                 null_strategy=null_strategy,
                 fdr_method=fdr_method,
-                warnings=("low_n_eff_descriptive_only",) if low_power else (),
+                warnings=_power_warnings(low_power, underdet),
             )
         )
     for source, target, pcorr in lagged.contemporaneous:
-        edge_uncertainty, low_power, edge_n = _edge_stats(source, target)
+        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(source, target)
         records.append(
             LinkRecord(
                 source_var=source,
@@ -282,12 +307,13 @@ def to_link_records(
                 stability=stability.get(_edge_key(source, target, 0)),
                 uncertainty=edge_uncertainty,
                 n_eff=edge_n,
+                n_conditioning=k_cond,
                 certification_status="descriptive" if low_power else "selected",
-                warnings=("low_n_eff_descriptive_only",) if low_power else (),
+                warnings=_power_warnings(low_power, underdet),
             )
         )
     for source, target, loading in lagged.latent_shared:
-        edge_uncertainty, low_power, edge_n = _edge_stats(source, target)
+        edge_uncertainty, low_power, edge_n, underdet = _edge_stats(source, target)
         records.append(
             LinkRecord(
                 source_var=source,
@@ -297,8 +323,9 @@ def to_link_records(
                 confounding_factor_refs=("ldo_low_rank_factor",),
                 uncertainty=edge_uncertainty,
                 n_eff=edge_n,
+                n_conditioning=k_cond,
                 certification_status="descriptive" if low_power else "selected",
-                warnings=("low_n_eff_descriptive_only",) if low_power else (),
+                warnings=_power_warnings(low_power, underdet),
             )
         )
     return records

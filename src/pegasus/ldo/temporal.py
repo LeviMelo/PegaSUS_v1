@@ -16,24 +16,38 @@ _PHI_CAP = 0.98
 
 
 def _ar1_phi(Z_var: np.ndarray) -> float:
-    """Pooled lag-1 autocorrelation of one variable's (S,T) slice over pairs where both
-    ``z_t`` and ``z_{t-1}`` are observed. 0 when too few pairs or degenerate variance."""
-    T = Z_var.shape[1]
+    """WITHIN-UNIT pooled lag-1 AR(1) coefficient of one variable's (S,T) slice.
+
+    Each spatial unit is demeaned by its OWN temporal mean before forming lag-1 pairs, so
+    between-unit level differences cannot masquerade as temporal persistence. phi is the
+    pooled within-unit lag-1 autocovariance over its within-unit variance. A unit needs
+    >=2 observed points to define a mean and contributes only its observed consecutive
+    pairs. 0 when too few pairs or degenerate variance."""
+    S, T = Z_var.shape
     if T < 2:
         return 0.0
-    cur = Z_var[:, 1:]
-    prev = Z_var[:, :-1]
-    pair = np.isfinite(cur) & np.isfinite(prev)
-    if int(pair.sum()) < 3:
+    num = 0.0
+    den = 0.0
+    npair = 0
+    for s in range(S):
+        row = Z_var[s]
+        obs = np.isfinite(row)
+        if int(obs.sum()) < 2:
+            continue
+        mu = row[obs].mean()
+        d = np.where(obs, row - mu, np.nan)
+        cur = d[1:]
+        prev = d[:-1]
+        pair = np.isfinite(cur) & np.isfinite(prev)
+        k = int(pair.sum())
+        if k == 0:
+            continue
+        num += float(cur[pair] @ prev[pair])
+        den += float(prev[pair] @ prev[pair])
+        npair += k
+    if npair < 3 or den <= 1e-12:
         return 0.0
-    a = cur[pair]
-    b = prev[pair]
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = float(np.sqrt((a @ a) * (b @ b)))
-    if denom <= 1e-12:
-        return 0.0
-    return float(np.clip((a @ b) / denom, -_PHI_CAP, _PHI_CAP))
+    return float(np.clip(num / den, -_PHI_CAP, _PHI_CAP))
 
 
 def temporal_whiten(

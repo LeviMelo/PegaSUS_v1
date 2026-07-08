@@ -15,7 +15,13 @@ from pegasus.core.hashing import sha256_file
 from pegasus.efg.dag import EFGResult
 from pegasus.efg.executor import VALUE_COLUMN, execute_efg_result
 from pegasus.efg.lineage import lineage_hash
-from pegasus.efg.q_tensor import _kish_effective_n, _moran_corrected_n_eff
+from pegasus.efg.q_tensor import (
+    _denom_fragility_share,
+    _kish_effective_n,
+    _moran_corrected_n_eff,
+    _sampling_cv,
+    _second_diff_roughness,
+)
 from pegasus.geo.adjacency import load_adjacency
 from pegasus.geo.spatial_graph import structural_cod6_adjacency
 from pegasus.output.bundle_manager import OutputBundleManager
@@ -90,9 +96,9 @@ def _temporal_roughness(vector: list[float | None], panel: pl.DataFrame | None) 
     values = yearly.get_column("_value").to_list()
     if len(values) < 2:
         return None
-    diffs = [float(values[i]) - float(values[i - 1]) for i in range(1, len(values))]
-    denom = abs(sum(float(v) for v in values) / len(values)) or 1.0
-    return float(math.sqrt(sum(d * d for d in diffs) / len(diffs)) / denom)
+    # §3.12.11 curvature: the spec-correct normalized SECOND-difference roughness (zero on any
+    # straight-line trend), not the first-difference proxy (which tracks the slope, not roughness).
+    return _second_diff_roughness([float(v) for v in values])
 
 
 def _spatial_entropy(vector: list[float | None], panel: pl.DataFrame | None) -> float | None:

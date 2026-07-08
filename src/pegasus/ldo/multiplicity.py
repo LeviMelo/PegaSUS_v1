@@ -15,10 +15,17 @@ def _phi(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
-def fisher_z_pvalue(partial_corr: float, n_eff: float) -> float:
+def fisher_z_pvalue(partial_corr: float, n_eff: float, n_conditioning: int = 0) -> float:
+    """Two-sided Fisher-z p-value for a partial correlation controlling for ``n_conditioning``
+    covariates. dof = n_eff − n_conditioning − 3; when dof < 1 the partial correlation is not
+    identifiable at this effective sample size, so return 1.0 (uninformative) rather than a
+    falsely-confident tiny p. ``n_conditioning=0`` is the zero-order (marginal) case."""
+    dof = n_eff - n_conditioning - 3.0
+    if dof < 1.0:
+        return 1.0
     r = max(min(partial_corr, 0.999), -0.999)
     z = math.atanh(r)
-    se = 1.0 / math.sqrt(max(n_eff - 3.0, 1.0))
+    se = 1.0 / math.sqrt(dof)
     return 2.0 * (1.0 - _phi(abs(z) / se))
 
 

@@ -30,6 +30,10 @@ gpu = ["torch>=2.4"]
 # Disease Semantic Axis (MSD-II §II.13): deterministic ICD/CID hierarchy + multi-label
 # groupers. Embedding build (Qwen3, §II.13.4) is a separate, offline, optional step.
 disease = ["simple-icd-10>=2.1", "icd-mappings>=0.6", "scipy>=1.11"]
+# Spatial geometry for distance-weighted GMRF kernels (P1): geobr fetches IBGE municipality
+# polygons to (re)build the centroid artifact. Build-time ONLY — the LDO reads the cached
+# municipality_centroids.parquet via polars, so runtime inference does not import geobr.
+geo = ["geobr>=1.0", "geopandas>=1.0", "shapely>=2.0", "pyproj>=3.6"]
 
 [project.scripts]
 pegasus = "pegasus.cli:app"

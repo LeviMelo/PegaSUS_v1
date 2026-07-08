@@ -128,7 +128,13 @@ def fit_contemporaneous_precision(
     corr = pw.correlation + 1e-4 * np.eye(len(kept))
     try:
         _, precision = graphical_lasso(corr, alpha=alpha, max_iter=200)
-    except Exception:
+    except Exception as exc:  # loud fallback: pinv is unregularized → less reliable, never silent
+        import warnings
+        warnings.warn(
+            f"graphical_lasso failed ({type(exc).__name__}: {exc}); falling back to pseudo-inverse "
+            "— the contemporaneous precision is unregularized and its edges are less reliable.",
+            RuntimeWarning, stacklevel=2,
+        )
         precision = np.linalg.pinv(corr)
 
     d = np.sqrt(np.clip(np.diag(precision), 1e-12, None))

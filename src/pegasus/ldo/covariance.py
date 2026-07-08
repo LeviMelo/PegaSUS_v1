@@ -35,12 +35,31 @@ class PairwiseCovariance:
     coverage: np.ndarray             # per-kept-variable observed-sample count
 
 
-def _nearest_correlation(C: np.ndarray, *, floor: float = 1e-3) -> np.ndarray:
-    """Project a symmetric matrix to the nearest PSD correlation matrix."""
+def _nearest_correlation(C: np.ndarray, *, floor: float = 1e-3, max_iter: int = 100, tol: float = 1e-7) -> np.ndarray:
+    """Higham (2002) nearest correlation matrix in Frobenius norm — alternating projections onto
+    the PSD cone and the unit-diagonal set with Dykstra's correction. Replaces the one-shot
+    eigen-clip+renormalize, which is NOT the nearest correlation and can return an INDEFINITE
+    matrix (renormalizing the diagonal after the PSD clip breaks positive-semidefiniteness, then
+    feeds an invalid input to the sparse+low-rank ADMM). The final ``floor`` lifts the spectrum
+    off zero so the downstream log-det stays finite (same regularization level as before)."""
     C = 0.5 * (C + C.T)
-    vals, vecs = np.linalg.eigh(C)
-    vals = np.clip(vals, floor, None)
-    psd = (vecs * vals) @ vecs.T
+    n = C.shape[0]
+    if n == 0:
+        return C
+    Y = C.copy()
+    dS = np.zeros_like(C)
+    for _ in range(max_iter):
+        R = Y - dS                                       # Dykstra correction
+        vals, vecs = np.linalg.eigh(0.5 * (R + R.T))
+        X = (vecs * np.clip(vals, 0.0, None)) @ vecs.T   # project onto the PSD cone
+        dS = X - R
+        Y = X.copy()
+        np.fill_diagonal(Y, 1.0)                          # project onto unit diagonal
+        if np.linalg.norm(Y - X) <= tol * max(np.linalg.norm(Y), 1e-12):
+            break
+    # strict-PD floor for the log-det consumer (Y is already the nearest correlation).
+    vals, vecs = np.linalg.eigh(0.5 * (Y + Y.T))
+    psd = (vecs * np.clip(vals, floor, None)) @ vecs.T
     d = np.sqrt(np.clip(np.diag(psd), 1e-12, None))
     return psd / np.outer(d, d)
 

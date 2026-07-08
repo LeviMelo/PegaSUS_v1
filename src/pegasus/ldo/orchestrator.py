@@ -288,7 +288,7 @@ def run_ldo(
     records = to_link_records(
         lagged, field=gf, stability=stability, stability_threshold=stability_threshold,
         numerical_error=lagged.fit.numerical_error, spatial_graph=_spatial_graph,
-        spatially_whitened=_whitened,
+        spatially_whitened=_whitened, temporally_whitened=temporal_whiten,
     )
 
     # Disease-axis provenance + the mandatory shared-code overlap guard (§5.3): a link

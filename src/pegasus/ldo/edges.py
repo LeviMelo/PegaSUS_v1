@@ -89,7 +89,12 @@ def stability_select(
     index_sets = [np.sort(rng.choice(S, size=min(n_keep, S), replace=False)) for _ in range(n_subsamples)]
     use_time = (T >= K + 4) if perturb_time == "auto" else bool(perturb_time)
     if use_time:
-        t_min = max(K + 2, int(round(0.6 * T)))
+        # §LDO-TIME-03 sharpening: a single ≥0.6·T window makes every subsample cover almost the
+        # whole span, so a trend-driven spurious edge is present (and thus "stable") in all of them —
+        # contiguous subsampling CONFIRMS the nonsense correlation. Allow shorter windows (≥0.4·T,
+        # still ≥K+4 for lag formation) at dispersed starts so early/mid/late epochs are sampled
+        # distinctly; a full-span-trend-only edge then fails to appear in the short off-epoch windows.
+        t_min = max(K + 4, int(round(0.4 * T)))
         time_sets: list[np.ndarray | None] = []
         for _ in range(n_subsamples):
             L = int(rng.integers(t_min, T + 1))
@@ -183,9 +188,14 @@ def _spatial_deflation_map(field: GaussianField, graph, provenance) -> dict[str,
     return out
 
 
-def _edge_n_eff(field: GaussianField, source: str, target: str, defl: dict[str, float] | None) -> float:
+def _edge_n_eff(
+    field: GaussianField, source: str, target: str,
+    defl: dict[str, float] | None, phi: dict[str, float] | None = None,
+) -> float:
     """Effective sample size for one edge: reliability-weighted joint-observed cell count,
-    scaled by the worse endpoint's spatial deflation (positive autocorrelation shrinks it)."""
+    scaled by the worse endpoint's spatial deflation and — when time is un-whitened — the pair's
+    temporal-autocorrelation design effect (§LDO-TIME-03/LDO-NEFF-15). Both shrink n_eff for
+    positively-autocorrelated endpoints so the Fisher-z SE is not computed on inflated iid counts."""
     idx = {v: i for i, v in enumerate(field.variables)}
     i, j = idx.get(source), idx.get(target)
     if i is None or j is None:
@@ -194,9 +204,26 @@ def _edge_n_eff(field: GaussianField, source: str, target: str, defl: dict[str, 
     rel = float(np.where(both, np.minimum(field.W[i], field.W[j]), 0.0).sum())
     if rel <= 0:
         return 0.0
-    if not defl:
-        return rel
-    return float(rel * min(defl.get(source, 1.0), defl.get(target, 1.0)))
+    if defl:
+        rel *= min(defl.get(source, 1.0), defl.get(target, 1.0))
+    if phi:
+        # Bartlett's cross-correlation variance for two AR(1) series: Var(r_ab) ≈
+        # (1/n)·Σ_k φ_a^|k|φ_b^|k| = (1/n)·(1+φ_aφ_b)/(1−φ_aφ_b), so the honest effective-n is
+        # n·(1−φ_aφ_b)/(1+φ_aφ_b). (This is the correct pairwise estimand — the single-series
+        # (1−φ)/(1+φ) is the sample-mean design effect, not the correlation's.) Capped at 1 so
+        # anti-persistence (φ_aφ_b<0) is never CREDITED as extra independent samples — conservative.
+        prod = phi.get(source, 0.0) * phi.get(target, 0.0)
+        fac = (1.0 - prod) / (1.0 + prod) if (1.0 + prod) > 1e-9 else 1.0
+        rel *= min(1.0, max(fac, 1e-6))
+    return float(rel)
+
+
+def _temporal_phi_map(field: GaussianField) -> dict[str, float]:
+    """Per-variable within-unit AR(1) φ̂ for the serial-correlation effective-n deflation —
+    reuses ``temporal._ar1_phi`` (each spatial unit demeaned by its own temporal mean, so
+    between-unit level differences can't masquerade as persistence). Computed ONCE per variable."""
+    from pegasus.ldo.temporal import _ar1_phi
+    return {v: _ar1_phi(field.Z[i]) for i, v in enumerate(field.variables)}
 
 
 def to_link_records(
@@ -212,6 +239,7 @@ def to_link_records(
     variable_provenance=None,
     per_edge_n_eff: bool = True,
     spatially_whitened: bool = False,
+    temporally_whitened: bool = False,
 ) -> list[LinkRecord]:
     """Assemble typed LinkRecords from a lagged fit, gated by stability + power.
 
@@ -224,7 +252,13 @@ def to_link_records(
     space the whitened observations are already ~spatially independent, so the effective-n must NOT
     also be Moran-deflated (that would count the spatial dependence twice and over-inflate the SE).
     In that case only the reliability weighting is applied; the ``spatial_graph`` deflation is used
-    only for a non-whitened fit."""
+    only for a non-whitened fit.
+
+    ``temporally_whitened`` (§LDO-TIME-03 double-correction guard, dual of the spatial one): the
+    overlapping lag windows / serial autocorrelation make the S·T_eff cells non-iid, so an
+    un-whitened fit's effective-n is deflated by each pair's AR(1) Bartlett design effect. When the
+    fit WAS temporally whitened the residuals are already ~serially independent, so that deflation
+    is skipped (else the serial dependence would be counted twice)."""
     stability = stability or {}
     import math as _math
     global_n = _global_n_eff(field) if field is not None else None
@@ -265,10 +299,14 @@ def to_link_records(
         _spatial_deflation_map(field, spatial_graph, variable_provenance)
         if use_edge and spatial_graph is not None and not spatially_whitened else None
     )
+    # §LDO-TIME-03 / LDO-NEFF-15: un-whitened time ⇒ deflate each edge's effective-n by the pair's
+    # AR(1) serial-correlation design effect so a trend-driven partial correlation gets an honestly
+    # wide SE (and fails certification) instead of spuriously-tight iid significance.
+    phi_map = _temporal_phi_map(field) if (use_edge and not temporally_whitened) else None
 
     def _edge_stats(source: str, target: str) -> tuple[float | None, bool, float | None, bool]:
         if use_edge:
-            return _uncertainty(_edge_n_eff(field, source, target, defl))
+            return _uncertainty(_edge_n_eff(field, source, target, defl, phi_map))
         return _uncertainty(global_n)
 
     records: list[LinkRecord] = []

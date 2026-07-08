@@ -9,8 +9,6 @@ from pegasus.datasus.decoders import (
     decode_physical_scalar,
 )
 
-import hashlib
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -19,35 +17,16 @@ from typing import Any
 import polars as pl
 
 from pegasus.datasus.normalize.completeness import check_raw_completeness
-from pegasus.datasus.normalize.primitives import Cols, read_raw_table
+from pegasus.datasus.normalize.primitives import (
+    Cols,
+    clean_text as _clean,
+    digit_run as _digits,
+    read_raw_table,
+    read_raw_table as _read_table,
+    stable_hash as _stable_hash,
+)
 
 ICD_LIKE = re.compile(r"^[A-Z][0-9]{2}[0-9A-Z]?")
-
-
-def _clean(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() in {"nan", "none", "null"}:
-        return None
-    return text
-
-
-def _digits(value: Any) -> str | None:
-    text = _clean(value)
-    if text is None:
-        return None
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return digits or None
-
-
-def _stable_hash(value: Any) -> str:
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _read_table(path: str | Path) -> pl.DataFrame:
-    return read_raw_table(path)
 
 
 def parse_sinasc_date(value: Any) -> tuple[str | None, int | None, str]:

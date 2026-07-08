@@ -28,10 +28,42 @@ yields a null literal rather than a crash) and exposes the primitives as methods
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import polars as pl
+
+
+def clean_text(value: Any) -> str | None:
+    """Scalar twin of :meth:`Cols.clean`: strip whitespace, null the canonical blank/sentinel
+    tokens ("", NA, NAN, NULL, NONE, case-insensitive). Single source of truth for the per-record
+    normalizers (SIM/SINASC/SIH/CNES) — replaces their drifted local ``_clean`` copies."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() in {"NA", "NAN", "NULL", "NONE"}:
+        return None
+    return text
+
+
+def digit_run(value: Any) -> str | None:
+    """Scalar twin of :meth:`Cols.digits`: the cleaned value reduced to its ASCII digit run
+    (``\\D`` removal), or null when no digit remains."""
+    text = clean_text(value)
+    if text is None:
+        return None
+    digits = re.sub(r"\D", "", text)
+    return digits or None
+
+
+def stable_hash(value: Any) -> str:
+    """Deterministic SHA-256 of a JSON-canonicalized value (sorted keys). The scalar surrogate
+    identity used by the per-record normalizers."""
+    payload = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def read_raw_table(path: str | Path) -> pl.DataFrame:

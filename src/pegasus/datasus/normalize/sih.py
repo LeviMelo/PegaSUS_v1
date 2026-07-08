@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,7 +11,15 @@ from pegasus.datasus.decoders import decode_datasus_sex, decode_sih_age, filter_
 from pegasus.datasus.icd_parser import parse_icd
 from pegasus.datasus.normalize.codebook import lookup_name, translate
 from pegasus.datasus.normalize.completeness import check_raw_completeness
-from pegasus.datasus.normalize.primitives import Cols, read_raw_table, row_hash
+from pegasus.datasus.normalize.primitives import (
+    Cols,
+    clean_text as _clean,
+    digit_run as _digits,
+    read_raw_table,
+    read_raw_table as _read_table,
+    row_hash,
+    stable_hash as _stable_hash,
+)
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7, load_municipality_crosswalk
 
 # output field -> (raw column, codebook concept). In-house replacement for
@@ -52,32 +58,6 @@ _SIH_CATEGORICAL: dict[str, tuple[str, str]] = {
 SECONDARY_DIAG_COLUMNS = tuple(f"DIAGSEC{i}" for i in range(1, 10))
 SECONDARY_TYPE_COLUMNS = tuple(f"TPDISEC{i}" for i in range(1, 10))
 COST_COMPONENTS = ("VAL_SH", "VAL_SP", "VAL_UTI", "VAL_TOT")
-
-
-def _clean(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.upper() in {"NA", "NAN", "NULL", "NONE"}:
-        return None
-    return text
-
-
-def _digits(value: Any) -> str | None:
-    text = _clean(value)
-    if text is None:
-        return None
-    digits = re.sub(r"\D", "", text)
-    return digits or None
-
-
-def _stable_hash(value: Any) -> str:
-    payload = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _read_table(path: str | Path) -> pl.DataFrame:
-    return read_raw_table(path)
 
 
 def _parse_date(value: Any) -> tuple[str | None, int | None, str]:

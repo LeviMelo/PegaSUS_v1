@@ -14,7 +14,7 @@ from typing import Any
 import polars as pl
 
 from pegasus.datasus.normalize.completeness import check_raw_completeness
-from pegasus.datasus.normalize.primitives import read_raw_table
+from pegasus.datasus.normalize.primitives import read_raw_table, read_raw_table as _read_table
 from pegasus.geo.municipality_crosswalk import datasus_cod6_to_ibge_cod7
 
 
@@ -96,10 +96,6 @@ def _clean_str(value: Any) -> str | None:
 def _stable_hash(value: Any) -> str:
     payload = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _read_table(path: str | Path) -> pl.DataFrame:
-    return read_raw_table(path)
 
 
 def _year_from_date(iso_date: str | None, fallback: Any = None) -> int | None:

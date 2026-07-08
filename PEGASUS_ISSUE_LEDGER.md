@@ -158,13 +158,13 @@ verification.
 | WF-01 | population-mode→solver-mode mapper duplicated byte-identical | WIP |
 | WF-02 | name collision `_race_bridge_prior_artifact` (producer vs finder, opposite logic) | WIP |
 | LDO-B08 | Laplacian `L=D−W` hand-rolled 4× (disease_prior/lowrank/geo) → shared helper (`normalized=` flag) | WIP |
-| MOD-01/EFG-03 / MATH-22 | Moran's I 6 ways; q_tensor uses **1-D cell order not geography** (correctness) vs compile_attach adjacency | OPEN (route to geographic; retire ordering) |
+| MOD-01/EFG-03 / MATH-22 | Moran's I: q_tensor's 1-D `_moran_contiguity` vs compile_attach adjacency | **DEFENSIBLE** — verified: the LIVE path uses geography-aware `_moran_i_adjacency`; the 1-D proxy is only q_tensor's documented no-graph fallback (emits `moran_i_ordering_contiguity_proxy`). n_eff also already unified (shared `_kish_effective_n`+`_moran_corrected_n_eff`). |
 | LDO-B03/B04 | `residual_scan` forks the HSIC kernel + imports hsic privates (must stay bit-identical) | OPEN (dedup w/ numeric-identity test) |
 | **Data-integrity (silent-loss — matches full-data mandate):** | | |
 | T1.2 | no fail-closed completeness gate on per-chunk DATASUS timeouts → transient chunk loss | OPEN? (verify `datasus/subprocess.py`, `pipeline.py:202`) |
-| T1.3 | national race-prior wiring gap — `pipeline.py` hardcodes `race_prior_artifact=None` before UF fan-out | OPEN? (verify — integrity) |
-| **Canonical-but-unwired (§3.12 EFG state):** | | |
-| EFG-01/02/04 | canonical `compute_q_state`/`classify_q_state` has ZERO production callers; 3 divergent FieldState classifiers live | OPEN? (wire canonical, retire literals — behavior-changing) |
+| T1.3 | national race-prior `= None` before UF fan-out (`pipeline.py:475`) | **DEFENSIBLE-BY-DESIGN** — verified: comment "UF-independent; wired later"; `compile.py:524` re-resolves via `race_bridge_plan`. Study-adjacent (race-stratified national) → off-limits scope; re-verify when that path is exercised. |
+| **★ EFG-QT — canonical §3.12 Q-state not wired (VERIFIED-OPEN; next strike):** | | |
+| EFG-QT / DIRECT-QT-01 | `classify_q_state` (spec verified/fragile/quarantined by n_eff/denom_fragility/missingness/risk) has ZERO callers; live `_q_row` reports `field.state` set at **materialize-time by ad-hoc rules** (`materialize.py:225/520` incl. a non-enum `"warning"`), before diagnostics exist | OPEN — architectural reconciliation: classification-timing + loosely-typed `state`/`dashboard_safe` tri-state; guard with T0-2. n_eff/CV/Moran diagnostics already unified; only the *state label* diverges. |
 | **Megazord decomps (behavior-preserving splits):** | | |
 | WF-07 | `compile.py` 1036-LOC god-module | OPEN |
 | EFG-08 | `executor/kernels.py` 838 LOC, stringly-typed dispatch | OPEN (partial split done) |

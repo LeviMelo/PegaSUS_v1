@@ -133,23 +133,32 @@ def fit_lagged_links(
         # Spatial GMRF whitening via the sparse metric (§V.2/§V.4): matrix-free, O(F·S)
         # memory, no dense S×S whitener or O(S³) sqrt — so it scales to national S≈5570.
         from pegasus.ldo.precision import build_spatial_precision_sparse
-        # ``spatial_kernel="distance_decay"`` (P1) reweights the contiguity edges by geobr
-        # municipality-centroid distance exp(-d/ρ) so a huge Amazon muni's far neighbour couples
-        # less than a dense-cluster's near one — the LDO-WHITEN-04 "spatial range" the binary graph
-        # lacks. It is a STRUCTURAL (geographic) kernel ⇒ circularity-safe as a default prior.
-        # Off by default: empirically distance-decay only clearly beats binary for SHORT-range
-        # spatial structure (+14% at L≈15 km) and marginally under-whitens long-range regional
-        # gradients (−1.6% at L≥60 km) — which the low-rank L absorbs anyway. Falls back to binary
-        # if the centroid artifact is absent (never fabricated).
+        # ``spatial_kernel`` selects the whitening graph (P1 / LDO-WHITEN-04 "spatial range"):
+        #  • "contiguity" (default): binary queen contiguity — the standard ICAR.
+        #  • "knn_distance": a distance-kNN graph (each unit → its k geographically nearest, gaussian
+        #    weights) from geobr centroids. A uniform-degree, geographically-coherent STRUCTURE that
+        #    whitens robustly ≥ contiguity at every spatial range (validated) — it fixes queen
+        #    contiguity's degree heterogeneity and its far "neighbours" (huge munis touching distant
+        #    ones). This is the robust upgrade over binary contiguity.
+        #  • "distance_decay": reweights the SAME contiguity edges by exp(-d/ρ) — empirically marginal
+        #    (the binary GMRF already decays with graph distance); kept for completeness.
+        # All are STRUCTURAL (geographic) ⇒ circularity-safe. Any centroid-dependent kernel falls back
+        # to binary contiguity when the centroid artifact is absent (never fabricated).
+        adjacency = None
         edge_weights = None
-        if spatial_kernel == "distance_decay":
+        if spatial_kernel in ("knn_distance", "distance_decay"):
             try:
-                from pegasus.geo.centroids import distance_decay_edge_weights
-                from pegasus.geo.spatial_graph import structural_cod6_adjacency
-                edge_weights, _rho = distance_decay_edge_weights(structural_cod6_adjacency())
+                if spatial_kernel == "knn_distance":
+                    from pegasus.geo.centroids import knn_distance_graph
+                    adjacency, edge_weights = knn_distance_graph(field.space_ids)
+                else:
+                    from pegasus.geo.centroids import distance_decay_edge_weights
+                    from pegasus.geo.spatial_graph import structural_cod6_adjacency
+                    edge_weights, _rho = distance_decay_edge_weights(structural_cod6_adjacency())
             except Exception:
-                edge_weights = None  # centroids missing / fetch failed → binary contiguity
-        Q_space = build_spatial_precision_sparse(field.space_ids, kappa=kappa, edge_weights=edge_weights)
+                adjacency, edge_weights = None, None  # centroids missing → binary contiguity
+        Q_space = build_spatial_precision_sparse(
+            field.space_ids, kappa=kappa, adjacency=adjacency, edge_weights=edge_weights)
         pw = whitened_lagged_correlation(field.Z, Q_space, K, min_coverage=min_coverage, weights=W)
     else:
         feat = _build_lagged_feature_matrix(field.Z, K)  # (p*(K+1), n)

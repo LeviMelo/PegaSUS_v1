@@ -53,6 +53,7 @@ def build_spatial_precision(space_ids: tuple[str, ...], *, kappa: float = 1.0) -
 
 def build_spatial_precision_sparse(
     space_ids: tuple[str, ...], *, kappa: float = 1.0,
+    adjacency: dict[str, tuple[str, ...]] | None = None,
     edge_weights: dict[str, dict[str, float]] | None = None,
 ):
     """GMRF spatial precision ``κ I + L_sym`` as ``scipy.sparse`` CSR (§V.2 sparsity).
@@ -64,18 +65,23 @@ def build_spatial_precision_sparse(
     geography it removes. ``L_sym`` has eigenvalues in ``[0,2]`` regardless of degree (diagonal 1 for
     a connected node, off-diagonal ``−w_ij/√(dᵢdⱼ)``), so the whitening is degree-consistent. ~6 nnz/row.
 
-    ``edge_weights`` (P1/M1 — richer adjacency kernel): an optional symmetric edge-weight kernel
-    ``{cod6: {neighbour_cod6: w>0}}`` that REWEIGHTS the structural contiguity edges — a distance-decay
-    ``exp(-d/ρ)``, gravity ``popᵢpopⱼ/d²`` or flow affinity — so nearby/strongly-coupled neighbours
-    whiten more than distant/weak ones (the LDO-WHITEN-04 "spatial range" the crude binary graph lacks).
-    The weighted degree is ``dᵢ=Σⱼ wᵢⱼ`` and the off-diagonal ``−wᵢⱼ/√(dᵢdⱼ)``. ``None`` ⇒ every edge
-    weight 1.0 ⇒ **byte-identical** to the binary structural default. A weighted kernel is inherently
-    ``context_derived``; the CALLER must clear the §II.4.1 circularity guard before passing one (never
-    a population/flow-derived kernel as the prior for a variable sharing that provenance).
+    ``adjacency`` (P1/M1 — richer graph STRUCTURE): the neighbour dict to build the Laplacian over.
+    ``None`` ⇒ the structural queen-contiguity graph (the default). Pass a distance-kNN graph (each
+    unit linked to its k geographically-NEAREST, uniform degree) to fix queen contiguity's fragilities
+    — heterogeneous degree and far "neighbours" of huge municipalities — which whitens robustly ≥
+    contiguity at every spatial range (validated). A structural (geographic) graph is circularity-safe.
+
+    ``edge_weights`` (richer kernel): an optional symmetric edge-weight kernel ``{id: {neighbour: w>0}}``
+    over the chosen adjacency — a distance-decay ``exp(-d/ρ)``, gravity ``popᵢpopⱼ/d²`` or flow affinity
+    — so nearby/strong neighbours whiten more than distant/weak ones (the LDO-WHITEN-04 "spatial range").
+    The weighted degree is ``dᵢ=Σⱼ wᵢⱼ`` and the off-diagonal ``−wᵢⱼ/√(dᵢdⱼ)``. ``None`` (with the
+    default adjacency) ⇒ every edge weight 1.0 ⇒ **byte-identical** to the binary structural default.
+    A ``context_derived`` kernel (gravity/flow) is subject to the §II.4.1 circularity guard at the call site.
     """
     import scipy.sparse as sp
 
-    adjacency = structural_cod6_adjacency()
+    if adjacency is None:
+        adjacency = structural_cod6_adjacency()
     S = len(space_ids)
     idx = {s: i for i, s in enumerate(space_ids)}
 

@@ -114,6 +114,41 @@ shrunk cell rates: a standard hierarchical Poisson model).
 **Verdict:** a genuine, warranted redesign — but *evolutionary* (the small-`C` core survives and becomes
 a proper inferential object), not a rewrite. Highest-value first step is W-RACE-1 (honest uncertainty).
 
+### 1.7 The sophisticated form: a covariate-dependent confusion `C(x)` (the general answer)
+
+`C` is not one matrix — misclassification demonstrably varies by **source system** (physician-on-death-
+certificate vs hospital-birth-clerk vs admission-clerk; already half-acknowledged via separate
+`C_SIM/SIH/SINASC`), **time** (a 25-year drift as the self-declared-race push took hold — non-negotiable
+for a full-temporal study), **age/cohort** (proxy-reporting + older-cohort *embranquecimento*), **region**
+(the `C_r` of §1.4), and **reporting mode** (proxy vs self — the root of the discrepancy). The general
+model makes `C` a **function of covariates** `x = (system, year, age, region, …)`.
+
+**Parameterization that preserves the small-entity discipline** (the crux — this must NOT become a
+K×K×covariate tensor). A **structured multinomial-logit emission anchored at identity**:
+```
+log[ P(admin=k | self=j, x) / P(admin=j | self=j, x) ] = α_{kj} + x·β_{kj}
+```
+with `α` the identity-dominant baseline and `β` **heavily regularized toward 0** (default = the
+parsimonious shared-`C`; deviate only where the ecological signal demands). Keep the free off-diagonal
+structure on the **dominant distortion axis** — the *ordinal* branca–parda–preta "whitening" gradient —
+so covariate-dependence collapses to a few interpretable coefficients (a scalar whitening propensity
+`ρ(x) = logit⁻¹(β₀ + β_sys + β_year·t + β_age·a + β_region)` driving *parda/preta→branca* mass, plus one
+for the *parda↔preta* boundary), not a full tensor. This subsumes the current per-source fixed matrices
+as the special case `β_year=β_age=β_region=0`, `β_sys` = fixed offsets.
+
+**A new identifiability asset — cross-system consistency.** The systems observe (partly) the same
+underlying self-declared population under *different* reporting. Holding the census composition fixed,
+the **difference in admin-race distributions across systems identifies the system-specific `C`** — a
+clean, quasi-instrumental restriction (the covariate that makes `C` vary is the covariate that identifies
+the variation). Time drift is identified by temporal change against roughly-fixed population; age/region
+lean harder on priors (age also drives rates, so the rate model must absorb age×race rate variation,
+leaving the residual age effect on `C`). Where separation fails → honest wide posteriors.
+
+This is the **general, robust answer**: `C` becomes a small, regularized, identity-anchored, ordinal-
+structured regression object rather than a fixed matrix — sophisticated and covariate-responsive while
+staying bounded. It folds into **W-RACE-2** (start with system+time effects, where identification is
+cleanest; add age/region as the data support them).
+
 ---
 
 ## 2. Data layer for the full-scale default (reprioritized to first-class)

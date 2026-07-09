@@ -88,11 +88,3 @@ def test_ambiguous_quantity_is_refused(tmp_path):
     }).write_parquet(b / "VariableDictionary.parquet")
     with pytest.raises(FieldResolutionError, match="ambiguous"):
         resolve_field(b, "SIM.deaths")
-
-
-def test_rate_refuses_rather_than_guessing_denominator(tmp_path):
-    # rate resolves its denominator (mortality_all_cause is a registered quantity) but must NOT
-    # divide by a guessed field mapping — it refuses with that reason.
-    b = _make_bundle(tmp_path)
-    with pytest.raises(QueryError, match="not yet wired|refusing"):
-        materialize_query(b, QuerySpec(quantity="mortality_all_cause", kind="rate"))

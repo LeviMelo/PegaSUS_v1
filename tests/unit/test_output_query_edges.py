@@ -64,12 +64,13 @@ def test_unknown_filter_column_refuses(tmp_path) -> None:
                                             filters={"not_a_column": 1}))
 
 
-def test_rate_kind_resolves_denominator_but_defers_math(tmp_path) -> None:
-    # P3c/P3d land the rate math; the FEAT-P4 denominator resolution is already live, so the
-    # refusal proves the substrate works and names the resolved denominator.
+def test_rate_kind_is_wired_and_requires_a_materialized_numerator(tmp_path) -> None:
+    # rate is now wired (P3d) as a SELECTION of the EFG's materialized RN field; a bare registry
+    # quantity id with no corresponding numerator field in the bundle refuses at numerator resolution
+    # (proving the read path runs), never a silent guess. Full rate behavior: test_output_query_rate.py.
     bundle = tmp_path / "bundle"
     _write_fixture_bundle(bundle)
-    with pytest.raises(QueryError, match="resident_population"):
+    with pytest.raises(QueryError, match="rate numerator"):
         materialize_query(bundle, QuerySpec(quantity="mortality_all_cause", kind="rate"))
 
 

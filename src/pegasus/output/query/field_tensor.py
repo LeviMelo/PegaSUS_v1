@@ -65,6 +65,29 @@ def resolve_field(bundle_dir: str | Path, quantity: str) -> tuple[str, dict[str,
     )
 
 
+def resolve_field_by_carrier(bundle_dir: str | Path, carrier: str) -> tuple[str, dict[str, Any]]:
+    """Resolve a field by its exact carrier (e.g. ``"HospitalAdmissions/Population"`` for an RN rate).
+
+    Raises on no match or an ambiguous one (more than one distinct field_id carries it), so a rate
+    selection is never silently the wrong field.
+    """
+    vd_path = Path(bundle_dir) / "VariableDictionary.parquet"
+    if not vd_path.exists():
+        raise FieldResolutionError(f"bundle has no VariableDictionary.parquet at {vd_path}")
+    vd = pl.read_parquet(vd_path)
+    if "carrier" not in vd.columns:
+        raise FieldResolutionError("VariableDictionary has no 'carrier' column.")
+    hit = vd.filter(pl.col("carrier") == carrier)
+    if hit.height == 0:
+        raise FieldResolutionError(f"no materialized field with carrier {carrier!r} in the bundle.")
+    distinct = hit["field_id"].unique().to_list()
+    if len(distinct) != 1:
+        raise FieldResolutionError(
+            f"carrier {carrier!r} is ambiguous: {len(distinct)} distinct fields. Query by field_id."
+        )
+    return str(distinct[0]), hit.row(0, named=True)
+
+
 def cell_dimensions(bundle_dir: str | Path, field_id: str) -> list[str]:
     """The cell-dimension columns of a field tensor (everything but value/id/name/operator)."""
     path = efg_tensor_path(bundle_dir, field_id)

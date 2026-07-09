@@ -28,6 +28,7 @@ class DenominatorOption:
     strata: tuple[str, ...]
     offset_semantics: str
     legality_class: str
+    carrier: str | None = None  # the EFG carrier this denominator materializes as (e.g. "Population")
 
     def as_provenance(self) -> dict[str, Any]:
         return {
@@ -35,6 +36,7 @@ class DenominatorOption:
             "denominator_strata": list(self.strata),
             "offset_semantics": self.offset_semantics,
             "legality_class": self.legality_class,
+            "denominator_carrier": self.carrier,
             "was_default": self.default,
         }
 
@@ -74,6 +76,7 @@ def _parse_quantity(quantity: str, spec: dict[str, Any]) -> QuantityDenominators
             strata=tuple(str(s) for s in raw.get("strata", [])),
             offset_semantics=str(raw.get("offset_semantics", "log_exposure")),
             legality_class=str(raw.get("legality_class", "structural")),
+            carrier=str(raw["carrier"]) if raw.get("carrier") is not None else None,
         ))
     n_default = sum(1 for o in options if o.default)
     if n_default != 1:
@@ -124,6 +127,17 @@ def resolve_denominator(quantity: str, spec, *, root: str | Path = "config/regis
     return q.default()
 
 
+def denominator_carrier(denominator_id: str, *, root: str | Path = "config/registries") -> str | None:
+    """The EFG carrier a denominator id materializes as (e.g. ``resident_population`` -> ``Population``),
+    scanning the registry. Returns None if the id is unknown or declares no carrier."""
+    registry = load_denominator_registry(root=root)
+    for q in registry.values():
+        for opt in q.options:
+            if opt.id == denominator_id and opt.carrier:
+                return opt.carrier
+    return None
+
+
 __all__ = [
     "REGISTRY_FILE",
     "DenominatorRegistryError",
@@ -131,4 +145,5 @@ __all__ = [
     "QuantityDenominators",
     "load_denominator_registry",
     "resolve_denominator",
+    "denominator_carrier",
 ]

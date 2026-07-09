@@ -165,24 +165,90 @@ def _field_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset
     return MaterializedDataset(frame=frame, provenance=provenance, kind=spec.kind, warnings=tuple(warnings))
 
 
+def _rate_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:
+    """Serve a ``rate`` query by SELECTING the EFG's already-materialized RN rate field — never a
+    recompute (PEGASUS_OUTPUT_QUERY_LAYER.md §2: a rate is a *read* of the canonical RN field, so a
+    second rate definition can't drift from the EFG's). The RN field's carrier is ``num/denom``; the
+    numerator carrier comes from the queried field, the denominator carrier from the FEAT-P4 registry
+    (or the literal override), defaulting to resident population.
+    """
+    from pegasus.output.query.denominators import denominator_carrier
+    from pegasus.output.query.field_tensor import (
+        FieldResolutionError,
+        read_field_tensor,
+        resolve_field,
+        resolve_field_by_carrier,
+    )
+
+    try:
+        num_id, num_meta = resolve_field(bundle_dir, spec.quantity)
+    except FieldResolutionError as exc:
+        raise QueryError(f"rate numerator {spec.quantity!r}: {exc}") from exc
+    num_carrier = num_meta.get("carrier")
+    if not num_carrier:
+        raise QueryError(f"rate numerator {spec.quantity!r} has no carrier in the VariableDictionary.")
+
+    if spec.denominator:
+        denom_id = str(spec.denominator)
+        denom_carrier = denominator_carrier(denom_id) or denom_id
+    else:
+        denom_id, denom_carrier = "resident_population", "Population"
+
+    target = f"{num_carrier}/{denom_carrier}"
+    try:
+        rate_id, rate_meta = resolve_field_by_carrier(bundle_dir, target)
+    except FieldResolutionError as exc:
+        raise QueryError(
+            f"no materialized RN rate field with carrier {target!r} in this bundle — the query "
+            f"SELECTS an EFG-materialized rate, it does not recompute one. ({exc})"
+        ) from exc
+
+    frame = read_field_tensor(bundle_dir, rate_id, filters=spec.filters)
+    warnings: list[str] = []
+    unit = rate_meta.get("unit")
+    if str(unit) != "rate":
+        warnings.append(f"selected_field_unit_is_not_rate:{unit!r}")
+    dims = [c for c in frame.columns if c not in ("value", "field_id", "field_name", "operator")]
+    provenance = {
+        "kind": "rate",
+        "quantity": spec.quantity,
+        "numerator": {"field_id": num_id, "carrier": num_carrier},
+        "denominator": {"id": denom_id, "carrier": denom_carrier},
+        "rate_field_id": rate_id,
+        "rate_carrier": target,
+        "unit": unit,
+        "cell_dimensions": dims,
+        "n_rows": frame.height,
+        "run": _run_identity(bundle_dir),
+        "query": spec.model_dump(mode="json"),
+        "note": (
+            "Read of the EFG's already-materialized RN (ratio) field — NOT a query-time division. "
+            "The denominator is a FEAT-P4 selection among the rate fields the compile materialized."
+        ),
+    }
+    return MaterializedDataset(frame=frame, provenance=provenance, kind="rate", warnings=tuple(warnings))
+
+
 def materialize_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:
     """Serve ``spec`` from the bundle at ``bundle_dir``.
 
-    Wired: ``edge`` (P3b) and ``count``/``raw_field`` (P3c, the shared field-tensor reader).
-    ``rate``/``standardized_rate`` resolve their denominator (FEAT-P4) but still need the
-    denominator-id → bundle-field mapping + cell-key-matched division; refused with that reason
-    rather than served with a possibly-wrong denominator.
+    Wired: ``edge`` (P3b), ``count``/``raw_field`` (P3c field reader), and ``rate`` (P3d — a *selection*
+    of the EFG's materialized RN rate field). ``standardized_rate`` stays refused: age-standardization
+    is the existing ``age_standardization`` engine (compile-time / library), not a query-time recompute
+    (spec §2).
     """
     if spec.kind == "edge":
         return _edge_query(bundle_dir, spec)
     if spec.kind in ("count", "raw_field"):
         return _field_query(bundle_dir, spec)
-    if spec.requires_denominator():
+    if spec.kind == "rate":
+        return _rate_query(bundle_dir, spec)
+    if spec.kind == "standardized_rate":
         opt = resolve_denominator(spec.quantity, spec)
         raise QueryError(
-            f"kind={spec.kind!r}: denominator resolves to {opt.id!r} (FEAT-P4 live) and the field "
-            f"reader is wired, but mapping the denominator id to its materialized bundle field + "
-            f"cell-key-matched division is not yet wired — refusing rather than dividing by a guess."
+            f"kind='standardized_rate': denominator resolves to {opt.id!r}, but directly-standardized "
+            "rates are the existing age_standardization engine (compile-time / library utility), not a "
+            "query-time recompute (spec §2). Query the materialized RN 'rate' field instead."
         )
     raise QueryError(f"unsupported query kind {spec.kind!r}")
 

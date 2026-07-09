@@ -17,19 +17,19 @@ entries:
     warnings: []
     extensive: true
     admissible:
-      - {id: resident_population, default: true, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural}
+      - {id: resident_population, default: true, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural, carrier: Population}
   - id: incidence_c25
     status: active
     description: "Pancreatic-cancer (C25) event count, normalized by resident population."
     warnings: []
     extensive: true
     admissible:
-      - {id: resident_population, default: true, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural}
+      - {id: resident_population, default: true, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural, carrier: Population}
   - id: live_births
     status: active
     description: "Live births — FEAT-P4 exemplar: women 15-49 (general fertility rate, default) OR whole resident population (crude birth rate)."
     warnings: []
     extensive: true
     admissible:
-      - {id: women_15_49, default: true, strata: [age, race], offset_semantics: log_exposure, legality_class: structural}
-      - {id: resident_population, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural}
+      - {id: women_15_49, default: true, strata: [age, race], offset_semantics: log_exposure, legality_class: structural, carrier: WomenChildbearing}
+      - {id: resident_population, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural, carrier: Population}

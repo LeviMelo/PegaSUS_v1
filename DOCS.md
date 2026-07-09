@@ -38,7 +38,8 @@ the thing to update when a doc's status changes.
 | Doc | Role |
 |---|---|
 | `PEGASUS_COMPLIANCE_AND_REMEDIATION.md` | Finding-ID dictionary (S0/S1…) retained by MSD-III §0.1. **Not a plan of record.** |
-| `PEGASUS_REPO_HEALTH_ASSESSMENT.md` | 2026-07-08 five-dimension repo-health review (registries/dead-code/wiring/perf/architecture) + tiered remediation + live-test go/no-go. Drives the current cycle. |
+| `PEGASUS_COMPLETION_ROADMAP.md` | **The settled completion roadmap (2026-07-09)** — full-scale-default reframe, RaceBridge ecological redesign, data-layer first-class, storage contract, phased plan. The forward plan of record. |
+| `PEGASUS_REPO_HEALTH_ASSESSMENT.md` | 2026-07-08/09 repo-health review (5 dimensions) + 4 improvement deep-dives + tiered remediation. Findings feeding the roadmap. |
 | `PEGASUS_OUTPUT_QUERY_LAYER.md` | FEAT-P3+P4 Output Query Layer design (self-describing hypotheses export; rate-recompute pruned). |
 | `docs/ICD_LIBRARY_REVIEW.md` | ICD/CID library health review (simple-icd-10 + icd-mappings; the WHO-2019 A90/A91/U06 gap + remediation). |
 | `DATASUS_DESC.md`, `DATASUS_CONPENDIUM.md`, `SIDRA_DESC.md`, `SIDRA_COMPENDIUM.md` | Data-source field/table references. |

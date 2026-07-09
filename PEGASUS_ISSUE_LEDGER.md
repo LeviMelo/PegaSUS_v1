@@ -32,6 +32,16 @@ source docs, and re-verify any **OPEN?** before building.
 
 ---
 
+## → Forward plan of record: [`PEGASUS_COMPLETION_ROADMAP.md`](PEGASUS_COMPLETION_ROADMAP.md) (2026-07-09)
+
+Settled roadmap after three user reframings: **full national×temporal (2000–2024) is the DEFAULT**
+(data-layer + out-of-core are first-class, not deferred) · `data/` is accreted → storage contract +
+GC · **RaceBridge is an ecological, not individual, problem** → reformalized as a hierarchical Poisson
+ecological-deconvolution model (the small shared confusion matrix `C` is the identifiability
+mechanism, refined from a literature prior; posterior `λ_{s,j}` rates propagated with uncertainty).
+Phased: P1 full-scale-readiness + integrity + W-RACE-1 · P2 live-test + W-RACE-2 ecological C + W-REG-1 ·
+P3 polish · P4 studies. Highest-leverage next: DP-3 bounded-memory national streaming.
+
 ## Repo-health assessment (2026-07-08) → [`PEGASUS_REPO_HEALTH_ASSESSMENT.md`](PEGASUS_REPO_HEALTH_ASSESSMENT.md)
 
 Five-dimension deep review + a second wave of four improvement/redesign deep-dives (RaceBridge,

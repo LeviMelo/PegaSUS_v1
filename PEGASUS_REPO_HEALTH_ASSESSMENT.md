@@ -38,9 +38,11 @@ byte-safe perf wins, and the (gated) god-module + REG-07 refactors.
 **Tier 1 — pre-live-test integrity (small, do first):**
 1. `maternal_child_linkage` is hardcoded `True` in RunConfig (`compile.py:812`) regardless of whether
    SINASC/linkage ran → make it conditional on the actual run scope (truthfulness; §"report faithfully").
-2. Delete `efg/empirical_compression.py` (187 LOC, zero callers, no entry point).
-3. `pirs/` orphaned package (zero external callers, superseded by LDO) → verify no tests/studies use it,
-   then delete the package (substantial reclaim). **Verify before deleting.**
+2. Delete `efg/empirical_compression.py` (187 LOC, zero callers) — **DONE** (520 tests still collect).
+3. `pirs/` (354 LOC) is test-only-superseded: zero production callers, but 2 test files import it
+   (`test_inference_baseline.py` — a contract guardrail — + `test_hsic_foundation.py`, which imports
+   `pirs.nystrom/rff` where it should test the live `ldo/hsic` — a smell). **DEFERRED**: deleting the
+   package needs those tests migrated to the LDO equivalents first (don't break the T0-4 guardrail).
 
 **Tier 2 — health-registry typing/de-orphaning (the user's ask):**
 4. `icd_curated_groups.yaml` (35 cause groups) orphaned — `icd_groups.py` hardcodes chapters/blocks

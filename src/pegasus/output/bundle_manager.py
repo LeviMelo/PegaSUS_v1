@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import tempfile
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -297,10 +298,33 @@ class OutputBundleManager:
         (workspace / "Maps").mkdir(parents=True, exist_ok=True)
         return workspace
 
+    def _check_first_class_consistency(self) -> None:
+        """Surface (never silently emit) a structurally-inconsistent bundle: an E_DAG edge whose
+        parent/child references a field id absent from V_fields — a partial/corrupt-bundle symptom.
+        Warns rather than raising so a legitimate edge case cannot break the atomic flush."""
+        v_rows = self.tables.get("V_fields") or []
+        e_rows = self.tables.get("E_DAG") or []
+        if not v_rows or not e_rows:
+            return
+        field_ids = {str(r.get("field_id")) for r in v_rows if r.get("field_id") is not None}
+        if not field_ids:
+            return
+        orphans = {
+            str(r.get(k)) for r in e_rows for k in ("parent_field_id", "child_field_id")
+            if r.get(k) is not None and str(r.get(k)) not in field_ids
+        }
+        if orphans:
+            warnings.warn(
+                f"Output bundle consistency: {len(orphans)} E_DAG edge endpoint(s) reference field ids "
+                f"absent from V_fields (e.g. {sorted(orphans)[:3]}) — possible partial/corrupt bundle.",
+                RuntimeWarning, stacklevel=2,
+            )
+
     def flush_to_disk(self, run_dir: str | Path | None = None) -> Path:
         final = Path(run_dir) if run_dir is not None else self.run_dir
         final.parent.mkdir(parents=True, exist_ok=True)
         self._append_empty_by_profile_warnings()
+        self._check_first_class_consistency()
         tmp = Path(tempfile.mkdtemp(prefix=f"{final.name}.phaseE.", dir=str(final.parent)))
         try:
             for key, rel in OUTPUT_BUNDLE_FILES.items():

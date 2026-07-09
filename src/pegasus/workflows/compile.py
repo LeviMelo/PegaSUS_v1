@@ -802,6 +802,11 @@ def _serialize_run_bundle(
     cnes_sih_metadata = status.cnes_sih_metadata
     population_tensor_metadata = status.population_tensor_metadata
     race_bridge_metadata = status.race_bridge_metadata
+    # maternal-child linkage (SINASC births <-> SIM infant deaths) is performed only when BOTH source
+    # systems are materialized in the run — derive it from the artifacts, never hardcode True (report
+    # faithfully; the prior unconditional True claimed linkage even on SINASC- or SIM-excluded runs).
+    _processed_systems = {a.source_system for a in plan.autonomous_artifacts if a.artifact_role == "processed_events"}
+    maternal_child_linkage = "SINASC" in _processed_systems and "SIM-DO" in _processed_systems
 
     def _build_extras() -> dict[str, Any]:
         extras = {
@@ -809,7 +814,7 @@ def _serialize_run_bundle(
             "run_profile": intent.run_profile,
             "compile_manifest": str(plan.compile_manifest_path),
             "intent_path": str(plan.intent_path),
-            "maternal_child_linkage": True,
+            "maternal_child_linkage": maternal_child_linkage,
             "race_bridge_plan": plan.race_bridge_plan.as_manifest(),
             "context_policy": intent.context_policy,
             "compiler_architecture": plan.compiler_architecture,
@@ -838,6 +843,7 @@ def _serialize_run_bundle(
         run_config_payload = {
             "schema_version": "1.0",
             "compile_mode": "compile",
+            "maternal_child_linkage": maternal_child_linkage,
             "run_id": run_id,
             "run_profile": intent.run_profile,
             "intent_path": str(plan.intent_path),
@@ -870,8 +876,6 @@ def _serialize_run_bundle(
                 existing_run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 existing_run_config = {}
-        if existing_run_config.get("maternal_child_linkage"):
-            run_config_payload["maternal_child_linkage"] = existing_run_config["maternal_child_linkage"]
         if race_bridge_metadata is None and existing_run_config.get("race_bridge"):
             race_bridge_metadata = existing_run_config["race_bridge"]
         if race_bridge_metadata is not None:

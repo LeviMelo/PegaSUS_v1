@@ -1,0 +1,35 @@
+# Multi-denominator declaration (FEAT-P4) — which denominators may normalize each quantity.
+# A quantity's rate is count / denominator; a quantity may admit SEVERAL denominators, one flagged
+# default. The Output Query Layer resolves one at query time (default, or an admissible per-query
+# override) and records the choice in the dataset provenance. See PEGASUS_OUTPUT_QUERY_LAYER.md §3.
+# Denominator ids bind to population-tensor / RN-denominator field ids; legality_class is structural
+# for census/registry denominators (data-independent → safe to normalize a tested quantity).
+schema_version: "1.0"
+registry_version: "1.0"
+created_at: "2026-07-08"
+updated_at: "2026-07-08"
+provenance:
+  - "FEAT-P4 multi-denominator declaration; design in PEGASUS_OUTPUT_QUERY_LAYER.md §3"
+entries:
+  - id: mortality_all_cause
+    status: active
+    description: "All-cause mortality count, normalized by resident population (crude/age-specific death rate)."
+    warnings: []
+    extensive: true
+    admissible:
+      - {id: resident_population, default: true, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural}
+  - id: incidence_c25
+    status: active
+    description: "Pancreatic-cancer (C25) event count, normalized by resident population."
+    warnings: []
+    extensive: true
+    admissible:
+      - {id: resident_population, default: true, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural}
+  - id: live_births
+    status: active
+    description: "Live births — FEAT-P4 exemplar: women 15-49 (general fertility rate, default) OR whole resident population (crude birth rate)."
+    warnings: []
+    extensive: true
+    admissible:
+      - {id: women_15_49, default: true, strata: [age, race], offset_semantics: log_exposure, legality_class: structural}
+      - {id: resident_population, strata: [age, sex, race], offset_semantics: log_exposure, legality_class: structural}

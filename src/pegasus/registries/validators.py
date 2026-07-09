@@ -194,6 +194,7 @@ def validate_registry_tree(root: str | Path = "config/registries") -> list[str]:
         "health/clinical_event_definitions.yaml",
         "health/cnes_capacity_registry.yaml",
         "health/sih_cost_registry.yaml",
+        "health/denominators.yaml",
         "sidra/sidra_table_seed.jsonl",
         "sidra/sidra_views.yaml",
         "sidra/sidra_category_maps.yaml",

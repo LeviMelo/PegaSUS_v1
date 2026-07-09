@@ -149,6 +149,36 @@ structured regression object rather than a fixed matrix — sophisticated and co
 staying bounded. It folds into **W-RACE-2** (start with system+time effects, where identification is
 cleanest; add age/region as the data support them).
 
+### 1.8 Empirical validation of the formalization (planted-signal probe, 2026-07-09)
+
+A disposable probe (CLAUDE.md §II) generated synthetic ecological data with a **known** whitening `C`
+(true *preta* 32% mislabelled lighter, *parda* 25%→*branca*) **and** a **planted genuine race
+differential** (*preta* mortality truly 1.5× *branca*), then tested whether the ecological-deconvolution
+estimator (§1.3) recovers both without erasing the legitimate signal. Truth-init and neutral-init
+converged to the same optimum (→ identified, not a lucky local min). Results:
+
+| scenario | naive preta ratio | model | `C` recovery | verdict |
+|---|---|---|---|---|
+| A. high contextual variation, single system | **0.91** (erases/inverts) | **1.49** | exact (err 0.01) | recovers signal + `C` |
+| B. low contextual variation | 0.90 | 1.30 (partial) | good | degrades — variation is the identifier |
+| C. strong prior anchored at **identity-`C`** | 0.91 | **1.07 (erases)** | suppressed | over-strong/mis-anchored prior is harmful |
+| D. two systems (shared rates, different `C`) | 0.91 | **1.49** | best (err 0.007) | cross-system is the strongest identifier |
+
+- **Validated:** given adequate contextual variation (A) or cross-system data (D), the model recovers
+  both `C` and the planted differential (1.49 vs 1.50), while the **naive admin/census estimate erases
+  and inverts the signal** (0.91 — reads *preta* mortality as *lower* when it is genuinely 50% higher).
+- **The user's central worry is real, quantified, and resolved** by the model given the identifying
+  resources. Failure mode to avoid (scenario C): an over-strong prior anchored at identity-`C` actively
+  erases the signal by mis-attributing whitening to the rate.
+- **The current production bridge (fixed identity/synthetic `C`) is scenario C at infinite prior strength
+  → not merely inert but actively harmful** where real misclassification exists.
+- **W-RACE-2 design constraints (measured, not assumed):** (i) exploit cross-municipality contextual
+  variation; (ii) prefer the multi-system joint model (cross-system `C` is the strongest identifier —
+  validating §1.7); (iii) anchor the prior on a real literature `C`, **not identity**, with calibrated
+  strength; (iv) report wide posteriors where contextual variation is low (scenario B).
+
+Probe: `scratchpad/racebridge_validation_probe.py` — becomes W-RACE-2's proof-of-capability test at build.
+
 ---
 
 ## 2. Data layer for the full-scale default (reprioritized to first-class)

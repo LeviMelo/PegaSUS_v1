@@ -48,16 +48,23 @@ metadata, fixtures). Ungoverned paths (e.g. the stray `data/_peryear_probe`) cla
 
 ## Honestly-ranked remaining gaps (national-scale leverage)
 
-1. **Bundle built fully in-RAM** (`bundle_manager`: `tables: dict[str,list[dict]]`) + **edge query
-   eager-loads** whole `Hypotheses` — two RAM cliffs a national run would hit; only the population
-   tensor and the new `count`/`raw_field` field reader are lazy. *This is the deepest remaining
-   change (a streaming ParquetWriter flush path) and the true national-scale prerequisite.*
-2. **`rate`/`standardized_rate` queries** — the field reader + denominator registry are wired, but
+1. **`rate`/`standardized_rate` queries** — the field reader + denominator registry are wired, but
    mapping a denominator **id → its materialized bundle field** + cell-key-matched division (and
    age-standardization weights) is the correctness-critical next piece. Currently a typed refusal
-   rather than a divide-by-guess.
-3. **Schema authority split** — `schema_seed.py` (PyArrow) vs `validate.py` (column-sets) can drift.
-4. **Strays** — `data/_peryear_probe` (ungoverned), `data/sidra` legacy strata (superseded by assets).
+   rather than a divide-by-guess. **This is the genuine remaining query-object work.**
+2. **Strays** — `data/_peryear_probe` (ungoverned), `data/sidra` legacy strata (superseded by assets).
+
+### Refuted by measurement (a plausible reconnaissance claim that did not survive a probe)
+
+- **"Bundle built fully in-RAM is a national-scale RAM cliff" — FALSE.** Measured on a real bundle:
+  `Q_tensor`/`V_fields`/`VariableDictionary`/`Hypotheses` are **one row per FIELD/EDGE** (~73–86 rows,
+  0.30 MB total), not per cell. `Q_tensor` carries per-field aggregate diagnostics (n_events, n_eff,
+  cov_S…), so it scales with the field count (bounded even nationally), not the cell count. The
+  genuinely large per-cell data lives in `Tables/efg_tensors/` and is **already streamed** separately
+  (the materialization path + lazy `slice_population_tensor`), never accumulated in `bundle_manager`'s
+  `list[dict]`. The eager edge-query load was likewise O(edges) ≈ O(fields²); made lazy anyway as
+  cheap hygiene. **No streaming-flush rewrite is needed** — the in-RAM accumulation is O(n_fields).
+- (`schema_seed` vs `validate` drift — guarded with a consistency test, currently consistent.)
 
 ## What was crystallized/robustified (2026-07-09)
 

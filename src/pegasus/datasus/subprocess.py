@@ -282,6 +282,11 @@ def fetch_datasus_chunk(
         if config.r_library_path:
             environment["R_LIBS_USER"] = config.r_library_path
         process = subprocess.Popen(command, stdout=stdout, stderr=stderr, env=environment)
+        # DP-1: poll with exponential backoff (50 ms → 1 s) rather than a flat 1 s sleep. A chunk that
+        # finishes early is noticed in tens of ms (the flat sleep wasted up to ~1 s per chunk, across
+        # thousands of national chunks), while a long-running chunk still polls cheaply. Byte-identical
+        # output; the timeout/heartbeat exit conditions are unchanged — only the sleep granularity.
+        poll_interval = 0.05
         while process.poll() is None:
             elapsed = time.time() - started
             if elapsed > timeout_seconds or _heartbeat_stale(heartbeat_path, heartbeat_timeout_seconds):
@@ -293,7 +298,8 @@ def fetch_datasus_chunk(
                     exit_code=41,
                     error_message="R subprocess timed out or heartbeat became stale.",
                 )
-            time.sleep(1.0)
+            time.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, 1.0)
 
     if process.returncode != 0:
         return _finish(

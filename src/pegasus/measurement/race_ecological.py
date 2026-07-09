@@ -62,6 +62,7 @@ __all__ = [
     "EcologicalRaceResult",
     "fit_ecological_race_deconvolution",
     "contextual_identifiability",
+    "emission_from_reclassification",
 ]
 
 # Below this per-cell RMS composition-share variation (in the least-varying non-degenerate direction)
@@ -76,6 +77,69 @@ DEFAULT_MAX_ITER = 2000
 
 class EcologicalRaceError(ValueError):
     """Raised when an ecological race-deconvolution problem is malformed."""
+
+
+def emission_from_reclassification(
+    reclassification: np.ndarray,
+    admin_marginal: np.ndarray,
+) -> np.ndarray:
+    """Convert a reclassification prior ``P(self-declared=j | admin=k)`` to the emission prior
+    ``P(admin=k | self-declared=j)`` the ecological deconvolution consumes.
+
+    The race-bridge registry stores a **row-stochastic** reclassification matrix ``R[k, j] =
+    P(self-declared=j | admin=k)`` (each admin row sums to 1 over self-declared). The ecological
+    model (MSD §4.6) instead needs the **column-stochastic** emission ``C[k|j] = P(admin=k |
+    self-declared=j)`` (each self-declared column sums to 1 over admin) — the forward whitening it
+    inverts. These are opposite conditionals, related by Bayes with the admin marginal ``p_admin[k] =
+    P(admin=k)`` (directly observable by counting admin race in the data):
+
+        C[k|j] = P(admin=k | self=j)
+               = P(self=j | admin=k) P(admin=k) / P(self=j)
+               = R[k, j] p_admin[k] / Σ_{k'} R[k', j] p_admin[k']
+
+    The self marginal ``P(self=j)`` is exactly the normaliser ``Σ_{k'} R[k',j] p_admin[k']`` and so
+    cancels — only ``R`` and the observed ``p_admin`` are required. This is the reconciliation the
+    W-RACE-2 wiring needs; it is a pure transform (no live-path effect) so it can be validated in
+    isolation before the estimator is wired into the denominator path.
+
+    Args:
+        reclassification: (K, J) row-stochastic ``R[k, j] = P(self=j | admin=k)``.
+        admin_marginal: (K,) observed ``p_admin[k] = P(admin=k)``; normalised internally if it does
+            not already sum to 1.
+
+    Returns:
+        (K, J) column-stochastic emission ``C[k|j]``. A self-declared category that no admin category
+        maps onto (a structurally zero column) falls back to that category's admin marginal, so the
+        column is always a proper distribution rather than silently zero.
+    """
+    R = np.asarray(reclassification, dtype=float)
+    p = np.asarray(admin_marginal, dtype=float)
+    if R.ndim != 2:
+        raise EcologicalRaceError("reclassification must be a 2-D (K, J) matrix.")
+    K, J = R.shape
+    if p.shape != (K,):
+        raise EcologicalRaceError(f"admin_marginal shape {p.shape} != expected ({K},).")
+    if np.any(R < 0) or not np.all(np.isfinite(R)):
+        raise EcologicalRaceError("reclassification has negative or non-finite entries.")
+    if np.any(p < 0) or not np.all(np.isfinite(p)):
+        raise EcologicalRaceError("admin_marginal has negative or non-finite entries.")
+    row_sums = R.sum(axis=1)
+    if np.max(np.abs(row_sums - 1.0)) > 1e-6:
+        raise EcologicalRaceError("reclassification must be row-stochastic P(self|admin) (rows sum to 1).")
+    total = p.sum()
+    if total <= 0:
+        raise EcologicalRaceError("admin_marginal must have positive total mass.")
+    p = p / total
+
+    joint = R * p[:, None]  # joint[k, j] = P(admin=k, self=j)
+    col = joint.sum(axis=0, keepdims=True)  # P(self=j)
+    C = np.divide(joint, col, out=np.zeros_like(joint), where=col > 0)
+    # A structurally empty self column (no admin maps onto it) → fall back to the admin marginal so
+    # the column is a valid distribution, never silently all-zero.
+    empty = (col.ravel() <= 0)
+    if np.any(empty):
+        C[:, empty] = p[:, None]
+    return C
 
 
 @dataclass(frozen=True)

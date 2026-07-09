@@ -12,10 +12,12 @@ import numpy as np
 import pytest
 
 from pegasus.measurement.race_ecological import (
+    EcologicalRaceError,
     EcologicalRaceProblem,
     _neg_log_post_and_grad,
     _softmax_cols,
     contextual_identifiability,
+    emission_from_reclassification,
     fit_ecological_race_deconvolution,
 )
 
@@ -154,3 +156,35 @@ def test_column_softmax_is_column_stochastic():
     C = _softmax_cols(Z)
     np.testing.assert_allclose(C.sum(axis=0), np.ones(3), atol=1e-12)
     assert np.all(C > 0)
+
+
+def test_emission_from_reclassification_roundtrips_exactly():
+    # Bayes bridge: construct R (row-stochastic P(self|admin)) + p_admin FROM a known emission C_true,
+    # then recover C_true. This is the W-RACE-2-wire reconciliation (registry direction -> estimator
+    # direction); it must invert exactly.
+    rng = np.random.default_rng(0)
+    Kd = Jd = 5
+    C_true = rng.dirichlet(np.ones(Kd), size=Jd).T          # (K, J), each column sums to 1
+    p_self = rng.dirichlet(np.ones(Jd) * 2.0)               # P(self=j)
+    joint = C_true * p_self[None, :]                        # P(admin=k, self=j)
+    p_admin = joint.sum(axis=1)                             # P(admin=k)
+    R = joint / p_admin[:, None]                            # P(self=j | admin=k), row-stochastic
+    np.testing.assert_allclose(R.sum(axis=1), 1.0, atol=1e-12)
+
+    C_rec = emission_from_reclassification(R, p_admin)
+    np.testing.assert_allclose(C_rec, C_true, atol=1e-9)          # exact inversion
+    np.testing.assert_allclose(C_rec.sum(axis=0), 1.0, atol=1e-9)  # column-stochastic
+
+
+def test_emission_from_reclassification_accepts_unnormalised_counts():
+    # p_admin may be raw admin counts; it is normalised internally.
+    R = np.array([[0.8, 0.2], [0.3, 0.7]])
+    C_from_counts = emission_from_reclassification(R, np.array([4000.0, 1000.0]))
+    C_from_probs = emission_from_reclassification(R, np.array([0.8, 0.2]))
+    np.testing.assert_allclose(C_from_counts, C_from_probs, atol=1e-12)
+
+
+def test_emission_from_reclassification_rejects_non_row_stochastic():
+    bad = np.array([[0.8, 0.3], [0.3, 0.7]])  # first row sums to 1.1
+    with pytest.raises(EcologicalRaceError):
+        emission_from_reclassification(bad, np.array([0.5, 0.5]))

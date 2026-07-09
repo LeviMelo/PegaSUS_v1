@@ -333,7 +333,7 @@ def _sinasc_birth_priors(
 
 def _census_race_composition_prior(
     *,
-    records: list[dict[str, Any]],
+    records_df: pl.DataFrame,
     locality_index: dict[str, int],
     period_index: dict[str, int],
     age_index: dict[str, int],
@@ -364,7 +364,7 @@ def _census_race_composition_prior(
     # numpy, and write a contiguous per-(locality, period) slice. NaN marks cells with no census race
     # data (masked out by the loss, exactly as the old per-cell None did). No per-cell Python loop.
     census_counts = _census_count_arrays(
-        records, locality_index=locality_index, age_index=age_index, sex_index=sex_index,
+        records_df, locality_index=locality_index, age_index=age_index, sex_index=sex_index,
         race_index=race_index, group_size=group_size, x_count=x_count, r_count=r_count,
     )
     n = s_count * t_count * group_size

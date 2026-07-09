@@ -185,6 +185,8 @@ def test_sparse_population_memory_preflight_aborts():
 def test_interpolate_census_composition_reproduces_and_interpolates():
     """The closed-form prior mean (MSD §2.8.10) reproduces census strata exactly and
     linearly interpolates the joint composition, scaled to each year's closure total."""
+    import polars as pl
+
     from pegasus.denominators.population.build import interpolate_census_composition
 
     # 1 locality, 3 years (2010 census, 2015 intercensal, 2020 census), 1 age, 1 sex, 2 races.
@@ -195,15 +197,18 @@ def test_interpolate_census_composition_reproduces_and_interpolates():
     sex_index = {"__total__": 0}
     race_index = {"branca": 0, "parda": 1}
     # 2010: 80/20 branca/parda; 2020: 40/60. 2015 should interpolate to 60/40.
-    records = [
-        {"municipality_cod6": "270010", "period": "2010", "age_group": "__total__", "sex": "__total__", "race": "branca", "value": 800.0},
-        {"municipality_cod6": "270010", "period": "2010", "age_group": "__total__", "sex": "__total__", "race": "parda", "value": 200.0},
-        {"municipality_cod6": "270010", "period": "2020", "age_group": "__total__", "sex": "__total__", "race": "branca", "value": 400.0},
-        {"municipality_cod6": "270010", "period": "2020", "age_group": "__total__", "sex": "__total__", "race": "parda", "value": 600.0},
-    ]
+    records_df = pl.DataFrame(
+        [
+            {"municipality_cod6": "270010", "period": "2010", "age_group": "__total__", "sex": "__total__", "race": "branca", "value": 800.0},
+            {"municipality_cod6": "270010", "period": "2010", "age_group": "__total__", "sex": "__total__", "race": "parda", "value": 200.0},
+            {"municipality_cod6": "270010", "period": "2020", "age_group": "__total__", "sex": "__total__", "race": "branca", "value": 400.0},
+            {"municipality_cod6": "270010", "period": "2020", "age_group": "__total__", "sex": "__total__", "race": "parda", "value": 600.0},
+        ],
+        schema={"municipality_cod6": pl.Utf8, "period": pl.Utf8, "age_group": pl.Utf8, "sex": pl.Utf8, "race": pl.Utf8, "value": pl.Float64},
+    )
     closure = [1000.0, 2000.0, 1000.0]  # (locality,year) totals
     values = interpolate_census_composition(
-        records=records, closure=closure, locality_index=locality_index, period_index=period_index,
+        records_df=records_df, closure=closure, locality_index=locality_index, period_index=period_index,
         age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
     )
     # 2010 census reproduced (branca 800, parda 200):

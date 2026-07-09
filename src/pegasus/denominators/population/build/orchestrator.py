@@ -173,6 +173,8 @@ def solve_population_tensor_from_sidra_strata(
             categories_by_axis[axis].add(record[axis])
     if not records:
         raise ValueError("population strata artifact has no registry-projectable demographic cells")
+    del strata  # the 11.25M-row source frame is fully consumed into `records`; free it (~1.5 GB national)
+    # before the 2000-census disaggregation doubles the record set (RAM: §V.1/§VIII).
 
     # FAL-POP #4 (§II.4): fold in the 2000 census (SIDRA 2093) as a third anchor, disaggregated from
     # its coarse age brackets to single year using the 2010 shape. Appended to the census record set
@@ -202,14 +204,27 @@ def solve_population_tensor_from_sidra_strata(
         for axis in AXES:
             categories_by_axis[axis].add(record[axis])
 
+    # §V.1 / §VIII: the record set is now complete (9606 + 2000 census + AMC carve). Collapse the
+    # ~12M-row list[dict] (~6 GB at national scale) into a columnar frame and free the list, so the
+    # downstream numeric consumers (anchor scatter, census-count arrays, race prior) run vectorized and
+    # never coexist with the O(n_cells) tensors as fat Python dicts -- the measured national RAM cliff
+    # (peak ~18 GB -> thrash). Columns are keyed by NAME, so the parse-order and census_2000-order
+    # record dicts align identically.
+    records_df = pl.DataFrame(
+        records,
+        schema={"municipality_cod6": pl.Utf8, "period": pl.Utf8, "value": pl.Float64,
+                "age_group": pl.Utf8, "sex": pl.Utf8, "race": pl.Utf8},
+    )
+    del records
+
     # `totals` stitches the census-year (9606) and intercensal (6579) population
     # totals into one (municipality, year) closure panel (MSD §2.8.10); its period
     # coverage is a superset of the strata's (strata/disaggregation only exists for
     # census years) -- the tensor's time axis must span BOTH so intercensal years
     # get a real closure anchor instead of silently having none.
     totals = load_combined_population_totals_frame(totals_path)
-    localities = tuple(sorted({record["municipality_cod6"] for record in records} | {str(row) for row in totals["municipality_cod6"].to_list()}))
-    periods = tuple(sorted({record["period"] for record in records} | {str(int(row)) for row in totals["year"].to_list()}))
+    localities = tuple(sorted(set(records_df["municipality_cod6"].to_list()) | {str(row) for row in totals["municipality_cod6"].to_list()}))
+    periods = tuple(sorted(set(records_df["period"].to_list()) | {str(int(row)) for row in totals["year"].to_list()}))
     age_groups = tuple(sorted(categories_by_axis["age_group"] or {TOTAL}, key=age_group_sort_key))
     sexes = tuple(sorted(categories_by_axis["sex"] or {TOTAL}))
     races = tuple(sorted(categories_by_axis["race"] or {TOTAL}))
@@ -227,13 +242,16 @@ def solve_population_tensor_from_sidra_strata(
     # once and scatter-added, so a national ~1.3e8-cell anchor field is a single float64 array (NaN =
     # absent) instead of a Python list of ~1.3e8 objects, and the fill is one np.add.at not a per-record
     # loop. Byte-identical to the old accumulate-per-record.
-    n_rec = len(records)
-    li = np.fromiter((locality_index.get(r["municipality_cod6"], -1) for r in records), dtype=np.int64, count=n_rec)
-    pi = np.fromiter((period_index.get(r["period"], -1) for r in records), dtype=np.int64, count=n_rec)
-    ai = np.fromiter((age_index.get(r["age_group"], -1) for r in records), dtype=np.int64, count=n_rec)
-    xi = np.fromiter((sex_index.get(r["sex"], -1) for r in records), dtype=np.int64, count=n_rec)
-    ri = np.fromiter((race_index.get(r["race"], -1) for r in records), dtype=np.int64, count=n_rec)
-    rvals = np.fromiter((float(r["value"]) for r in records), dtype=np.float64, count=n_rec)
+    _aidx = records_df.select(
+        pl.col("municipality_cod6").cast(pl.Utf8).replace_strict(locality_index, default=-1, return_dtype=pl.Int64).alias("li"),
+        pl.col("period").cast(pl.Utf8).replace_strict(period_index, default=-1, return_dtype=pl.Int64).alias("pi"),
+        pl.col("age_group").cast(pl.Utf8).replace_strict(age_index, default=-1, return_dtype=pl.Int64).alias("ai"),
+        pl.col("sex").cast(pl.Utf8).replace_strict(sex_index, default=-1, return_dtype=pl.Int64).alias("xi"),
+        pl.col("race").cast(pl.Utf8).replace_strict(race_index, default=-1, return_dtype=pl.Int64).alias("ri"),
+        pl.col("value").cast(pl.Float64).alias("rv"),
+    )
+    li = _aidx["li"].to_numpy(); pi = _aidx["pi"].to_numpy(); ai = _aidx["ai"].to_numpy()
+    xi = _aidx["xi"].to_numpy(); ri = _aidx["ri"].to_numpy(); rvals = _aidx["rv"].to_numpy()
     valid = (li >= 0) & (pi >= 0) & (ai >= 0) & (xi >= 0) & (ri >= 0)
     flat_idx = ((li * shape[1] + pi) * inner_cells) + (ai * (shape[3] * shape[4]) + xi * shape[4] + ri)
     anchors = np.zeros(n_cells, dtype=np.float64)
@@ -266,7 +284,7 @@ def solve_population_tensor_from_sidra_strata(
     # the anchor. Census years (2000/2010/2022 -- the years the strata records cover) are untouched.
     # Municipalities with <2 census anchors (created after 2000, boundary churn) keep their prior
     # closure and are counted for the caller's telemetry.
-    census_years = frozenset(record["period"] for record in records)
+    census_years = frozenset(records_df["period"].to_list())
     single_vintage_stats = _reanchor_closure_single_vintage(
         closure=closure,
         localities=localities,
@@ -298,7 +316,7 @@ def solve_population_tensor_from_sidra_strata(
         race_bridge_prior=race_bridge_prior,
     )
     race_composition_prior = _census_race_composition_prior(
-        records=records,
+        records_df=records_df,
         locality_index=locality_index,
         period_index=period_index,
         age_index=age_index,
@@ -349,6 +367,7 @@ def solve_population_tensor_from_sidra_strata(
         np.nan_to_num(anchors, nan=0.0) * 0.25,
     )
     np.maximum(migration_bounds, 1.0, out=migration_bounds)
+    del closure_per_cell, use_closure  # O(n_cells) temporaries (~1.2 GB national), consumed into bounds
 
     death_rates: tuple[float | None, ...] | None = None
     warnings: list[str] = [*death_warnings, *birth_warnings, *migration_warnings]
@@ -406,14 +425,14 @@ def solve_population_tensor_from_sidra_strata(
     # across years, scaled to each closure total. This is the reconstruction in the data-poor
     # limit and the solver's warm start otherwise.
     prior_mean = interpolate_census_composition(
-        records=records, closure=closure, locality_index=locality_index, period_index=period_index,
+        records_df=records_df, closure=closure, locality_index=locality_index, period_index=period_index,
         age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
     )
     census_year_count = len(census_years)
-    # Free the O(n_records) records list before the solve/emit -- at national scale it is ~3-4 GB and is
-    # not needed past here (anchors/closure/priors are built), keeping the working set O(n_cells arrays).
+    # Free the columnar record frame before the solve/emit -- not needed past here (anchors/closure/
+    # priors are built), keeping the working set O(n_cells arrays).
     import gc as _gc
-    del records
+    del records_df
     _gc.collect()
 
     weights = PopulationObjectiveWeights(

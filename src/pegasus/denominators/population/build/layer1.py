@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import polars as pl
 
 from pegasus.denominators.population.build.indexing import *  # noqa: F401,F403 (intra-package base layer)
 from pegasus.denominators.population.build.indexing import _census_count_arrays
@@ -28,7 +29,7 @@ def _interpolate_shares(shares: dict[str, np.ndarray], census_years: list[str], 
 
 def interpolate_census_composition(
     *,
-    records: list[dict[str, Any]],
+    records_df: pl.DataFrame,
     closure: list[float | None],
     locality_index: dict[str, int],
     period_index: dict[str, int],
@@ -57,7 +58,7 @@ def interpolate_census_composition(
     # a contiguous slice per (locality, period) -- no per-cell Python loop / _cell_index (was O(n_cells)
     # calls; the dominant national input-construction cost).
     census_counts = _census_count_arrays(
-        records, locality_index=locality_index, age_index=age_index, sex_index=sex_index,
+        records_df, locality_index=locality_index, age_index=age_index, sex_index=sex_index,
         race_index=race_index, group_size=group_size, x_count=x_count, r_count=r_count,
     )
     closure_arr = np.asarray([c if c is not None else np.nan for c in closure], dtype=np.float64)

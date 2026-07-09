@@ -10,6 +10,44 @@ Companion docs: `PEGASUS_REPO_HEALTH_ASSESSMENT.md` (findings), `PEGASUS_OUTPUT_
 
 ---
 
+## STATUS — autonomous burn (last updated 2026-07-09)
+
+Each roadmap item was executed OR verified against live code (code over docs — many audit flags were
+stale). Outcome triage:
+
+**DELIVERED (validated + committed):**
+- **W-RACE-2 ecological estimator** — `measurement/race_ecological.py` (commit 75f1afe). Generative
+  Poisson deconvolution per §1.3, per-stratum emission C = covariate-dependent confusion (§1.7).
+  Proof-of-capability `tests/unit/test_race_ecological_deconvolution.py`: gradcheck 1e-7, recovers a
+  planted 1.5 rate-ratio the naive crosswalk erases to 0.91, strong-identity-prior re-erases guard,
+  two-stratum recovery, identifiability diagnostic. This is the §1.8 planted-signal validation the
+  user required *before* implementation, now promoted to the shipped test.
+- **STORE-ORG workspace GC** — `datasus/storage_gc.py::gc_stale_stage_workspaces` (commit 0585171).
+  Dry-run-default, safe-by-construction; 366 MiB / 6740 files reclaimable on live data/. Removed the
+  dead `data/intermediate/pirs` lake entry. (Execution left as a user one-liner — irreversible.)
+- Earlier this session: W-RACE-1 (race_bridge_cv → LDO reliability weight), DP-1a (subprocess poll
+  backoff), EFG-QT (classify_q_state wiring), T1.2 coverage honesty, Output Query P3a-c, AMC honesty,
+  maternal-child truthfulness, bundle first-class consistency.
+
+**VERIFIED → REDIRECTED (not built — measuring the prescription changed the answer):**
+- **DP-2** (parallel normalize 3-4-way): `pipeline.py:292-296` documents a MEASURED rationale for the
+  cap-of-2 (per-system decode already saturates BLAS/polars; >2 only stacks RAM). Needs a real
+  national-normalize benchmark, NOT a speculative build against the measured rationale (CLAUDE.md §I).
+- **DP-1b/DP-1c**: already-adequate (sidecar-cached / mtime-lru stable within a run).
+- **W-REG-1** (declarative transform engine): correct-but-marginal — per-system transforms are
+  irreducibly custom domain logic; the codebook is already registry-centralized. Real lever is REG-07.
+- **Health-registry orphans** (icd_curated_groups etc.): stale claim — actually wired (3 refs).
+
+**STAGED — two real, invasive builds for focused fresh-context execution (not rushed at depth):**
+- **W-RACE-2-wire**: reconcile the registry's row-stochastic reclassification prior P(self|admin) with
+  the estimator's column-stochastic emission P(admin|self), then wire posterior λ_{s,j} into the
+  denominator path (replacing the fixed-C crosswalk). Moves point estimates → validate ground-truth
+  recovery survives before adopting (CLAUDE.md §V).
+- **REG-07**: unify the 3 divergent registry loader contracts (`validators.py:25-72`) → one typed
+  loader. Decode-path rewrite needing byte-parity validation.
+
+---
+
 ## 0. Operating reality (the frame that changes priorities)
 
 The routine job is **all systems, all UFs, 2000–2024**. Local scopes are the exception. Therefore:

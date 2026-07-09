@@ -186,6 +186,14 @@ def state_reliability_weights(run_dir, keep_variables=None, *, spec_reliability:
         frag = float(row.get("denom_fragility") or 0.0)
         prov = float(row.get("provenance_risk") or 0.0)
         rel = kish * (1.0 - min(frag, 1.0)) * (1.0 - min(prov, 1.0))
+        # W-RACE-1: propagate the race-bridge posterior uncertainty (§3.12 race_bridge_cv) into the LDO
+        # observation weight — a field whose race attribution is uncertain (high bridge CV) is
+        # down-weighted, never modelled as exact. Monotone-safe: factor 1/(1+cv) in (0,1], no-op when
+        # the field carried no race bridge (cv absent or 0). This is the measurement-error propagation
+        # the §1.8 validation motivates (uncertain race attribution must not be trusted as exact).
+        cv = row.get("race_bridge_cv")
+        if cv is not None and float(cv) > 0:
+            rel *= 1.0 / (1.0 + float(cv))
         out[fid] = float(min(max(rel, 0.1), 1.0))
     return out
 

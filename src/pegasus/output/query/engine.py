@@ -118,21 +118,68 @@ def _edge_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:
     return MaterializedDataset(frame=frame, provenance=provenance, kind="edge", warnings=tuple(warnings))
 
 
+def _field_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:
+    """Serve a ``count``/``raw_field`` query: resolve the quantity to a materialized field and read
+    its long-form tensor (lazily). ``count`` additionally flags a non-count unit rather than silently
+    treating a rate as a count (the denominator principle, §V)."""
+    from pegasus.output.query.field_tensor import (
+        FieldResolutionError,
+        is_count_unit,
+        read_field_tensor,
+        resolve_field,
+    )
+
+    try:
+        field_id, meta = resolve_field(bundle_dir, spec.quantity)
+        frame = read_field_tensor(bundle_dir, field_id, filters=spec.filters)
+    except FieldResolutionError as exc:
+        raise QueryError(str(exc)) from exc
+
+    warnings: list[str] = []
+    unit = meta.get("unit")
+    if spec.kind == "count" and not is_count_unit(unit):
+        warnings.append(f"quantity_unit_is_not_a_count:{unit!r}")
+    dims = [c for c in frame.columns if c not in ("value", "field_id", "field_name", "operator")]
+    provenance = {
+        "kind": spec.kind,
+        "quantity": spec.quantity,
+        "field_id": field_id,
+        "field_name": meta.get("technical_name") or meta.get("display_name"),
+        "carrier": meta.get("carrier"),
+        "unit": unit,
+        "cell_dimensions": dims,
+        "n_rows": frame.height,
+        "run": _run_identity(bundle_dir),
+        "query": spec.model_dump(mode="json"),
+        "note": (
+            "Materialized field values read from Tables/efg_tensors/{field_id}.parquet (the bundle's "
+            "own copy; the execution-manifest path points at the deleted stage workspace). Long form: "
+            "cell dimensions + value."
+        ),
+    }
+    return MaterializedDataset(frame=frame, provenance=provenance, kind=spec.kind, warnings=tuple(warnings))
+
+
 def materialize_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:
-    """Serve ``spec`` from the bundle at ``bundle_dir``. P3b: the ``edge`` kind."""
+    """Serve ``spec`` from the bundle at ``bundle_dir``.
+
+    Wired: ``edge`` (P3b) and ``count``/``raw_field`` (P3c, the shared field-tensor reader).
+    ``rate``/``standardized_rate`` resolve their denominator (FEAT-P4) but still need the
+    denominator-id → bundle-field mapping + cell-key-matched division; refused with that reason
+    rather than served with a possibly-wrong denominator.
+    """
     if spec.kind == "edge":
         return _edge_query(bundle_dir, spec)
+    if spec.kind in ("count", "raw_field"):
+        return _field_query(bundle_dir, spec)
     if spec.requires_denominator():
-        # Fail fast + informatively: the denominator DOES resolve (FEAT-P4 substrate is live),
-        # the rate/standardized-rate math + field-tensor reader land in P3c/P3d.
         opt = resolve_denominator(spec.quantity, spec)
         raise QueryError(
-            f"kind={spec.kind!r}: denominator resolves to {opt.id!r} (FEAT-P4 live), but the "
-            f"rate/standardized-rate materialization is P3c/P3d — not yet wired."
+            f"kind={spec.kind!r}: denominator resolves to {opt.id!r} (FEAT-P4 live) and the field "
+            f"reader is wired, but mapping the denominator id to its materialized bundle field + "
+            f"cell-key-matched division is not yet wired — refusing rather than dividing by a guess."
         )
-    raise QueryError(
-        f"kind={spec.kind!r} (count/raw_field) needs the shared field-tensor reader (P3c) — not yet wired."
-    )
+    raise QueryError(f"unsupported query kind {spec.kind!r}")
 
 
 __all__ = ["QueryError", "MaterializedDataset", "materialize_query"]

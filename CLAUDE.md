@@ -118,3 +118,46 @@ measured. Earn every conclusion.**
   marginal," "the effect is actually low-rank," "I was directionally wrong" — clearly stated, these
   redirect effort correctly and are as valuable as a success. Never overstate a result or hide a
   refutation; the goal is the true answer, not a satisfying narrative.
+
+## VIII. Performance and scale are empirical — profile, localize, test at the real operating point
+
+- **Profile the real workload before optimizing; attack the dominant cost, not the assumed one.** Read
+  the per-stage/per-function breakdown (telemetry, `cProfile`, `py-spy`) on a representative run and let
+  Amdahl decide where effort goes. The dominant cost is routinely surprising — an inner solver, not the
+  I/O or the "big" model step you assumed. Optimizing a non-dominant stage is bounded waste, however
+  clever.
+- **Localize *where* a slowdown lives before engineering it — the performance analogue of §III.**
+  Isolate the cause by toggling one term/flag at a time. "Slow" resolves to distinct, differently-fixed
+  mechanisms: per-iteration cost (vectorize / leave Python objects), *iteration count* (conditioning,
+  convergence, step rule), memory thrash (storage layout), or the wrong stage entirely. A solve can be
+  slow not from Python-vs-numpy (already numpy) nor storage (already numpy) but from a single
+  ill-conditioning penalty on a fine grid — found by toggling that one term; the fix then belongs at the
+  optimizer (preconditioning/acceleration), not the loop. And beware: a *naive* accelerated/preconditioned
+  optimizer often converges fast to the WRONG point — validate the delicate fix against the reference
+  optimum, not merely against being faster (§I.a, §V).
+- **Validate at (or near) the actual operating scale — behavior inverts across scale.** Convergence,
+  conditioning, and memory are scale-dependent: a solver that converges in tens of iterations on a
+  small/coarse proxy can grind for thousands on the real fine/large grid; a routine that fits in RAM at
+  one scale thrashes at another. A miniature that "passes" proves little about the workload you run.
+- **Distrust a resource-virtue label until measured.** A component named for a virtue can violate it —
+  a "memory-bounded" solver built on Python lists used *more* memory than the dense numpy path it
+  replaced, and was slower. The name is a claim; the profile is the fact.
+
+## IX. The code is usually ahead of its record — verify current state, including your own past claims
+
+- **Treat every status claim as stale-by-default.** Across cycles a large fraction of "open / broken /
+  TODO / already-solved" flags — in roadmaps, audits, saved memories, agent reports, and prior
+  self-conclusions — proved already-fixed or adequate on live inspection. The default expectation is
+  that the code has moved on: establish the CURRENT state before acting, and don't inherit a plan's
+  framing of the problem.
+- **A five-minute probe overturns conclusions often enough to be mandatory.** It is not a formality; it
+  routinely refutes plausible, authoritative-sounding claims (a "67 GB" store that is now numpy, an
+  "in-RAM cliff" that is 0.3 MB, a "grinds forever" solve that converges at 170). Run it before
+  building and let the number, not the narrative, decide what is real.
+- **Audit your own prior claims with the skepticism you apply to others'.** Your past "done," "the
+  bottleneck is X," and headline diagnoses are hypotheses too. Re-verify and correct them promptly when
+  a measurement disagrees — without narrative-protection.
+- **Existence in code is not use in the live path (orphaned-but-callable ≠ wired-live).** A capability
+  that compiles, and even has tests, may not be what the running pipeline calls. Confirm with the actual
+  call chain *and* runtime evidence (telemetry of the backend/branch that executed), not the presence of
+  a function.

@@ -28,7 +28,7 @@ from pegasus.denominators.reconstruction.schema import (
     PopulationTensorRequest,
     PopulationTensorResult,
 )
-from pegasus.denominators.reconstruction.solvers import solve_population_tensor_blocked, solve_population_tensor_problem
+from pegasus.denominators.reconstruction.solvers import solve_population_tensor_problem
 from pegasus.denominators.population.anchor import (
     geometric_interpolate_closure,
     load_combined_population_totals_frame,
@@ -117,6 +117,155 @@ class PopulationTensorBuild:
             "max_projection_horizon": self.max_projection_horizon,
             "projected_periods": list(self.projected_periods),
         }
+
+
+def _per_cell_migration_bounds(
+    closure: list[float | None], anchors: np.ndarray, shape: tuple[int, int, int, int, int]
+) -> np.ndarray:
+    """Per-cell migration bound (MSD §2.8.1): ``0.25*closure_total/strata`` where the year's closure
+    total exists (every year), else ``0.25*anchor``, floored at 1.0. Locality-separable — a cell's bound
+    depends only on its own (locality,period) closure and its own anchor — so a block's bound is exactly
+    the slice of the whole-tensor bound."""
+    strata_per_st = shape[2] * shape[3] * shape[4]
+    closure_np = np.asarray([c if c is not None else np.nan for c in closure], dtype=np.float64)
+    closure_per_cell = np.repeat(closure_np, strata_per_st)
+    use_closure = np.isfinite(closure_per_cell) & (closure_per_cell > 0)
+    bounds = np.where(
+        use_closure,
+        0.25 * closure_per_cell / strata_per_st,
+        np.nan_to_num(anchors, nan=0.0) * 0.25,
+    )
+    np.maximum(bounds, 1.0, out=bounds)
+    return bounds
+
+
+def _solve_locality_blocked(
+    *,
+    localities: tuple[str, ...],
+    records_df: pl.DataFrame,
+    closure: list[float | None],
+    anchors: np.ndarray,
+    sim_deaths: Any,
+    death_rates: np.ndarray | None,
+    births: Any,
+    migration_locality_totals: tuple[float | None, ...] | None,
+    period_index: dict[str, int],
+    age_index: dict[str, int],
+    sex_index: dict[str, int],
+    race_index: dict[str, int],
+    shape: tuple[int, int, int, int, int],
+    mode: str,
+    weights: PopulationObjectiveWeights,
+    informative: bool,
+    max_iterations: int,
+    tolerance: float,
+):
+    """Build AND solve the population tensor one locality-block at a time so PEAK memory is O(block),
+    not O(national) — §V.1(b) extended upstream to input construction (the measured national RAM cliff:
+    ~6 whole 1.08 GB arrays coexisting). The SIDRA objective is locality-separable (``_locality_separable``:
+    no cross-locality migration enclosure), so each block's sub-problem equals ``_slice_localities(
+    full_problem, s0, s1)`` EXACTLY — the per-block prior_mean / race composition / migration bounds are
+    the corresponding slices of the whole-tensor arrays, and the per-block solve/project is byte-identical
+    to solving the sliced sub-problem. anchors + the (already-materialized, mostly-None) flow priors stay
+    whole and are sliced; only the three dominant O(n_cells) priors are built per block and freed.
+    Block sizing + per-block solver reselection mirror ``solve_population_tensor_blocked`` so telemetry
+    matches too. Returns a ``PopulationOptimizationResult`` with the assembled whole-tensor pop/migration."""
+    from pegasus.denominators.reconstruction.solvers import _BLOCK_TARGET_CELLS, solve_population_tensor_problem
+    from pegasus.denominators.reconstruction.projected_gradient import (
+        PopulationOptimizationResult,
+        _fast_projection_supported,
+        _np_project_population,
+        _project_population,
+    )
+
+    s_count, t_count, a_count, x_count, r_count = shape
+    inner = a_count * x_count * r_count
+    birth_inner = x_count * r_count
+    n_cells = s_count * t_count * inner
+    per_locality = max(1, n_cells // max(1, s_count))
+    block_localities = max(1, _BLOCK_TARGET_CELLS // per_locality)
+
+    sim_full = None if sim_deaths is None else np.asarray(sim_deaths, dtype=np.float64)
+    births_full = None if births is None else np.asarray(births, dtype=np.float64)
+    dr_full = None if death_rates is None else np.asarray(death_rates, dtype=np.float64)
+
+    full_pop = np.zeros(n_cells, dtype=np.float64)
+    full_mig = np.zeros(n_cells, dtype=np.float64)
+    converged_all, iters_max, init_obj, final_obj, worst_grad, n_blocks = True, 0, 0.0, 0.0, 0.0, 0
+    last_telemetry = None
+    for s0 in range(0, s_count, block_localities):
+        s1 = min(s0 + block_localities, s_count)
+        block_locs = localities[s0:s1]
+        bshape = (s1 - s0, t_count, a_count, x_count, r_count)
+        bloc_index = {loc: i for i, loc in enumerate(block_locs)}
+        brecords = records_df.filter(pl.col("municipality_cod6").is_in(list(block_locs)))
+        bclosure = closure[s0 * t_count:s1 * t_count]
+        c0, c1 = s0 * t_count * inner, s1 * t_count * inner
+        st0, st1 = s0 * t_count, s1 * t_count
+        bh0, bh1 = s0 * t_count * birth_inner, s1 * t_count * birth_inner
+        b_anchors = np.asarray(anchors[c0:c1], dtype=np.float64)
+        b_prior_mean = interpolate_census_composition(
+            records_df=brecords, closure=bclosure, locality_index=bloc_index, period_index=period_index,
+            age_index=age_index, sex_index=sex_index, race_index=race_index, shape=bshape,
+        )
+        b_race_prior = _census_race_composition_prior(
+            records_df=brecords, locality_index=bloc_index, period_index=period_index,
+            age_index=age_index, sex_index=sex_index, race_index=race_index, shape=bshape,
+        )
+        b_problem = PopulationTensorProblem(
+            shape=bshape,
+            anchors=b_anchors,
+            hard_anchor_mask=None,
+            mode=mode,  # type: ignore[arg-type]
+            births=None if births_full is None else births_full[bh0:bh1],
+            death_rates=None if dr_full is None else dr_full[c0:c1],
+            sim_deaths=None if sim_full is None else sim_full[c0:c1],
+            race_composition_prior=b_race_prior,
+            closure_totals=np.asarray([c if c is not None else np.nan for c in bclosure], dtype=np.float64),
+            migration_locality_totals=None if migration_locality_totals is None else migration_locality_totals[st0:st1],
+            migration_bounds=_per_cell_migration_bounds(bclosure, b_anchors, bshape),
+            initial_population=np.asarray(b_prior_mean, dtype=np.float64),
+            weights=weights,
+        )
+        if informative:
+            opt = solve_population_tensor_problem(b_problem, solver_id=None, max_iterations=max_iterations, tolerance=tolerance)
+            last_telemetry = opt.telemetry
+            converged_all = converged_all and opt.telemetry.converged
+            iters_max = max(iters_max, opt.telemetry.iterations)
+            init_obj += opt.telemetry.initial_objective
+            final_obj += opt.telemetry.final_objective
+            worst_grad = max(worst_grad, opt.telemetry.projected_gradient_norm)
+            full_pop[c0:c1] = np.asarray(opt.population, dtype=np.float64)
+            full_mig[c0:c1] = np.asarray(opt.migration, dtype=np.float64)
+        else:
+            prior_np = np.asarray(b_prior_mean, dtype=np.float64)
+            full_pop[c0:c1] = (
+                _np_project_population(b_problem, prior_np)
+                if _fast_projection_supported(b_problem)
+                else np.asarray(_project_population(b_problem, prior_np.tolist()), dtype=np.float64)
+            )  # full_mig stays zero for the data-poor closed-form block
+        n_blocks += 1
+
+    if not informative:
+        telemetry = PopulationSolverTelemetry(
+            converged=True, iterations=0, initial_objective=0.0, final_objective=0.0,
+            projected_gradient_norm=0.0, relative_objective_change=0.0, step_size=0.0, objective_terms={},
+        )
+    elif n_blocks == 1 and last_telemetry is not None:
+        # Single whole-panel block (small scope): preserve the solver's own per-term objective_terms
+        # (anchor/aging/birth/death/race/migration/age_smooth) EXACTLY as solve_population_tensor_blocked's
+        # whole-problem fallback did -- callers read these terms to confirm which losses fired.
+        telemetry = last_telemetry
+    else:
+        # Multi-block national solve: the per-term breakdown isn't summable across blocks, so report the
+        # block structure (identical to the old solve_population_tensor_blocked aggregation).
+        telemetry = PopulationSolverTelemetry(
+            converged=converged_all, iterations=iters_max, initial_objective=init_obj,
+            final_objective=final_obj, projected_gradient_norm=worst_grad,
+            relative_objective_change=0.0, step_size=0.0,
+            objective_terms={"blocked_localities": float(block_localities), "n_blocks": float(n_blocks)},
+        )
+    return PopulationOptimizationResult(full_pop, full_mig, telemetry)
 
 
 def solve_population_tensor_from_sidra_strata(
@@ -315,15 +464,10 @@ def solve_population_tensor_from_sidra_strata(
         r_count=shape[4],
         race_bridge_prior=race_bridge_prior,
     )
-    race_composition_prior = _census_race_composition_prior(
-        records_df=records_df,
-        locality_index=locality_index,
-        period_index=period_index,
-        age_index=age_index,
-        sex_index=sex_index,
-        race_index=race_index,
-        shape=shape,
-    )
+    # The race composition prior is built PER BLOCK in _solve_locality_blocked (§V.1(b) O(block) RAM).
+    # Its presence -- which sets the race loss weight below -- is exactly the condition on which
+    # _census_race_composition_prior returns non-None: a real (non-TOTAL) race axis with >=2 categories.
+    has_race_prior = any(v != TOTAL for v in race_index) and len(race_index) >= 2
     # Net-migration residual (MSD §2.8.7): SIDRA civil-registry vital totals preferred
     # (IBGE-universe-consistent with the population estimates), DATASUS SIM/SINASC
     # counts as fallback when no civil-registry facts were acquired.
@@ -349,26 +493,8 @@ def solve_population_tensor_from_sidra_strata(
         periods=periods,
         shape=shape,
     )
-    # Per-cell migration bound. MSD §2.8.1 bounds eta by the closure total E_{s,t},
-    # which exists for EVERY year (census + intercensal); the per-cell strata anchor
-    # does not (only census years), so basing the bound on it starves intercensal
-    # years of migration headroom -- exactly where the residual is most needed.
-    # Vectorized per-cell migration bound (§V.1): closure-based where the year's closure total exists
-    # (every year), else 0.25*anchor -- a floor of 1.0. Was an O(n_cells) Python loop whose
-    # ``anchors[idx] or 0.0`` also silently returned NaN once anchors became a numpy NaN-sentinel array
-    # (NaN is truthy) -> non-finite bounds the solver rejects. numpy handles the NaN correctly.
-    strata_per_st = shape[2] * shape[3] * shape[4]
-    closure_np = np.asarray([c if c is not None else np.nan for c in closure], dtype=np.float64)
-    closure_per_cell = np.repeat(closure_np, strata_per_st)
-    use_closure = np.isfinite(closure_per_cell) & (closure_per_cell > 0)
-    migration_bounds = np.where(
-        use_closure,
-        0.25 * closure_per_cell / strata_per_st,
-        np.nan_to_num(anchors, nan=0.0) * 0.25,
-    )
-    np.maximum(migration_bounds, 1.0, out=migration_bounds)
-    del closure_per_cell, use_closure  # O(n_cells) temporaries (~1.2 GB national), consumed into bounds
-
+    # Per-cell migration bound (MSD §2.8.1, closure-based) is built PER BLOCK in _solve_locality_blocked
+    # via _per_cell_migration_bounds -- it was a whole-tensor ~1.08 GB array (§V.1(b) O(block) RAM).
     death_rates: tuple[float | None, ...] | None = None
     warnings: list[str] = [*death_warnings, *birth_warnings, *migration_warnings]
     # FAL-POP-RECON telemetry (§II.5): the undeclared-race mass reallocated into the declared races so
@@ -421,19 +547,10 @@ def solve_population_tensor_from_sidra_strata(
         death_rates_arr[rate_mask] = sim_np[rate_mask] / anchors[rate_mask]
         death_rates = death_rates_arr
 
-    # Layer 1 (MSD §2.8.10): closed-form prior-mean tensor -- census composition interpolated
-    # across years, scaled to each closure total. This is the reconstruction in the data-poor
-    # limit and the solver's warm start otherwise.
-    prior_mean = interpolate_census_composition(
-        records_df=records_df, closure=closure, locality_index=locality_index, period_index=period_index,
-        age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
-    )
+    # Layer 1 (MSD §2.8.10): the closed-form prior-mean tensor (census composition interpolated across
+    # years, scaled to each closure total -- data-poor reconstruction / solver warm start) is built PER
+    # BLOCK in _solve_locality_blocked; records_df is consumed there and freed after the solve.
     census_year_count = len(census_years)
-    # Free the columnar record frame before the solve/emit -- not needed past here (anchors/closure/
-    # priors are built), keeping the working set O(n_cells arrays).
-    import gc as _gc
-    del records_df
-    _gc.collect()
 
     weights = PopulationObjectiveWeights(
         anchor=10.0,
@@ -442,28 +559,13 @@ def solve_population_tensor_from_sidra_strata(
         death=1.0 if mode == "sim_informed_denominator" and sim_deaths is not None else 0.0,
         migration=0.1 if shape[1] >= 3 else 0.0,
         migration_total=0.5 if migration_locality_totals is not None else 0.0,
-        race=0.1 if race_composition_prior is not None else 0.0,
+        race=0.1 if has_race_prior else 0.0,
         age_smooth=0.05 if shape[2] >= 3 else 0.0,
     )
     # Pass numpy arrays (not Python tuples): PopulationTensorProblem stores them as-is (§V.1),
     # so the O(n_cells) inputs never materialize as ~32 B/element Python float tuples. hard_anchor_mask
     # is left None (no hard anchors in the SIDRA build) rather than an all-False n_cells vector.
-    problem = PopulationTensorProblem(
-        shape=shape,
-        anchors=np.asarray(anchors, dtype=np.float64),
-        hard_anchor_mask=None,
-        mode=mode,  # type: ignore[arg-type]
-        births=births,
-        death_rates=death_rates,
-        sim_deaths=sim_deaths,
-        race_composition_prior=race_composition_prior,
-        closure_totals=np.asarray(closure, dtype=np.float64),
-        migration_locality_totals=migration_locality_totals,
-        migration_bounds=np.asarray(migration_bounds, dtype=np.float64),
-        initial_population=np.asarray(prior_mean, dtype=np.float64),
-        weights=weights,
-    )
-    solver = select_population_solver(mode=mode, solver_id=solver_id, n_cells=problem.n_cells)
+    solver = select_population_solver(mode=mode, solver_id=solver_id, n_cells=n_cells)
     # Layer 2: refine the prior mean ONLY when a flow term carries data (multiple censuses to
     # cohort-age between, a SIM death prior, births, or an observed net-migration residual).
     # Absent all of them the (a,x,r) structure is underdetermined and its optimum IS the prior
@@ -474,43 +576,27 @@ def solve_population_tensor_from_sidra_strata(
         or weights.birth > 0.0
         or weights.migration_total > 0.0
     )
+    # §V.1(b): build AND solve in locality-blocks so PEAK memory is O(block), not O(national). The
+    # dominant O(n_cells) priors (prior_mean / race composition / migration bounds) are constructed per
+    # block and freed -- never coexisting whole -- which was the measured national RAM cliff. Exact for
+    # the locality-separable SIDRA objective (byte-identical to the whole-tensor build; see
+    # _solve_locality_blocked). Solver metadata (``solver``) is still selected on the FULL cell count.
+    optimized = _solve_locality_blocked(
+        localities=localities, records_df=records_df, closure=closure, anchors=anchors,
+        sim_deaths=sim_deaths, death_rates=death_rates, births=births,
+        migration_locality_totals=migration_locality_totals, period_index=period_index,
+        age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
+        mode=mode, weights=weights, informative=informative,
+        max_iterations=max_iterations, tolerance=tolerance,
+    )
+    import gc as _gc
+    del records_df  # consumed per-block above; free before the emit
+    _gc.collect()
     if informative:
-        # §V.1(b): solve in locality-blocks so national peak memory is O(block), not O(national).
-        # Exact for the SIDRA denominator (locality-separable); each block takes the fast dense path.
-        optimized = solve_population_tensor_blocked(
-            problem, solver_id=solver.solver_id, max_iterations=max_iterations, tolerance=tolerance,
-        )
         if not optimized.telemetry.converged:
             warnings.append("population_tensor_solver_nonconvergence")
             reconstruction_uncertainty = max(reconstruction_uncertainty, 0.1)
     else:
-        from pegasus.denominators.reconstruction.projected_gradient import (
-            PopulationOptimizationResult,
-            _fast_projection_supported,
-            _np_project_population,
-            _project_population,
-        )
-        # §V.1: the data-poor Layer-1 optimum is just the closure-simplex projection of the
-        # prior mean. Do it vectorized on the numpy array — never `list(prior_mean)` (a ~4GB
-        # Python-object list at national scale) fed to the per-cell pure-Python projector
-        # (minutes). Byte-identical (both Duchi simplex); the Python path is the fallback for
-        # the rare hard-anchor/migration-equality case the fast path doesn't cover.
-        prior_np = np.asarray(prior_mean, dtype=np.float64)
-        projected = (
-            _np_project_population(problem, prior_np)
-            if _fast_projection_supported(problem)
-            else np.asarray(_project_population(problem, prior_np.tolist()), dtype=np.float64)
-        )
-        optimized = PopulationOptimizationResult(
-            population=projected,
-            migration=np.zeros(n_cells, dtype=np.float64),
-            telemetry=PopulationSolverTelemetry(
-                converged=True, iterations=0,
-                initial_objective=0.0, final_objective=0.0,
-                projected_gradient_norm=0.0, relative_objective_change=0.0, step_size=0.0,
-                objective_terms={},
-            ),
-        )
         warnings.append("population_reconstruction_closed_form_no_informative_flows")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

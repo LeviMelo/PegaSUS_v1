@@ -99,9 +99,12 @@ shrunk cell rates: a standard hierarchical Poisson model).
 
 ### 1.6 Redesign — phased
 
-- **W-RACE-0 (reframe + honesty, days):** relabel the current fixed-`C` output as what it is — an
-  *ecological plug-in under a fixed prior `C`* (the degenerate, no-refinement case of the model above),
-  and mark its rates *descriptive* where `C` is uncalibrated. No math change; stops overclaiming.
+- **W-RACE-0 (reframe + honesty) — VERIFIED largely-done.** The guard already exists: `compile.py`
+  detects a fixture/uncalibrated prior (`epistemic_status`), **blocks it from a dashboard-safe `full`
+  run**, and stamps `race_bridge_prior_uncalibrated_assessment_only`; `source_reality_guard` whitelists
+  that as legitimate epistemic metadata (not fake source data). The §1.8 validation **confirms this
+  guard is essential** (uncalibrated-`C` rates erase signals) — so it is a justified safe default, not a
+  lazy one. No new code needed; the substantive race work is W-RACE-1/2.
 - **W-RACE-1 (code-only, ~1 wk):** propagate the bridge's already-computed uncertainty into the rate +
   LDO measurement-error term (currently dropped); finish region-conditioned `C_r` selection; replace
   `local-π` with a census-anchored shrinkage prior. Makes the pipeline *ready* for an inferred `C`.

@@ -6,6 +6,7 @@ motion from the former monolithic executor module.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -65,8 +66,20 @@ def _execute_non_rn(
             try:
                 amc_result = contract_to_amc(out, crosswalk_path=str(crosswalk_path), value_column=VALUE_COLUMN, municipality_column="municipality_cod6")
                 out = amc_result.frame.rename({"amc_id": "municipality_cod6"})
-            except Exception:
-                pass # Fallback to native if crosswalk fails
+            except Exception as exc:
+                # AMC harmonization was REQUESTED but failed — never silently emit native geography as
+                # if it were AMC-contracted (report faithfully / never silently degrade). Surface it.
+                warnings.warn(
+                    f"AMC harmonization requested but contraction FAILED for field {field.id!r} "
+                    f"({type(exc).__name__}: {exc}); emitting NATIVE geography for this field.",
+                    RuntimeWarning, stacklevel=2,
+                )
+        else:
+            warnings.warn(
+                f"AMC harmonization requested but the crosswalk is missing at {crosswalk_path}; "
+                f"emitting NATIVE geography for field {field.id!r}.",
+                RuntimeWarning, stacklevel=2,
+            )
 
     return _write(output_dir / f"{field.id}.parquet", out)
 

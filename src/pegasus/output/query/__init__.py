@@ -15,6 +15,8 @@ from pegasus.output.query.denominators import (
     load_denominator_registry,
     resolve_denominator,
 )
+from pegasus.output.query.engine import MaterializedDataset, QueryError, materialize_query
+from pegasus.output.query.export import write_dataset
 from pegasus.output.query.spec import QuerySpec
 
 __all__ = [
@@ -24,4 +26,8 @@ __all__ = [
     "DenominatorRegistryError",
     "load_denominator_registry",
     "resolve_denominator",
+    "MaterializedDataset",
+    "QueryError",
+    "materialize_query",
+    "write_dataset",
 ]

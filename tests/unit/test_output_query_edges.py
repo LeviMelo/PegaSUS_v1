@@ -1,0 +1,73 @@
+"""P3b — edge query + export (FEAT-P3 vertical slice).
+
+Query the LDO's certified hypotheses from a bundle (with row filters), export the frame + a
+provenance sidecar. The typed LinkRecord fields ARE the edge provenance (pass-through).
+"""
+
+from __future__ import annotations
+
+import json
+
+import polars as pl
+import pytest
+
+from pegasus.ldo.records import LINK_RECORD_COLUMNS
+from pegasus.output.query import QuerySpec, QueryError, materialize_query, write_dataset
+
+
+def _write_fixture_bundle(bundle_dir) -> None:
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    base = {c: None for c in LINK_RECORD_COLUMNS}
+    rows = [
+        {**base, "source_var": "A", "target_var": "B", "edge_type": "contemporaneous",
+         "weight": 0.5, "certification_status": "selected", "uncertainty": 0.05, "stability": 0.9,
+         "code_system": "CID-10", "fdr_qvalue": 0.001},
+        {**base, "source_var": "C", "target_var": "D", "edge_type": "lagged_directed",
+         "weight": 0.3, "certification_status": "descriptive", "uncertainty": 0.10, "stability": 0.4,
+         "code_system": "CID-10", "fdr_qvalue": 0.30},
+    ]
+    pl.DataFrame(rows).write_parquet(bundle_dir / "Hypotheses.parquet")
+
+
+def test_edge_query_filters_and_carries_provenance(tmp_path) -> None:
+    bundle = tmp_path / "bundle"
+    _write_fixture_bundle(bundle)
+    spec = QuerySpec(quantity="mortality_all_cause", kind="edge",
+                     filters={"certification_status": "selected"}, fmt="csv")
+    ds = materialize_query(bundle, spec)
+    assert ds.kind == "edge"
+    assert ds.frame.height == 1 and ds.frame["source_var"][0] == "A"
+    # the typed provenance fields ride on the row (pass-through)
+    assert ds.frame["uncertainty"][0] == 0.05 and ds.frame["fdr_qvalue"][0] == 0.001
+    assert ds.provenance["n_rows"] == 1 and ds.provenance["query"]["quantity"] == "mortality_all_cause"
+    assert str(ds.provenance["run"]["bundle_dir"]).endswith("bundle")
+
+
+def test_edge_export_writes_frame_and_provenance_sidecar(tmp_path) -> None:
+    bundle = tmp_path / "bundle"
+    _write_fixture_bundle(bundle)
+    ds = materialize_query(bundle, QuerySpec(quantity="incidence_c25", kind="edge", fmt="csv"))
+    paths = write_dataset(ds, tmp_path / "out", name="edges")
+    assert paths["data"].exists() and paths["data"].suffix == ".csv"
+    assert paths["provenance"].exists()
+    prov = json.loads(paths["provenance"].read_text(encoding="utf-8"))
+    assert prov["kind"] == "edge" and prov["query"]["quantity"] == "incidence_c25"
+    # both edges present (no filter), re-readable
+    assert pl.read_csv(paths["data"]).height == 2
+
+
+def test_unknown_filter_column_refuses(tmp_path) -> None:
+    bundle = tmp_path / "bundle"
+    _write_fixture_bundle(bundle)
+    with pytest.raises(QueryError, match="filter column"):
+        materialize_query(bundle, QuerySpec(quantity="mortality_all_cause", kind="edge",
+                                            filters={"not_a_column": 1}))
+
+
+def test_rate_kind_resolves_denominator_but_defers_math(tmp_path) -> None:
+    # P3c/P3d land the rate math; the FEAT-P4 denominator resolution is already live, so the
+    # refusal proves the substrate works and names the resolved denominator.
+    bundle = tmp_path / "bundle"
+    _write_fixture_bundle(bundle)
+    with pytest.raises(QueryError, match="resident_population"):
+        materialize_query(bundle, QuerySpec(quantity="mortality_all_cause", kind="rate"))

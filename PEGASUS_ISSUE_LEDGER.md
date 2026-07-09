@@ -143,7 +143,7 @@ the verified bottleneck was a Python `tuple(float(...))` round-trip, since fixed
 | DIS-04 | L_D prior in LDO precision | DONE `f774e28` (quadratic) + adaptive-ℓ1 |
 | DIS-05 | shared-code overlap accounting (`mechanical_overlap`) | LIKELY-DONE (enforcement gate unverified) |
 | DIS-06 | semantic-expansion variable-grammar wired into live compile | **DEFERRED-by-design** — verified: `variable_grammar.py` is built+tested but intentionally NOT wired (its docstring warns against a *second* live generator; the EFG σ_C-restriction path is the canonical one). Wiring it as the sole generator is a future refactor needing a V_fields-equivalence pinning test, not a bug. |
-| DIS-07 | build-time label embeddings (Qwen3-0.6B cached asset) | OPEN (large feature; low priority) |
+| DIS-07 | build-time label embeddings (Qwen3-0.6B cached asset) | **DEFERRED (inconclusive)** — user: highly experimental, not worth pursuing while core architecture + central/impactful features + open issues/reviews remain; the structural `L_D` (DIS-04) already covers the core smoothness-prior need |
 | ZIKA-ACCPT | autonomous Zika→microcephaly acceptance test | **DEFERRED** — no test exists; risk HIGH: cross-chapter Q02↔A92 DiseaseGraph edge is 0.0 (weak/absent coupling → discoverability uncertain, possibly aspirational), and the full-stack test needs the off-limits flagship inference. Revisit with the study. |
 
 ## §SIDRA / context

@@ -71,3 +71,38 @@ def test_rate_kind_resolves_denominator_but_defers_math(tmp_path) -> None:
     _write_fixture_bundle(bundle)
     with pytest.raises(QueryError, match="resident_population"):
         materialize_query(bundle, QuerySpec(quantity="mortality_all_cause", kind="rate"))
+
+
+def _write_variable_dictionary(bundle_dir) -> None:
+    rows = [
+        {"field_id": "A", "name": "Pancreatic cancer deaths", "carrier": "Deaths", "unit": "counts",
+         "diagnostic_role": "underlying_cause", "icd_group_id": "C25", "icd_group_kind": "category"},
+        {"field_id": "B", "name": "Diabetes admissions", "carrier": "Admissions", "unit": "counts",
+         "diagnostic_role": "comorbidity", "icd_group_id": "E11", "icd_group_kind": "category"},
+        {"field_id": "C", "name": "Smoking context", "carrier": "Context", "unit": "rate",
+         "diagnostic_role": None, "icd_group_id": None, "icd_group_kind": None},
+        {"field_id": "D", "name": "Obesity context", "carrier": "Context", "unit": "rate",
+         "diagnostic_role": None, "icd_group_id": None, "icd_group_kind": None},
+    ]
+    pl.DataFrame(rows).write_parquet(bundle_dir / "VariableDictionary.parquet")
+
+
+def test_edge_enrichment_makes_hypotheses_self_describing(tmp_path) -> None:
+    bundle = tmp_path / "bundle"
+    _write_fixture_bundle(bundle)
+    _write_variable_dictionary(bundle)
+    ds = materialize_query(bundle, QuerySpec(quantity="incidence_c25", kind="edge"))  # enrich default True
+    assert ds.provenance["enriched"] is True
+    assert {"source_name", "target_name", "source_icd_group_id"}.issubset(ds.frame.columns)
+    row = ds.frame.filter(pl.col("source_var") == "A").row(0, named=True)
+    assert row["source_name"] == "Pancreatic cancer deaths" and row["source_icd_group_id"] == "C25"
+    assert row["target_name"] == "Diabetes admissions"
+
+
+def test_enrichment_absent_dictionary_warns_but_still_serves_edges(tmp_path) -> None:
+    bundle = tmp_path / "bundle"
+    _write_fixture_bundle(bundle)  # no VariableDictionary
+    ds = materialize_query(bundle, QuerySpec(quantity="incidence_c25", kind="edge"))
+    assert "variable_metadata_unavailable_edges_unenriched" in ds.warnings
+    assert ds.provenance["enriched"] is False
+    assert ds.frame.height == 2  # edges still returned, just unenriched

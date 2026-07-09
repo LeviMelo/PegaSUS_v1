@@ -18,13 +18,16 @@ class QuerySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     quantity: str
-    kind: str = "rate"
+    kind: str = "edge"
     denominator: str | None = None
     strata: list[str] = Field(default_factory=list)
     standardize: str | None = None
     per: int = 100_000
     fmt: str = "parquet"
     filters: dict = Field(default_factory=dict)
+    # Join the EFG VariableDictionary metadata (label/carrier/unit/ICD-group/topology) onto each
+    # edge's source+target so the exported hypotheses are self-describing (the user-facing bridge).
+    enrich: bool = True
 
     def requires_denominator(self) -> bool:
         return self.kind in DENOMINATOR_KINDS

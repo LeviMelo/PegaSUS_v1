@@ -12,6 +12,19 @@ Status: **design (2026-07-08)** · closes into MSD-III §VIII (output contract) 
 
 They are one subsystem: you cannot export a *rate* without resolving its *denominator*.
 
+> **Revision (2026-07-08, after user steer) — SCOPE PRUNED.** The query layer does **not** recompute
+> rates or standardized rates. Recomputing a rate here would be a *second* rate definition that can
+> drift from the EFG's canonical RN-operator rate (the two-generators anti-pattern) and would drag
+> denominator-CI math (Byar/Fay-Feuer/fragility-widening) into a user-facing reader for little
+> epidemiological gain. Refocused: **(a)** a `rate` is a **read of the EFG's already-materialized RN
+> rate field** — never a computation; **(b)** the layer's real value is a **self-describing hypotheses
+> export** — the edge table enriched with each variable's label/carrier/unit/ICD-context from the EFG
+> `VariableDictionary` (the richer bridge from PegaSUS's orchestration to the user's own analysis;
+> **built + tested**); **(c)** multi-denominator (FEAT-P4) is a compile-time *declaration* of which
+> rate fields to materialize + a query-time *selection* among them, never a query-time recompute.
+> Age-standardization stays the existing `age_standardization` engine (compile-time or user-side
+> utility). This keeps the fragile LDO/denominator math untouched by the export path. §2/§8 updated.
+
 ## 1. Why this is not already covered
 
 The bundle (`OUTPUT_BUNDLE_FILES`, 17 keys) materializes the **raw** typed outputs: counts as EFG
@@ -127,21 +140,22 @@ run and lets it operate on any already-materialized bundle (including a versione
 
 ## 8. Phased implementation
 
-1. **P3a — denominators registry + resolver** (`denominators.yaml`, `denominators.py`, validator
-   entry). Seed `mortality_all_cause`, `incidence_c25` (resident_population default), a fertility
-   quantity (women_15_49). Test: default resolution, override, unresolvable→error, multi-default→
-   validator fail.
-2. **P3b — query engine for `raw_field`/`count`/`edge`** (no denominator): read + filter + provenance.
-   Test: an edge query round-trips `Hypotheses` with uncertainty; a count query carries Poisson CI.
-3. **P3c — `rate`** (count ÷ resolved denominator) with Byar CI + denominator-fragility widening,
-   reusing the RN join + ecological guard. Test: two cells, equal rate different exposure → different
-   CI width; missing denom → typed error.
-4. **P3d — `standardized_rate`** wiring `standardize_grouped` (Fay-Feuer). Test: ASR + CI match the
-   engine on a fixture; reference-population mismatch → error.
-5. **P3e — `export.py` + CLI + workflow entrypoint**; provenance sidecar. Test: parquet+csv+json
-   emitted; provenance non-empty + names the resolved denominator.
+1. **P3a — denominators registry + resolver** — **DONE** (`denominators.yaml` + `denominators.py`,
+   one-default rule, admissible-override-or-refuse, registered in the validator tree; 8 tests).
+2. **P3b — edge query + export vertical slice** — **DONE** (`materialize_query` serves `edge` with
+   filters + a run-identity provenance manifest; `write_dataset` → parquet/csv + `<name>.provenance.json`).
+3. **P3c — edge enrichment** — **DONE** (join `VariableDictionary` metadata — name/carrier/unit/
+   ICD-group/topology — onto each edge's source+target → self-describing hypotheses; graceful
+   degradation + warning when the dictionary is absent; provenance records `enriched`).
+4. **P3d — `materialized_field` read** — expose any EFG-computed field by id (counts, the canonical
+   RN **rate** fields, population denominators) as a pure read + its Q-state provenance; no recompute.
+   Test: a materialized rate field round-trips with its Q-state; unknown field → typed error.
+5. **P3e — CLI + workflow entrypoint** (`pegasus export` / `workflows/report/export_dataset.py`): run a
+   `QuerySpec` against a bundle → dataset + sidecar. A `rate` request = a `materialized_field` read of
+   the pre-computed RN rate field selected by the FEAT-P4 denominator (no query-time math).
 
 Each phase lands with its focused proof-of-capability test; the full suite gates the batch.
+**P3a–c landed** (14 tests); P3d/P3e remain (pure reads + CLI — no LDO/denominator math).
 
 ## 9. Acceptance (the §IX-style battery for this layer)
 

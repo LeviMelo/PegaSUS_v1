@@ -59,23 +59,63 @@ def _apply_filters(frame: pl.DataFrame, filters: dict[str, Any]) -> pl.DataFrame
     return frame
 
 
+# Per-variable metadata joined onto each edge endpoint (the self-describing-hypotheses bridge).
+# Epidemiologically-relevant, user-facing columns only — never compute-lifecycle internals.
+_ENRICH_COLS = ("name", "carrier", "unit", "diagnostic_role", "icd_group_id", "icd_group_kind")
+
+
+def _variable_metadata(bundle_dir: str | Path) -> pl.DataFrame | None:
+    """The EFG per-variable dictionary keyed by ``field_id`` (== the LDO variable id). Prefer
+    ``VariableDictionary`` (richest), fall back to ``V_fields``. None if neither is present."""
+    for key in ("VariableDictionary", "V_fields"):
+        path = _bundle_file(bundle_dir, key)
+        if path.exists():
+            frame = pl.read_parquet(path)
+            if "field_id" in frame.columns:
+                keep = ["field_id"] + [c for c in _ENRICH_COLS if c in frame.columns]
+                return frame.select(keep).unique(subset=["field_id"])
+    return None
+
+
+def _enrich_edges(frame: pl.DataFrame, bundle_dir: str | Path) -> tuple[pl.DataFrame, list[str]]:
+    """Join variable metadata onto ``source_var`` and ``target_var`` so each edge is self-describing.
+    Pure export-layer join over the EFG dictionary — the LDO estimator stays decoupled from labels."""
+    meta = _variable_metadata(bundle_dir)
+    if meta is None:
+        return frame, ["variable_metadata_unavailable_edges_unenriched"]
+    for endpoint in ("source", "target"):
+        var_col = f"{endpoint}_var"
+        if var_col not in frame.columns:
+            continue
+        rename = {"field_id": var_col}
+        rename.update({c: f"{endpoint}_{c}" for c in meta.columns if c != "field_id"})
+        frame = frame.join(meta.rename(rename), on=var_col, how="left")
+    return frame, []
+
+
 def _edge_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:
     path = _bundle_file(bundle_dir, "Hypotheses")
     if not path.exists():
         raise QueryError(f"bundle has no Hypotheses.parquet at {path}")
     frame = _apply_filters(pl.read_parquet(path), spec.filters)
+    warnings: list[str] = []
+    if spec.enrich:
+        frame, warnings = _enrich_edges(frame, bundle_dir)
     provenance = {
         "kind": "edge",
         "quantity": spec.quantity,
         "query": spec.model_dump(mode="json"),
         "run": _run_identity(bundle_dir),
         "n_rows": frame.height,
+        "enriched": bool(spec.enrich and not warnings),
         "note": (
             "Edge provenance is carried per row: uncertainty, stability, fdr_qvalue, code_system, "
-            "projection_status, overlap_jaccard, certification_status, causal_rung/assumptions, warnings."
+            "projection_status, overlap_jaccard, certification_status, causal_rung/assumptions, warnings. "
+            "With enrich=True, source_/target_ variable metadata (name/carrier/unit/ICD-group/topology) "
+            "is joined from the EFG VariableDictionary so the table is self-describing."
         ),
     }
-    return MaterializedDataset(frame=frame, provenance=provenance, kind="edge")
+    return MaterializedDataset(frame=frame, provenance=provenance, kind="edge", warnings=tuple(warnings))
 
 
 def materialize_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:

@@ -64,7 +64,7 @@ resolved. The remainder is best sequenced WITH the study greenlight so it is bui
 
 | Rank | ID | Item | Module | Status | Notes |
 |---|---|---|---|---|---|
-| 1 | FEAT-P3 + FEAT-P4 | **Output Query Layer** — export/materialization + multi-denominator | output/denominators | **DESIGN DONE → implementing** | full architecture in [`PEGASUS_OUTPUT_QUERY_LAYER.md`](PEGASUS_OUTPUT_QUERY_LAYER.md); phased P3a–e; reuses the RN rate-join + the `age_standardization` engine (both already built) |
+| 1 | FEAT-P3 + FEAT-P4 | **Output Query Layer** — export/materialization + multi-denominator | output/denominators | **WIP (P3a landed)** | design [`PEGASUS_OUTPUT_QUERY_LAYER.md`](PEGASUS_OUTPUT_QUERY_LAYER.md); **P3a done** (denominators registry + query-time resolver, 8 tests, 514 suite green); P3b (raw_field/count/edge reads) → P3c (rate + Byar CI) → P3d (age-std wiring) → P3e (export+CLI) next; reuses the built RN rate-join + `age_standardization` |
 | 2 | SIDRA-CTX-01 | Context (ST-DFM) routed to the EFG | sidra/efg | **DEFENSIBLE/DONE** | verified WIRED (`sidra_context._run_stdfm_for_context` → `field.support["stdfm"]` → EFG); `skipped` is intentional profile/regime gating, not an orphan |
 | 3 | FEAT-P4 | Multi-denominator declaration (folded into #1) | denominators | **DESIGN DONE → implementing** | `denominators.yaml` registry + query-time resolver; see the Output Query Layer spec |
 | 4 | DIS-06 + ZIKA-ACCPT | Disease variable-grammar + Zika acceptance | disease/efg | **DEFERRED** | DIS-06 intentionally unwired (σ_C is the canonical generator; grammar docstring warns vs a 2nd); ZIKA aspirational (Q02↔A92 graph edge 0.0, needs off-limits flagship inference) |

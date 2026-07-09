@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+import os
+
+# Return freed pages to the OS eagerly (§VIII). polars' mimalloc allocator otherwise retains
+# transiently-allocated buffers as a high-water mark -- measured to inflate the national population
+# build's peak by ~3-4 GB (e.g. the 2000-census disaggregation transient stayed resident at 8.4 GB
+# instead of dropping to 4.9 GB after it returned). setdefault so an explicit env still wins. Must be
+# set before the first polars import (below, transitively), which is why it lives at module top.
+os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
+
 import importlib.util
 import shutil
 import sys

@@ -50,13 +50,16 @@ def _run_identity(bundle_dir: str | Path) -> dict[str, Any]:
     return out
 
 
-def _apply_filters(frame: pl.DataFrame, filters: dict[str, Any]) -> pl.DataFrame:
+def _apply_filters_lazy(lf: pl.LazyFrame, filters: dict[str, Any]) -> pl.LazyFrame:
+    """Apply is_in filters to a LazyFrame with predicate pushdown (national-scale safe — the parquet
+    is never fully loaded to filter). A filter on an absent column is a typed error, never a no-op."""
+    available = set(lf.collect_schema().names())
     for col, val in (filters or {}).items():
-        if col not in frame.columns:
-            raise QueryError(f"filter column {col!r} not in dataset columns {frame.columns}")
+        if col not in available:
+            raise QueryError(f"filter column {col!r} not in dataset columns {sorted(available)}")
         values = list(val) if isinstance(val, (list, tuple, set)) else [val]
-        frame = frame.filter(pl.col(col).is_in(values))
-    return frame
+        lf = lf.filter(pl.col(col).is_in(values))
+    return lf
 
 
 # Per-variable metadata joined onto each edge endpoint (the self-describing-hypotheses bridge).
@@ -97,7 +100,9 @@ def _edge_query(bundle_dir: str | Path, spec: QuerySpec) -> MaterializedDataset:
     path = _bundle_file(bundle_dir, "Hypotheses")
     if not path.exists():
         raise QueryError(f"bundle has no Hypotheses.parquet at {path}")
-    frame = _apply_filters(pl.read_parquet(path), spec.filters)
+    # Lazy scan + predicate pushdown: a national Hypotheses (many edges) is filtered at the parquet
+    # layer, not loaded whole into RAM (the eager read was a national-scale RAM cliff).
+    frame = _apply_filters_lazy(pl.scan_parquet(path), spec.filters).collect()
     warnings: list[str] = []
     if spec.enrich:
         frame, warnings = _enrich_edges(frame, bundle_dir)

@@ -14,7 +14,7 @@ import numpy as np
 import polars as pl
 
 from pegasus.measurement.race import RaceBridgePrior, bridge_admin_race_group_counts
-from pegasus.registries.demographic_axis import TOTAL, age_group_for_years
+from pegasus.registries.demographic_axis import TOTAL, UNKNOWN
 
 from pegasus.denominators.population.build.indexing import *  # noqa: F401,F403 (intra-package base layer)
 from pegasus.denominators.population.build.indexing import (
@@ -55,10 +55,34 @@ def _stratify_sex_column(frame: pl.DataFrame, *, source_system: str, sex_column:
 
 def _stratify_age_column(frame: pl.DataFrame, *, age_column: str, age_index: dict[str, int]) -> pl.DataFrame:
     if age_column in frame.columns and any(value != TOTAL for value in age_index):
-        return frame.with_columns(
-            pl.col(age_column).map_elements(age_group_for_years, return_dtype=pl.Utf8).alias("__age_group__")
-        ).filter(pl.col("__age_group__").is_in(list(age_index)))
+        # Vectorized age->age_group bucketing (§V.1). Was ``map_elements(age_group_for_years)`` -- a
+        # per-row Python UDF over tens of millions of event rows. Reproduces age_group_for_years
+        # EXACTLY: int() truncates toward zero == cast(Int64, strict=False); a non-castable value or
+        # NaN -> null -> UNKNOWN (matches int() raising); a null age -> TOTAL; >=100 -> age_100_plus.
+        # Byte-identical, validated on the real SIM age_years column.
+        raw = pl.col(age_column)
+        age_int = raw.cast(pl.Int64, strict=False)
+        bucket = (
+            pl.when(raw.is_null()).then(pl.lit(TOTAL))
+            .when(age_int.is_null()).then(pl.lit(UNKNOWN))
+            .when(age_int < 0).then(pl.lit(UNKNOWN))
+            .when(age_int >= 100).then(pl.lit("age_100_plus"))
+            .otherwise(pl.concat_str([pl.lit("age_"), age_int.cast(pl.Utf8)]))
+            .alias("__age_group__")
+        )
+        return frame.with_columns(bucket).filter(pl.col("__age_group__").is_in(list(age_index)))
     return frame.with_columns(pl.lit(TOTAL).alias("__age_group__"))
+
+
+def _scan_select_present(path: Path, wanted: tuple[str, ...]) -> pl.DataFrame:
+    """Read ONLY the needed columns from a large event parquet via lazy projection pushdown, so a
+    national ~62-column x ~30M-row SIM/SINASC file materializes ~6 columns instead of all 62 -- the
+    single biggest population-build RAM spike (§V.1 / §VIII). Selecting a superset of the columns the
+    transforms actually reference is byte-identical to reading the whole frame; absent columns are
+    silently skipped (the downstream candidate-resolution already tolerates their absence)."""
+    lf = pl.scan_parquet(path)
+    present = [c for c in wanted if c in lf.collect_schema().names()]
+    return lf.select(present).collect()
 
 
 def _coalesce_race_columns(
@@ -163,8 +187,19 @@ def _sim_death_priors(
     path = Path(sim_events_path)
     if not path.exists():
         return None, []
+    # Short-circuit BEFORE the read: a real (non-TOTAL) race axis with no RaceBridge prior cannot be
+    # honestly stratified -- _bridge_race_stratified_counts would return (None, warning) after a full
+    # ~30M-row read. Skip the read entirely in that case. SIM always carries mun_residence_cod6 + year,
+    # so _resolve_geo_year_columns can't be the reason for a None here; byte-identical to the old path.
+    if any(value != TOTAL for value in race_index) and race_bridge_prior is None:
+        return None, ["sim_death_race_stratification_unavailable_without_bridge"]
     frame = _resolve_geo_year_columns(
-        pl.read_parquet(path),
+        _scan_select_present(path, (
+            "municipality_cod6", "year",
+            "mun_residence_cod6", "mun_occurrence_cod6", "CODMUNRES", "MUNIC_RES",
+            "death_year", "event_year", "ANO",
+            "sex", "age_years", "race_color_admin", "race_missingness_state",
+        )),
         geo_candidates=("mun_residence_cod6", "mun_occurrence_cod6", "CODMUNRES", "MUNIC_RES"),
         year_candidates=("death_year", "event_year", "ANO"),
     )
@@ -232,8 +267,19 @@ def _sinasc_birth_priors(
     path = Path(sinasc_events_path)
     if not path.exists():
         return None, []
+    # Same pre-read short-circuit as SIM deaths: real race axis + no RaceBridge prior -> no honest
+    # stratification, so skip the full SINASC read (__race_code__ is always synthesized downstream, so
+    # the bridge gate reduces to "no prior"). Byte-identical to reading then returning (None, warning).
+    if any(value != TOTAL for value in race_index) and race_bridge_prior is None:
+        return None, ["sinasc_birth_race_stratification_unavailable_without_bridge"]
     frame = _resolve_geo_year_columns(
-        pl.read_parquet(path),
+        _scan_select_present(path, (
+            "municipality_cod6", "year",
+            "mun_residence_cod6", "CODMUNRES", "MUNIC_RES",
+            "birth_year", "event_year", "DTNASC",
+            "newborn_sex", "newborn_race_admin", "newborn_race_state",
+            "maternal_race_admin", "maternal_race_state",
+        )),
         geo_candidates=("mun_residence_cod6", "CODMUNRES", "MUNIC_RES"),
         year_candidates=("birth_year", "event_year", "DTNASC"),
     )

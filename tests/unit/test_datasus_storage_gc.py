@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import json
 
-from pegasus.datasus.storage_gc import gc_datasus_raw_sidecars, gc_sidra_raw_payloads
+from pegasus.datasus.storage_gc import (
+    gc_datasus_raw_sidecars,
+    gc_sidra_raw_payloads,
+    gc_stale_stage_workspaces,
+)
 
 
 def _make_chunk(data_root: Path, *, hash_id: str, with_processed: bool) -> Path:
@@ -97,3 +103,56 @@ def test_sidra_gc_strips_success_payload_keeps_failure(tmp_path: Path) -> None:
     assert ok_rec["sidecar"]["sha256"] == "abc"  # provenance retained
     bad_rec = json.loads(bad.read_text(encoding="utf-8"))
     assert "payload" in bad_rec             # failure payload kept for debugging
+
+
+def _make_run_with_workspaces(data_root: Path, *, age_seconds: float) -> tuple[Path, Path, Path]:
+    runs = data_root / "runs"
+    bundle = runs / "run_abc"
+    bundle.mkdir(parents=True)
+    (bundle / "Q_tensor.parquet").write_bytes(b"real" * 100)  # canonical output — never a candidate
+    pirs_ws = runs / "run_abc__pirs_stage_workspace"
+    pirs_ws.mkdir(parents=True)
+    (pirs_ws / "Q_tensor.parquet").write_bytes(b"scratch" * 100)
+    efg_ws = runs / "run_abc__efg_stage_workspace"
+    efg_ws.mkdir(parents=True)
+    (efg_ws / "V_fields.parquet").write_bytes(b"scratch" * 100)
+    old = time.time() - age_seconds
+    for ws in (pirs_ws, efg_ws):
+        for p in ws.rglob("*"):
+            os.utime(p, (old, old))
+        os.utime(ws, (old, old))
+    return bundle, pirs_ws, efg_ws
+
+
+def test_workspace_gc_reclaims_scratch_keeps_bundle(tmp_path: Path) -> None:
+    bundle, pirs_ws, efg_ws = _make_run_with_workspaces(tmp_path, age_seconds=10_000)
+
+    stats = gc_stale_stage_workspaces(data_root=tmp_path, dry_run=False, min_age_seconds=3600)
+
+    assert stats.chunks_reclaimed == 2
+    assert not pirs_ws.exists()  # dead PIRS scratch reclaimed
+    assert not efg_ws.exists()   # stale EFG duplicate reclaimed
+    assert bundle.exists() and (bundle / "Q_tensor.parquet").exists()  # canonical bundle untouched
+    assert stats.removed_by_name.get("__pirs_stage_workspace") == 1
+    assert stats.removed_by_name.get("__efg_stage_workspace") == 1
+
+
+def test_workspace_gc_dry_run_touches_nothing(tmp_path: Path) -> None:
+    _, pirs_ws, efg_ws = _make_run_with_workspaces(tmp_path, age_seconds=10_000)
+
+    stats = gc_stale_stage_workspaces(data_root=tmp_path, dry_run=True, min_age_seconds=3600)
+
+    assert stats.chunks_reclaimed == 2
+    assert stats.bytes_reclaimed > 0  # counted, not performed
+    assert pirs_ws.exists() and efg_ws.exists()
+
+
+def test_workspace_gc_skips_recent_workspace(tmp_path: Path) -> None:
+    # A freshly-written workspace (age < min_age) is skipped so an in-flight compile is never raced.
+    _, pirs_ws, efg_ws = _make_run_with_workspaces(tmp_path, age_seconds=5)
+
+    stats = gc_stale_stage_workspaces(data_root=tmp_path, dry_run=False, min_age_seconds=3600)
+
+    assert stats.chunks_reclaimed == 0
+    assert stats.chunks_skipped_no_processed == 2
+    assert pirs_ws.exists() and efg_ws.exists()

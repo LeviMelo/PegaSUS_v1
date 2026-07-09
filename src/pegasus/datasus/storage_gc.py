@@ -15,6 +15,8 @@ no re-fetch is triggered (the cache is keyed on ``processed.parquet`` + ``manife
 from __future__ import annotations
 
 import json
+import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +24,15 @@ from pathlib import Path
 # never in this set.
 _REDUNDANT_SIDECARS = ("raw.rds", "microdatasus_processed.parquet")
 _DEBUG_ANCILLARIES = ("stdout.log", "stderr.log", "heartbeat.json")
+
+# Per-run stage workspaces that accrete as suffixed siblings of a run bundle. Both are regenerable
+# stage scratch, never a canonical bundle:
+#   * ``__pirs_stage_workspace`` — written by the removed PIRS stage; ZERO live writers remain, so
+#     pure dead-path detritus (superseded by the sibling ``run/`` bundle).
+#   * ``__efg_stage_workspace`` — a transient full-duplicate of the tensor payload; the live compile
+#     path already deletes it after a successful flush (workflows/compile.py, T1.4), so any on-disk
+#     copy is a leftover from a pre-T1.4 or interrupted run.
+_STALE_WORKSPACE_SUFFIXES = ("__pirs_stage_workspace", "__efg_stage_workspace")
 
 
 @dataclass
@@ -151,4 +162,79 @@ def gc_sidra_raw_payloads(
     return stats
 
 
-__all__ = ["GCStats", "gc_datasus_raw_sidecars", "gc_sidra_raw_payloads"]
+def _dir_size_and_count(path: Path) -> tuple[int, int]:
+    total = 0
+    n = 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+                n += 1
+        except OSError:
+            continue
+    return total, n
+
+
+def _workspace_age_seconds(path: Path, now: float) -> float:
+    """Age of the newest entry (dir or its top-level children) — so an actively-written workspace
+    reads as young and is skipped."""
+    newest = path.stat().st_mtime
+    try:
+        for child in path.iterdir():
+            try:
+                newest = max(newest, child.stat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return now - newest
+
+
+def gc_stale_stage_workspaces(
+    *, data_root: str | Path = "data", dry_run: bool = True, min_age_seconds: float = 3600.0
+) -> GCStats:
+    """Reclaim orphaned per-run stage workspaces (``*__pirs_stage_workspace`` /
+    ``*__efg_stage_workspace``).
+
+    **Safe by construction**: it matches only the workspace *suffix*, so a canonical ``run/`` or
+    ``runs/<id>/`` bundle is never a candidate. Workspaces whose newest entry is younger than
+    ``min_age_seconds`` are skipped, so a concurrently-running compile is never raced. ``dry_run=True``
+    by default — it reports what it would reclaim without touching disk. Returns a :class:`GCStats`
+    (``chunks_scanned`` = workspaces seen, ``chunks_reclaimed`` = workspaces removed,
+    ``removed_by_name`` keyed by suffix).
+    """
+    data_root = Path(data_root)
+    stats = GCStats()
+    if not data_root.exists():
+        return stats
+    now = time.time()
+
+    for suffix in _STALE_WORKSPACE_SUFFIXES:
+        for path in data_root.rglob(f"*{suffix}"):
+            if not path.is_dir():
+                continue
+            stats.chunks_scanned += 1
+            if _workspace_age_seconds(path, now) < min_age_seconds:
+                stats.chunks_skipped_no_processed += 1
+                stats.skipped_chunks.append(str(path))
+                continue
+            size, n_files = _dir_size_and_count(path)
+            if not dry_run:
+                try:
+                    shutil.rmtree(path)
+                except OSError:
+                    continue
+            stats.files_deleted += n_files
+            stats.bytes_reclaimed += size
+            stats.removed_by_name[suffix] = stats.removed_by_name.get(suffix, 0) + 1
+            stats.chunks_reclaimed += 1
+
+    return stats
+
+
+__all__ = [
+    "GCStats",
+    "gc_datasus_raw_sidecars",
+    "gc_sidra_raw_payloads",
+    "gc_stale_stage_workspaces",
+]

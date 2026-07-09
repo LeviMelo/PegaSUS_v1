@@ -34,7 +34,6 @@ DATA_LAKE_DIRS = [
     "data/manifests/runs",
     "data/intermediate/she",
     "data/intermediate/efg",
-    "data/intermediate/pirs",
     "data/runs",
     "data/diagnostics",
 ]

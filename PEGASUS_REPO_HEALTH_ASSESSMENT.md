@@ -71,6 +71,68 @@ byte-safe perf wins, and the (gated) god-module + REG-07 refactors.
 14. REG-07 registry consolidation (two decode stacks → one) — **deferred** (decode-validation is a
     silent-corruption risk if rushed; keep the deliberate hold).
 
+## Deep-dive redesign synthesis (2026-07-09)
+
+Four improvement-oriented deep-dives (RaceBridge, data-plane, registries, per-module), consolidated
+into four workstreams. (Both perf/registry agents carried a classifier-unavailable flag → verify
+line claims before acting; the structural conclusions are cross-checked.)
+
+### A. RaceBridge — staged measurement-model upgrade (centerpiece)
+- **Wired: YES** — both the embedded population-solver path (SIM-death / SINASC-birth race bridged
+  into the denominator) and the autonomous EFG `Bridge_R` field are live. The wiring fear was unfounded.
+- **Core gap: the confusion matrix `C` is an identity/synthetic placeholder.** The Bayes crosswalk
+  (`W ∝ C·π_local`) + bootstrap are correct, but with identity `C` it quantifies only *sampling*
+  variability — it does NOT correct the real admin↔self-declared reclassification bias. Plus:
+  national-only `C` (`region_scope` infra exists, unpopulated); `local-π` heuristic instead of
+  principled shrinkage; and **the bridge's computed uncertainty (CV/credible bounds) is dropped, not
+  propagated into rates/LDO**.
+- **Workstream:**
+  - **W-RACE-1 (code-now, no new data):** propagate the bridge posterior covariance into the rate +
+    LDO measurement-error term (biggest honest-uncertainty win, currently dropped); complete the
+    region-conditioned prior-selection path; replace `local-π` with a census-anchored shrinkage prior.
+  - **W-RACE-2 (data-acquisition):** a real region-conditioned `C_s` from published Brazilian
+    misclassification studies / PNS-PNAD / record-linkage — the RACE-01-REGION deferral.
+  - **W-RACE-3 (eventual):** full hierarchical latent-class Bayesian model (EM+Laplace → MCMC) if
+    sensitivity warrants + linkage acquired.
+  - **First step:** W-RACE-1 uncertainty propagation.
+
+### B. Data plane — solid, micro-optimize (not a rewrite)
+- The stream redesign held (batched normalizers, 8-way fetch). NOT an LDO-level headache anymore.
+- **Workstream:** parallel normalize (decouple from the hardcoded 2-way cap → 3–4-way, +25–40%
+  wall-clock, byte-safe) + byte-safe quick wins (1s R-poll→backoff; skip redundant warm-cache SHA256;
+  SIDRA metadata content-hash cache). Out-of-core (DuckDB) only at full 2000–2024 scale.
+
+### C. Registries — ~70% to "add data = registry edit"; operationalize transforms
+- Strongly-typed + centralized loader/entry contract; record-level normalize is generic.
+  **Correction:** there is NO `declarative_normalize.py` — the declarative engine is
+  `records.py::normalize_record` + `callables.py::resolve_callable`.
+- **Blocker to registry-only add:** vectorized batch transforms + categorical codebooks + SIDRA
+  extraction policies are still per-system code.
+- **Workstream:** W-REG-1 (10–15 d) operationalize vectorized transforms declaratively (a
+  `vectorized_transform` op-spec in `source_fields.yaml` + an `apply_vectorized_transform` engine;
+  SINASC pilot) → new DATASUS system ≈ 20-min registry edit for the common case. W-REG-2 (~4 wk)
+  declarative categorical codebooks + SIDRA extraction policies. W-REG-3 health-registry typing/de-
+  orphan (Tier-2 above) + REG-07 consolidation (deferred). **Feasibility: ~90% registry-only
+  achievable (~6 wk); 100% impossible (computations are code) — ceiling is "registry declaration +
+  minimalist code extension."**
+
+### D. Per-module improvements — robustness/perf backlog
+- Top safe wins: structured logging for silent exception-fallbacks (EFG `run.py` — honesty gap);
+  mtime cache-invalidation for ICD/concept lru_caches; cache the spatial-graph Laplacian view; bundle
+  first-class consistency checks; multi-reason field-exclusion records; fixed-point no-progress exit.
+- **Rejected:** a silent denominator *fallback* in the query engine — contradicts no-silent-degrade
+  (typed refusal is correct).
+
+### Consolidated priority (highest-leverage first)
+1. **W-RACE-1** — propagate bridge uncertainty downstream (honesty + your #1 concern; code-only).
+2. **Data-plane byte-safe quick wins + parallel normalize** (the first live-test bottleneck).
+3. **Per-module safe robustness fixes** (silent-exception logging, cache invalidation, spatial-view
+   cache, bundle consistency).
+4. **W-REG-1** — operationalize vectorized transforms (the "add data = registry edit" enabler).
+5. **Health-registry typing/de-orphaning (Tier-2)**.
+6. Tier-1 remainder (maternal_child flag) + Output Query Layer P3d/P3e.
+7. Staged/deferred: W-RACE-2/3, W-REG-2/3, god-module decomposition, REG-07.
+
 ## Live-test go / no-go
 
 **GO for reduced-statewide.** Recommended staging: `core_vital` scope, `validate` stage first

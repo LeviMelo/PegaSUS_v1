@@ -34,8 +34,13 @@ source docs, and re-verify any **OPEN?** before building.
 
 ## Repo-health assessment (2026-07-08) → [`PEGASUS_REPO_HEALTH_ASSESSMENT.md`](PEGASUS_REPO_HEALTH_ASSESSMENT.md)
 
-Five-dimension deep review (registries/dead-code/wiring/perf/architecture). **Verdict: healthy +
-coherent; GO for a reduced-statewide live test.** Tiered remediation now driving the cycle:
+Five-dimension deep review + a second wave of four improvement/redesign deep-dives (RaceBridge,
+data-plane, registries, per-module — see the assessment's "Deep-dive redesign synthesis").
+**Verdict: healthy + coherent; GO for a reduced-statewide live test.** New workstreams: **W-RACE-1**
+(propagate bridge uncertainty downstream — code-only; RaceBridge is wired but its `C` is a placeholder
+identity matrix) · data-plane parallel-normalize + byte-safe wins · **W-REG-1** (operationalize
+vectorized transforms → "add data ≈ registry edit") · per-module robustness fixes. Priority list in
+the assessment. Tiered remediation now driving the cycle:
 T1 integrity (maternal_child_linkage truthfulness flag, delete `empirical_compression.py`, delete
 orphaned `pirs/` pkg) · T2 health-registry typing/de-orphan (icd_curated_groups, cnes/sih shadow,
 icd_catalog stub, diagnostic_topology/clinical_events typing) · T3 typed contracts (Q_tensor,

@@ -19,6 +19,7 @@ from pegasus.measurement.race_ecological import (
     contextual_identifiability,
     emission_from_reclassification,
     fit_ecological_race_deconvolution,
+    reclassification_from_emission,
 )
 
 CATS = ["branca", "preta", "amarela", "parda", "indigena"]
@@ -188,3 +189,24 @@ def test_emission_from_reclassification_rejects_non_row_stochastic():
     bad = np.array([[0.8, 0.3], [0.3, 0.7]])  # first row sums to 1.1
     with pytest.raises(EcologicalRaceError):
         emission_from_reclassification(bad, np.array([0.5, 0.5]))
+
+
+def test_reclassification_from_emission_is_the_inverse_bridge():
+    # C (emission P(admin|self)) + census self marginal -> R (reclassification P(self|admin), the
+    # registry direction). Then round-trip back through emission_from_reclassification with the
+    # implied admin marginal must recover C. This is the write-back a calibrated prior uses.
+    rng = np.random.default_rng(1)
+    Kd = Jd = 5
+    C_true = rng.dirichlet(np.ones(Kd), size=Jd).T   # column-stochastic
+    p_self = rng.dirichlet(np.ones(Jd) * 2.0)
+    R = reclassification_from_emission(C_true, p_self)
+    np.testing.assert_allclose(R.sum(axis=1), 1.0, atol=1e-9)     # row-stochastic P(self|admin)
+    p_admin = (C_true * p_self[None, :]).sum(axis=1)              # implied P(admin=k)
+    C_back = emission_from_reclassification(R, p_admin)
+    np.testing.assert_allclose(C_back, C_true, atol=1e-9)         # converters compose to identity
+
+
+def test_reclassification_from_emission_rejects_non_column_stochastic():
+    bad = np.array([[0.9, 0.2], [0.3, 0.7]])  # first column sums to 1.2
+    with pytest.raises(EcologicalRaceError):
+        reclassification_from_emission(bad, np.array([0.5, 0.5]))

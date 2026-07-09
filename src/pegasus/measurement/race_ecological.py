@@ -63,6 +63,7 @@ __all__ = [
     "fit_ecological_race_deconvolution",
     "contextual_identifiability",
     "emission_from_reclassification",
+    "reclassification_from_emission",
 ]
 
 # Below this per-cell RMS composition-share variation (in the least-varying non-degenerate direction)
@@ -140,6 +141,60 @@ def emission_from_reclassification(
     if np.any(empty):
         C[:, empty] = p[:, None]
     return C
+
+
+def reclassification_from_emission(
+    emission: np.ndarray,
+    self_marginal: np.ndarray,
+) -> np.ndarray:
+    """Convert an emission ``P(admin=k | self-declared=j)`` to the reclassification ``P(self-declared=j
+    | admin=k)`` the race-bridge registry stores (rows = admin, sum to 1).
+
+    Exact mirror of :func:`emission_from_reclassification` (swap the admin/self roles); Bayes with the
+    census self-declared marginal ``p_self[j] = P(self-declared=j)``:
+
+        R[k, j] = P(self=j | admin=k)
+                = C[k, j] p_self[j] / Σ_{j'} C[k, j'] p_self[j']
+
+    This is the direction a calibrated ecological confusion estimate must be written back in so the
+    existing local-pi bridge (which consumes the row-stochastic reclassification matrix) uses it
+    unchanged.
+
+    Args:
+        emission: (K, J) column-stochastic ``C[k|j] = P(admin=k | self=j)``.
+        self_marginal: (J,) census ``p_self[j] = P(self=j)``; normalised internally.
+
+    Returns:
+        (K, J) row-stochastic reclassification ``R[k, j] = P(self=j | admin=k)``. An admin category
+        that nothing maps onto (a structurally zero row) falls back to the self marginal so the row is
+        a proper distribution rather than silently zero.
+    """
+    C = np.asarray(emission, dtype=float)
+    q = np.asarray(self_marginal, dtype=float)
+    if C.ndim != 2:
+        raise EcologicalRaceError("emission must be a 2-D (K, J) matrix.")
+    K, J = C.shape
+    if q.shape != (J,):
+        raise EcologicalRaceError(f"self_marginal shape {q.shape} != expected ({J},).")
+    if np.any(C < 0) or not np.all(np.isfinite(C)):
+        raise EcologicalRaceError("emission has negative or non-finite entries.")
+    if np.any(q < 0) or not np.all(np.isfinite(q)):
+        raise EcologicalRaceError("self_marginal has negative or non-finite entries.")
+    col_sums = C.sum(axis=0)
+    if np.max(np.abs(col_sums - 1.0)) > 1e-6:
+        raise EcologicalRaceError("emission must be column-stochastic P(admin|self) (columns sum to 1).")
+    total = q.sum()
+    if total <= 0:
+        raise EcologicalRaceError("self_marginal must have positive total mass.")
+    q = q / total
+
+    joint = C * q[None, :]  # joint[k, j] = P(admin=k, self=j)
+    row = joint.sum(axis=1, keepdims=True)  # P(admin=k)
+    R = np.divide(joint, row, out=np.zeros_like(joint), where=row > 0)
+    empty = (row.ravel() <= 0)
+    if np.any(empty):
+        R[empty, :] = q[None, :]
+    return R
 
 
 @dataclass(frozen=True)

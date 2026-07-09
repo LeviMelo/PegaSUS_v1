@@ -32,6 +32,16 @@ source docs, and re-verify any **OPEN?** before building.
 
 ---
 
+## Repo-health assessment (2026-07-08) → [`PEGASUS_REPO_HEALTH_ASSESSMENT.md`](PEGASUS_REPO_HEALTH_ASSESSMENT.md)
+
+Five-dimension deep review (registries/dead-code/wiring/perf/architecture). **Verdict: healthy +
+coherent; GO for a reduced-statewide live test.** Tiered remediation now driving the cycle:
+T1 integrity (maternal_child_linkage truthfulness flag, delete `empirical_compression.py`, delete
+orphaned `pirs/` pkg) · T2 health-registry typing/de-orphan (icd_curated_groups, cnes/sih shadow,
+icd_catalog stub, diagnostic_topology/clinical_events typing) · T3 typed contracts (Q_tensor,
+domain_summaries handoffs) · T4 byte-safe perf (covariance lag-loop, panel batch-align) · T5 gated
+refactors (god-modules, REG-07). See the assessment for detail.
+
 ## Burn-down status (2026-07-08, autonomous)
 
 Two verification+fix waves (10 agents total) drove the ledger to a terminal state. **The EFG-LDO

@@ -48,6 +48,7 @@ the thing to update when a doc's status changes.
 |---|---|
 | `PEGASUS_COMPUTE_BUILD_OPTIMIZATION_PLAN.md` | MSD-III §V (POP-02 GPU/blocked build). |
 | `PEGASUS_STORAGE_OPTIMIZATION_PLAN.md` | MSD-III §V (STORE-02 lazy views). |
+| `PEGASUS_OUTPUT_QUERY_LAYER.md` | MSD-III §VIII (FEAT-P3 export + FEAT-P4 multi-denominator). |
 
 ## Deleted (git history preserves them; do NOT resurrect as guidance)
 

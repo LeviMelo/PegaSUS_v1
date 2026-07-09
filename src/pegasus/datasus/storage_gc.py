@@ -190,6 +190,72 @@ def _workspace_age_seconds(path: Path, now: float) -> float:
     return now - newest
 
 
+def gc_by_contract(
+    *, repo_root: str | Path = ".", dry_run: bool = True, now: float | None = None
+) -> GCStats:
+    """Reclaim reclaimable data per the persistence contract (:mod:`pegasus.core.data_lifecycle`).
+
+    Honors exactly two autonomous policies — CACHE roots are dropped file-by-file once older than
+    their ``ttl_days``, and EPHEMERAL (DELETE_ALWAYS) roots have their contents removed. Everything
+    else (canonical inputs, versioned assets, durable run outputs, metadata, test fixtures) is
+    NEVER touched here — those are user-gated. ``dry_run=True`` by default. ``now`` is injectable
+    for tests.
+    """
+    from pegasus.core.data_lifecycle import GCPolicy, roots_with_policy
+
+    repo_root = Path(repo_root)
+    stats = GCStats()
+    now = time.time() if now is None else now
+
+    # CACHE: drop files older than the root's TTL.
+    for root in roots_with_policy(GCPolicy.DROP_BY_MTIME):
+        base = repo_root / root.rel
+        if not base.exists() or root.ttl_days is None:
+            continue
+        cutoff = now - root.ttl_days * 86400.0
+        for path in base.rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+                st = path.stat()
+                if st.st_mtime >= cutoff:
+                    continue
+                size = st.st_size
+            except OSError:
+                continue
+            if not dry_run:
+                try:
+                    path.unlink()
+                except OSError:
+                    continue
+            stats.note_removed(f"cache_expired:{root.rel}", size)
+            stats.chunks_reclaimed += 1
+        stats.chunks_scanned += 1
+
+    # EPHEMERAL: remove the contents of always-delete roots (keep the dir + .gitkeep).
+    for root in roots_with_policy(GCPolicy.DELETE_ALWAYS):
+        base = repo_root / root.rel
+        if not base.exists():
+            continue
+        stats.chunks_scanned += 1
+        for child in base.rglob("*"):
+            try:
+                if not child.is_file() or child.name == ".gitkeep":
+                    continue
+                size = child.stat().st_size
+            except OSError:
+                continue
+            if not dry_run:
+                try:
+                    child.unlink()
+                except OSError:
+                    continue
+            stats.note_removed(f"ephemeral:{root.rel}", size)
+            stats.chunks_reclaimed += 1
+
+    return stats
+
+
 def gc_stale_stage_workspaces(
     *, data_root: str | Path = "data", dry_run: bool = True, min_age_seconds: float = 3600.0
 ) -> GCStats:
@@ -237,4 +303,5 @@ __all__ = [
     "gc_datasus_raw_sidecars",
     "gc_sidra_raw_payloads",
     "gc_stale_stage_workspaces",
+    "gc_by_contract",
 ]

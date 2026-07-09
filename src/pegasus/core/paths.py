@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from pegasus.core.config import load_yaml
+from pegasus.core.data_lifecycle import classify
 
+# The per-role persistence law lives in pegasus.core.data_lifecycle (the single source of truth for
+# what each data/ root IS and whether it may be reclaimed). DATA_LAKE_DIRS below is just the durable
+# skeleton ensure_data_lake pre-creates; validate_lake_against_contract() keeps the two from drifting.
 
 DATA_LAKE_DIRS = [
     "data/raw/datasus/SIM-DO",
@@ -32,11 +36,12 @@ DATA_LAKE_DIRS = [
     "data/manifests/datasus",
     "data/manifests/sidra",
     "data/manifests/runs",
-    "data/intermediate/she",
-    "data/intermediate/efg",
     "data/runs",
     "data/diagnostics",
 ]
+# Note: data/intermediate/* is intentionally NOT pre-created — per the lifecycle contract it is an
+# EPHEMERAL role that is never actually used (real per-run stage workspaces are written adjacent to
+# the run_dir, not here).
 
 
 def ensure_data_lake(root: str | Path = ".") -> list[Path]:
@@ -49,6 +54,15 @@ def ensure_data_lake(root: str | Path = ".") -> list[Path]:
         keep.touch(exist_ok=True)
         created.append(path)
     return created
+
+
+def validate_lake_against_contract() -> list[str]:
+    """Ensure every pre-created lake dir falls under a governed lifecycle root (no drift).
+
+    Returns a list of DATA_LAKE_DIRS entries that no :data:`DATA_LIFECYCLE` root governs — empty when
+    the skeleton and the contract agree.
+    """
+    return [rel for rel in DATA_LAKE_DIRS if classify(rel) is None]
 
 
 def configured_paths(root: str | Path = ".") -> dict:

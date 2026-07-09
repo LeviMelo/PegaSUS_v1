@@ -9,6 +9,11 @@ import os
 # set before the first polars import (below, transitively), which is why it lives at module top.
 os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
 
+# Deterministic CuBLAS workspace: torch's global deterministic mode (set by resolve_torch_device →
+# seed_everything) otherwise warns on every CUDA matmul and leaves GEMMs run-to-run nondeterministic.
+# ":4096:8" makes them reproducible at negligible cost. Must precede the first torch import.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import importlib.util
 import shutil
 import sys

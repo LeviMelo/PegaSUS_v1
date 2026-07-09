@@ -200,6 +200,29 @@ def solve_projected_gradient_small(
     if max_iterations <= 0 or tolerance <= 0 or initial_step_size <= 0:
         raise ValueError("Solver controls must be positive.")
     if _fast_projection_supported(problem):
+        # POP-02 GPU: solve on the GPU (torch SPG, float32) when population_solver is CUDA-enabled and the
+        # block is large enough to beat host<->device transfer. Same algorithm; recovery validated to
+        # ~3e-7/cell in f32 (loss/gradient are machine-identical via autograd). Any CUDA error (e.g. VRAM
+        # pressure) falls back to the CPU path -- a device reason never fails a run.
+        from pegasus.denominators.reconstruction.torch_solver import (
+            maybe_population_gpu_plan,
+            solve_population_tensor_torch,
+        )
+
+        _plan = maybe_population_gpu_plan(problem)
+        if _plan is not None:
+            try:
+                return solve_population_tensor_torch(
+                    problem, plan=_plan, max_iterations=max_iterations, tolerance=tolerance
+                )
+            except Exception as _exc:  # noqa: BLE001 -- graceful device fallback, never fail a run
+                import warnings
+
+                warnings.warn(
+                    f"population GPU solve fell back to CPU ({type(_exc).__name__}: {_exc})",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         return _solve_projected_gradient_vectorized(
             problem, max_iterations=max_iterations, tolerance=tolerance, initial_step_size=initial_step_size,
         )

@@ -22,6 +22,15 @@ stale). Outcome triage:
   planted 1.5 rate-ratio the naive crosswalk erases to 0.91, strong-identity-prior re-erases guard,
   two-stratum recovery, identifiability diagnostic. This is the §1.8 planted-signal validation the
   user required *before* implementation, now promoted to the shipped test.
+- **W-RACE-2-wire ecological calibration** — `measurement/race_calibration.py` (commit 9cc53df). The
+  ecological confusion estimate is written back as a calibrated prior in the EXACT schema the existing
+  local-pi bridge consumes (row-stochastic P(self|admin)), so the live path is already wired — adopting
+  one is a registry entry, no restructuring of the census-anchored population tensor. Bayes converters
+  (`emission_from_reclassification` / `reclassification_from_emission`, exact round-trip). Validated on
+  synthetic (recovers planted whitening) AND real AL data: 378k deaths / 102 munis, identifiability
+  0.0015<0.005 → the gate correctly REFUSED (a single state's municipalities are compositionally
+  uniform), empirically proving the calibration must be NATIONAL. Production prior gated on national
+  census self-declared race (SIDRA 9606) materialization (#31) — all 27 UFs of admin deaths present.
 - **STORE-ORG workspace GC** — `datasus/storage_gc.py::gc_stale_stage_workspaces` (commit 0585171).
   Dry-run-default, safe-by-construction; 366 MiB / 6740 files reclaimable on live data/. Removed the
   dead `data/intermediate/pirs` lake entry. (Execution left as a user one-liner — irreversible.)
@@ -38,13 +47,13 @@ stale). Outcome triage:
   irreducibly custom domain logic; the codebook is already registry-centralized. Real lever is REG-07.
 - **Health-registry orphans** (icd_curated_groups etc.): stale claim — actually wired (3 refs).
 
-**STAGED — two real, invasive builds for focused fresh-context execution (not rushed at depth):**
-- **W-RACE-2-wire**: reconcile the registry's row-stochastic reclassification prior P(self|admin) with
-  the estimator's column-stochastic emission P(admin|self), then wire posterior λ_{s,j} into the
-  denominator path (replacing the fixed-C crosswalk). Moves point estimates → validate ground-truth
-  recovery survives before adopting (CLAUDE.md §V).
-- **REG-07**: unify the 3 divergent registry loader contracts (`validators.py:25-72`) → one typed
-  loader. Decode-path rewrite needing byte-parity validation.
+**REMAINING:**
+- **REG-07** (next): unify the 3 divergent registry loader contracts (`validators.py:25-72`) → one
+  typed loader. Decode-path rewrite needing byte-parity validation.
+- **National census-race materialization (#31)**: the one data gate for the production RaceBridge
+  calibration (and full-national runs generally). Admin deaths present for all 27 UFs; SIDRA 9606
+  self-declared race population needs national materialization, then the calibration emits the prior
+  and one registry entry adopts it.
 
 ---
 

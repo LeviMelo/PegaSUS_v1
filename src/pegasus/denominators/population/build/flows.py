@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -18,21 +19,37 @@ def _reconstruct_and_persist_migration_flows(
     out_path: Path,
     contiguity_graph_id: str,
     max_hops: int,
-) -> tuple[str | None, str | None, tuple[dict[str, Any], ...]]:
+) -> tuple[str | None, str | None, tuple[dict[str, Any], ...], str | None]:
     """Reconstruct O→D migration flows + affinity kernel from the tensor's own net
     residual and closure populations (MSD §2.8.7 flow layer). Returns
-    ``(flows_path, affinity_path, per_year_manifests)``; a no-op ``(None, None, ())``
-    when there is no net-migration signal or the contiguity graph is unavailable."""
+    ``(flows_path, affinity_path, per_year_manifests, skip_reason)``.
+
+    ``skip_reason`` is ``None`` on success and on the ONE legitimately-empty case (no
+    net-migration signal at all). It is a non-None reason string — and a ``RuntimeWarning`` is
+    emitted — whenever a reconstruction was *attempted but could not run*, so the absence of the
+    migration-affinity field is never silent (§V "never silently cap/degrade"). The dominant such
+    case is national scale: the queen-contiguity candidate-pair count (~16k at 5570 munis) exceeds
+    ``MAX_DENSE_FLOW_PAIRS`` and the dense reconstruction refuses — downstream then falls back to
+    plain contiguity, and the caller records this reason in the build manifest."""
     if migration_locality_totals is None:
-        return None, None, ()
+        return None, None, (), None  # no net-migration signal → nothing to reconstruct (legitimately quiet)
     from pegasus.geo.migration_affinity import build_migration_affinity_graph
     from pegasus.geo.spatial_graph import structural_cod6_adjacency
     from pegasus.denominators.population.migration import MigrationFlowError, reconstruct_migration_flows
 
+    def _skip(reason: str) -> tuple[None, None, tuple[()], str]:
+        warnings.warn(
+            f"migration flow reconstruction skipped ({reason}); the migration-affinity spatial "
+            f"kernel is absent for this build and downstream falls back to structural contiguity.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None, None, (), reason
+
     try:
         full_adjacency = structural_cod6_adjacency(contiguity_graph_id)
-    except Exception:
-        return None, None, ()
+    except Exception as exc:  # noqa: BLE001 -- surface, don't swallow
+        return _skip(f"contiguity_graph_unavailable:{contiguity_graph_id}:{type(exc).__name__}")
     locality_set = set(localities)
     adjacency = {loc: tuple(n for n in full_adjacency.get(loc, ()) if n in locality_set) for loc in localities}
 
@@ -60,10 +77,13 @@ def _reconstruct_and_persist_migration_flows(
             adjacency=adjacency,
             max_hops=max_hops,
         )
-    except MigrationFlowError:
-        return None, None, ()
+    except MigrationFlowError as exc:
+        # The dominant national case: candidate-pair count > MAX_DENSE_FLOW_PAIRS → the dense
+        # backend refuses. Surface it (§V) instead of returning a silent no-op that reads
+        # downstream as "no migration signal". Re-enabling national flows needs a sparse backend.
+        return _skip(f"dense_reconstruction_refused:{exc}")
     if not reconstructions:
-        return None, None, ()
+        return _skip("no_flows_reconstructed")
 
     flow_rows = [
         {"year": int(rec.year), "origin_cod6": i, "destination_cod6": j, "flow": value}
@@ -89,7 +109,7 @@ def _reconstruct_and_persist_migration_flows(
                 edge_rows.append({"source_cod6": i, "target_cod6": j, "affinity": float(weight_matrix[index[i], index[j]])})
     affinity_path = out_path.with_suffix(".migration_affinity.parquet")
     pl.DataFrame(edge_rows, schema={"source_cod6": pl.Utf8, "target_cod6": pl.Utf8, "affinity": pl.Float64}).write_parquet(affinity_path)
-    return str(flows_path), str(affinity_path), tuple(rec.as_manifest() for rec in reconstructions)
+    return str(flows_path), str(affinity_path), tuple(rec.as_manifest() for rec in reconstructions), None
 
 
 __all__ = [

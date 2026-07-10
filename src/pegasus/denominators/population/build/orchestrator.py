@@ -94,6 +94,9 @@ class PopulationTensorBuild:
     migration_flows_path: str | None = None
     migration_affinity_path: str | None = None
     migration_flow_manifests: tuple[dict[str, Any], ...] = ()
+    # §V: non-None when migration-flow reconstruction was requested but could not run (e.g. the
+    # national dense-pair refusal) — recorded so the absent migration-affinity field is never silent.
+    migration_flow_skip_reason: str | None = None
     # FAL-POP-PROJ/VER: the census-anchored range [earliest, latest] and the max forward/backward
     # projection horizon (years beyond that range). Feeds the versioned-asset manifest (§VI.2) so a
     # consumer knows which years are enumerated/interpolated vs projected, and to what horizon.
@@ -113,6 +116,7 @@ class PopulationTensorBuild:
             "migration_flows_path": self.migration_flows_path,
             "migration_affinity_path": self.migration_affinity_path,
             "migration_flow_reconstructions": list(self.migration_flow_manifests),
+            "migration_flow_skip_reason": self.migration_flow_skip_reason,
             "anchored_range": list(self.anchored_range),
             "max_projection_horizon": self.max_projection_horizon,
             "projected_periods": list(self.projected_periods),
@@ -749,8 +753,14 @@ def solve_population_tensor_from_sidra_strata(
     )
     migration_flows_path = migration_affinity_path = None
     migration_flow_manifests: tuple[dict[str, Any], ...] = ()
+    migration_flow_skip_reason: str | None = None
     if reconstruct_migration:
-        migration_flows_path, migration_affinity_path, migration_flow_manifests = _reconstruct_and_persist_migration_flows(
+        (
+            migration_flows_path,
+            migration_affinity_path,
+            migration_flow_manifests,
+            migration_flow_skip_reason,
+        ) = _reconstruct_and_persist_migration_flows(
             localities=localities,
             periods=periods,
             closure=closure,
@@ -771,6 +781,7 @@ def solve_population_tensor_from_sidra_strata(
         migration_flows_path=migration_flows_path,
         migration_affinity_path=migration_affinity_path,
         migration_flow_manifests=migration_flow_manifests,
+        migration_flow_skip_reason=migration_flow_skip_reason,
         anchored_range=anchored_range,
         max_projection_horizon=max_horizon,
         projected_periods=tuple(projected_periods),

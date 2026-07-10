@@ -218,6 +218,13 @@ def solve_projected_gradient_small(
             except Exception as _exc:  # noqa: BLE001 -- graceful device fallback, never fail a run
                 import warnings
 
+                try:
+                    import torch
+
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()  # release any VRAM the failed attempt reserved
+                except Exception:
+                    pass
                 warnings.warn(
                     f"population GPU solve fell back to CPU ({type(_exc).__name__}: {_exc})",
                     RuntimeWarning,

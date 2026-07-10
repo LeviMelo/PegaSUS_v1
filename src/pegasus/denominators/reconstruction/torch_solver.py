@@ -198,6 +198,8 @@ def solve_population_tensor_torch(
         return float(tot.detach().cpu()), gp.detach(), gm.detach()
 
     obj, grad_p, grad_m = loss_grad(population, migration)
+    if not math.isfinite(obj):
+        raise ValueError("population GPU solve: non-finite initial objective")
     initial_objective = obj
     grad_inf = max(float(grad_p.abs().max()), float(grad_m.abs().max()), 1.0)
     step = min(1.0, 1.0 / grad_inf)
@@ -259,6 +261,8 @@ def solve_population_tensor_torch(
         prev_gp, prev_gm = grad_p, grad_m
         population, migration = trial_p, trial_m
         obj, grad_p, grad_m = loss_grad(population, migration)
+        if not math.isfinite(obj):  # divergence -> raise -> dispatch falls back to the CPU solver
+            raise ValueError("population GPU solve: non-finite objective mid-iteration")
         history.append(obj)
         if len(history) > 10:
             history.pop(0)
@@ -269,10 +273,17 @@ def solve_population_tensor_torch(
             converged = True
             break
 
+    if device.type == "cuda":
+        torch.cuda.synchronize()  # surface any pending async CUDA error HERE as a catchable RuntimeError
+    if not bool(torch.isfinite(population).all()) or not bool(torch.isfinite(migration).all()):
+        raise ValueError("population GPU solve: non-finite result")
     pop_np = population.detach().cpu().numpy().astype(np.float64)
     mig_np = migration.detach().cpu().numpy().astype(np.float64)
+    if device.type == "cuda":
+        del population, migration, grad_p, grad_m, K  # release this block's VRAM before the next block
+        torch.cuda.empty_cache()
     # Per-term telemetry from the final iterate (numpy, one eval) so it matches the reference contract.
-    final = evaluate_population_loss(problem, pop_np.tolist(), mig_np.tolist())
+    final = evaluate_population_loss(problem, pop_np, mig_np)
     telemetry = PopulationSolverTelemetry(
         converged=converged,
         iterations=iterations,

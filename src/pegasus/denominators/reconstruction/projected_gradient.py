@@ -195,6 +195,7 @@ def solve_projected_gradient_small(
     max_iterations: int = 5_000,
     tolerance: float = 1e-5,
     initial_step_size: float = 1.0,
+    prefer_gpu: bool = True,
 ) -> PopulationOptimizationResult:
     validate_population_problem(problem)
     if max_iterations <= 0 or tolerance <= 0 or initial_step_size <= 0:
@@ -204,12 +205,19 @@ def solve_projected_gradient_small(
         # block is large enough to beat host<->device transfer. Same algorithm; recovery validated to
         # ~3e-7/cell in f32 (loss/gradient are machine-identical via autograd). Any CUDA error (e.g. VRAM
         # pressure) falls back to the CPU path -- a device reason never fails a run.
+        #
+        # ``prefer_gpu`` lets the orchestrator route the *national* build to the crash-free CPU path:
+        # the GPU per-block solve is a validated ~16x win at study/state scale (<=~single-UF, tested
+        # crash-free), but the full-national many-block loop (68 blocks) intermittently hard-segfaults
+        # from a native torch+polars(rayon) transition race (POP-02 known gap; the robust fix is
+        # subprocess isolation). Gating the largest build to CPU keeps the flagship national
+        # materialization reliable while preserving the GPU win where it is safe.
         from pegasus.denominators.reconstruction.torch_solver import (
             maybe_population_gpu_plan,
             solve_population_tensor_torch,
         )
 
-        _plan = maybe_population_gpu_plan(problem)
+        _plan = maybe_population_gpu_plan(problem) if prefer_gpu else None
         if _plan is not None:
             try:
                 return solve_population_tensor_torch(

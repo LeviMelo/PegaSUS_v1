@@ -22,6 +22,7 @@ def solve_population_tensor_problem(
     solver_id: str | None = None,
     max_iterations: int = 5_000,
     tolerance: float = 1e-5,
+    prefer_gpu: bool = True,
 ) -> PopulationOptimizationResult:
     solver = select_population_solver(mode=problem.mode, solver_id=solver_id, n_cells=problem.n_cells)
     if problem.n_cells > solver.max_cells:
@@ -31,7 +32,11 @@ def solve_population_tensor_problem(
             localities=problem.shape[0], periods=problem.shape[1],
             strata=problem.shape[2] * problem.shape[3] * problem.shape[4], threshold=solver.max_cells,
         )
-        return solve_projected_gradient_small(problem, max_iterations=max_iterations, tolerance=tolerance)
+        # prefer_gpu=False routes this solve to the CPU path (the national-scale crash guard; see
+        # solve_projected_gradient_small). All other backends are CPU-only, so the flag only bites here.
+        return solve_projected_gradient_small(
+            problem, max_iterations=max_iterations, tolerance=tolerance, prefer_gpu=prefer_gpu
+        )
     if solver.backend.startswith("sparse_block_coordinate"):
         result, _ = solve_sparse_population(
             problem, solver_id=solver.solver_id, max_iterations=max_iterations, tolerance=tolerance,
@@ -61,6 +66,13 @@ def dense_national_abort_check(*, localities: int, periods: int, strata: int = 1
 # bounds a block's working set to ~250 MB — small enough to fit even a loaded box, and well under
 # the 10M-cell dense-solver ceiling so every block takes the fast dense path.
 _BLOCK_TARGET_CELLS = 2_000_000
+
+# POP-02 GPU crash guard: engage the per-block GPU solve (a validated ~16x win) only up to ~single-UF
+# scale (largest state = Minas Gerais, 853 munis ≈ 11 blocks, tested crash-free). The full national
+# build (5570 munis ≈ 68 blocks) intermittently hard-segfaults from a native torch+polars transition
+# race, so it is routed to the crash-free CPU path. Raising this needs the robust fix (subprocess
+# isolation) so a segfault cannot take down the whole run.
+_GPU_MAX_SAFE_BLOCKS = 12
 
 
 def _slice_localities(problem: PopulationTensorProblem, s0: int, s1: int) -> PopulationTensorProblem:
@@ -139,13 +151,16 @@ def solve_population_tensor_blocked(
         (s0, min(s0 + block_localities, s_count))
         for s0 in range(0, s_count, block_localities)
     ]
+    # POP-02 GPU crash guard (see _GPU_MAX_SAFE_BLOCKS): route the largest (national) build to the
+    # crash-free CPU path; keep the GPU per-block solve at tested-safe study/state scale.
+    prefer_gpu = len(block_ranges) <= _GPU_MAX_SAFE_BLOCKS
 
     def _solve_block(bounds: tuple[int, int]) -> PopulationOptimizationResult:
         s0, s1 = bounds
         sub = _slice_localities(problem, s0, s1)
         # solver_id=None → each block re-selects by its own cell count (small → dense fast path).
         return solve_population_tensor_problem(
-            sub, solver_id=None, max_iterations=max_iterations, tolerance=tolerance,
+            sub, solver_id=None, max_iterations=max_iterations, tolerance=tolerance, prefer_gpu=prefer_gpu,
         )
 
     if max_workers is None:

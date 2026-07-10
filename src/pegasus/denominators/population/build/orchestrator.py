@@ -170,7 +170,11 @@ def _solve_locality_blocked(
     whole and are sliced; only the three dominant O(n_cells) priors are built per block and freed.
     Block sizing + per-block solver reselection mirror ``solve_population_tensor_blocked`` so telemetry
     matches too. Returns a ``PopulationOptimizationResult`` with the assembled whole-tensor pop/migration."""
-    from pegasus.denominators.reconstruction.solvers import _BLOCK_TARGET_CELLS, solve_population_tensor_problem
+    from pegasus.denominators.reconstruction.solvers import (
+        _BLOCK_TARGET_CELLS,
+        _GPU_MAX_SAFE_BLOCKS,
+        solve_population_tensor_problem,
+    )
     from pegasus.denominators.reconstruction.projected_gradient import (
         PopulationOptimizationResult,
         _fast_projection_supported,
@@ -184,6 +188,13 @@ def _solve_locality_blocked(
     n_cells = s_count * t_count * inner
     per_locality = max(1, n_cells // max(1, s_count))
     block_localities = max(1, _BLOCK_TARGET_CELLS // per_locality)
+    # POP-02 GPU crash guard: the per-block GPU solve is a validated ~16x win at study/state scale, but
+    # the full-national many-block loop (~68 blocks) intermittently hard-segfaults from a native
+    # torch+polars(rayon) transition race. Route the largest builds to the crash-free CPU path; keep the
+    # GPU where it is tested-safe (<=~single UF, ~11 blocks). `_GPU_MAX_SAFE_BLOCKS` is that boundary;
+    # the robust fix (subprocess isolation / race elimination) would re-enable national GPU.
+    n_blocks_total = (s_count + block_localities - 1) // block_localities
+    prefer_gpu = n_blocks_total <= _GPU_MAX_SAFE_BLOCKS
 
     sim_full = None if sim_deaths is None else np.asarray(sim_deaths, dtype=np.float64)
     births_full = None if births is None else np.asarray(births, dtype=np.float64)
@@ -228,7 +239,10 @@ def _solve_locality_blocked(
             weights=weights,
         )
         if informative:
-            opt = solve_population_tensor_problem(b_problem, solver_id=None, max_iterations=max_iterations, tolerance=tolerance)
+            opt = solve_population_tensor_problem(
+                b_problem, solver_id=None, max_iterations=max_iterations, tolerance=tolerance,
+                prefer_gpu=prefer_gpu,
+            )
             last_telemetry = opt.telemetry
             converged_all = converged_all and opt.telemetry.converged
             iters_max = max(iters_max, opt.telemetry.iterations)

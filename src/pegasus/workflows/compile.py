@@ -349,22 +349,44 @@ def _build_population_tensor_artifact(
     }
     identity = population_tensor_input_identity(input_hashes=input_hashes, mode=solver_mode)
 
+    # Paths as strings so the SAME kwargs serialize for the isolated subprocess runner (national) and
+    # pass straight to the in-process builder (state/dev). The build fn accepts str|Path either way.
+    _pop_kwargs = dict(
+        population_strata_path=str(strata.path),
+        total_anchor_path=str(total_anchor.path),
+        census_2000_strata_path=str(census_2000.path) if census_2000 is not None else None,
+        sim_events_path=None if sim_events is None else str(sim_events.path),
+        sinasc_events_path=None if sinasc_events is None else str(sinasc_events.path),
+        civil_registry_births_path=None if civil_births is None else str(civil_births.path),
+        civil_registry_deaths_path=None if civil_deaths is None else str(civil_deaths.path),
+        race_bridge_prior_path=str(race_bridge_prior_path) if race_bridge_prior_path else None,
+        # Reconstruct the O->D migration flow field + affinity kernel from the net residual
+        # (MSD §2.8.7). Bounded: the pair-count guard now SURFACES a skip (§V) at national scale.
+        reconstruct_migration=True,
+        mode=solver_mode,
+    )
+
     def _build_fn(out_path: Path):
-        return solve_population_tensor_from_sidra_strata(
-            population_strata_path=strata.path,
-            total_anchor_path=total_anchor.path,
-            output_path=out_path,
-            census_2000_strata_path=census_2000.path if census_2000 is not None else None,
-            sim_events_path=None if sim_events is None else sim_events.path,
-            sinasc_events_path=None if sinasc_events is None else sinasc_events.path,
-            civil_registry_births_path=None if civil_births is None else civil_births.path,
-            civil_registry_deaths_path=None if civil_deaths is None else civil_deaths.path,
-            race_bridge_prior_path=race_bridge_prior_path,
-            # Reconstruct the O->D migration flow field + affinity kernel from the net residual
-            # (MSD §2.8.7). Bounded: the pair-count guard skips gracefully for scopes too large.
-            reconstruct_migration=True,
-            mode=solver_mode,
-        )
+        kwargs = {**_pop_kwargs, "output_path": str(out_path)}
+        if execution_scale == "national":
+            # POP-02: isolate the national build in a subprocess — retry PAST the intermittent GPU
+            # segfault (a native torch+polars race), hard-timeout + tree-kill any pathological hang, and
+            # release the build RAM on child exit. The runner re-enables national GPU (allow_national_gpu)
+            # because the crash is recoverable under isolation, and falls back to a guaranteed crash-free
+            # CPU attempt. This is what makes the flagship national materialization reliable.
+            from pegasus.denominators.population.build.isolated import run_population_build_isolated
+
+            outcome = run_population_build_isolated(
+                build_kwargs=kwargs,
+                result_stem=run_dir / "Intermediate" / "population_tensor" / "isolated_build",
+            )
+            if outcome.status != "ok":
+                raise RuntimeError(
+                    f"isolated national population build failed after {len(outcome.attempts)} attempt(s) "
+                    f"({outcome.error}); attempts={list(outcome.attempts)}"
+                )
+            return outcome  # IsolatedBuildOutcome.as_manifest() → build_manifest; tensor is at out_path
+        return solve_population_tensor_from_sidra_strata(**kwargs)
 
     build_scope = NATIONAL_FULL_HISTORY if execution_scale == "national" else f"{execution_scale}_full_history"
     query_window = (

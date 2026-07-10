@@ -39,6 +39,7 @@ data/actual_smokes/**
 data/actual_state_panels/**
 data/sidra/**
 data/normalized/**
+data/denominators/**
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/metadata/.gitkeep

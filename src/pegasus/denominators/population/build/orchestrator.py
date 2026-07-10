@@ -163,6 +163,7 @@ def _solve_locality_blocked(
     informative: bool,
     max_iterations: int,
     tolerance: float,
+    allow_national_gpu: bool = False,
 ):
     """Build AND solve the population tensor one locality-block at a time so PEAK memory is O(block),
     not O(national) — §V.1(b) extended upstream to input construction (the measured national RAM cliff:
@@ -195,10 +196,12 @@ def _solve_locality_blocked(
     # POP-02 GPU crash guard: the per-block GPU solve is a validated ~16x win at study/state scale, but
     # the full-national many-block loop (~68 blocks) intermittently hard-segfaults from a native
     # torch+polars(rayon) transition race. Route the largest builds to the crash-free CPU path; keep the
-    # GPU where it is tested-safe (<=~single UF, ~11 blocks). `_GPU_MAX_SAFE_BLOCKS` is that boundary;
-    # the robust fix (subprocess isolation / race elimination) would re-enable national GPU.
+    # GPU where it is tested-safe (<=~single UF, ~11 blocks). `_GPU_MAX_SAFE_BLOCKS` is that boundary.
+    # `allow_national_gpu` overrides the cap: the isolated subprocess runner (build/isolated.py) sets it
+    # because the intermittent segfault is RECOVERABLE there (the parent retries past it), so national GPU
+    # is safe under isolation. The default in-process path leaves it False (crash-free CPU at national).
     n_blocks_total = (s_count + block_localities - 1) // block_localities
-    prefer_gpu = n_blocks_total <= _GPU_MAX_SAFE_BLOCKS
+    prefer_gpu = allow_national_gpu or (n_blocks_total <= _GPU_MAX_SAFE_BLOCKS)
 
     sim_full = None if sim_deaths is None else np.asarray(sim_deaths, dtype=np.float64)
     births_full = None if births is None else np.asarray(births, dtype=np.float64)
@@ -304,6 +307,7 @@ def solve_population_tensor_from_sidra_strata(
     solver_id: str | None = None,
     max_iterations: int = 12,
     tolerance: float = 1e-5,
+    allow_national_gpu: bool = False,
 ) -> PopulationTensorBuild:
     # Iteration budget note (MSD §2.8.10): with a single census in the window and free
     # migration, the intercensal (a,x,r) structure is underdetermined -- the aging/race/
@@ -606,6 +610,7 @@ def solve_population_tensor_from_sidra_strata(
         age_index=age_index, sex_index=sex_index, race_index=race_index, shape=shape,
         mode=mode, weights=weights, informative=informative,
         max_iterations=max_iterations, tolerance=tolerance,
+        allow_national_gpu=allow_national_gpu,
     )
     import gc as _gc
     del records_df  # consumed per-block above; free before the emit

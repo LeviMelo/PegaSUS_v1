@@ -35,3 +35,13 @@ def test_sim_sinasc_remain_annual_manifests() -> None:
     assert len(sinasc) == 1
     assert sim[0].month_start is None
     assert sinasc[0].month_start is None
+
+
+def test_publication_ceiling_bounds_not_yet_published_years() -> None:
+    # SINASC final data (NOV/DNRES) ends 2022 — 2023/2024 are not published, so a strict run must not
+    # plan them (verified against the DATASUS FTP listing 2026-07-10). SIM-DO/SIH-RD publish through 2024.
+    assert build_datasus_manifests(system="SINASC", uf="AL", years="2022", config={"rscript_path": "Rscript"})
+    assert build_datasus_manifests(system="SINASC", uf="AL", years="2023", config={"rscript_path": "Rscript"}) == []
+    assert build_datasus_manifests(system="SINASC", uf="AL", years="2024", config={"rscript_path": "Rscript"}) == []
+    assert len(build_datasus_manifests(system="SIM-DO", uf="AL", years="2024", config={"rscript_path": "Rscript"})) == 1
+    assert len(build_datasus_manifests(system="SIH-RD", uf="AL", years="2024", config={"rscript_path": "Rscript"})) == 12

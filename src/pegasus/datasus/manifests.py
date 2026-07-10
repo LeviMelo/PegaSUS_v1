@@ -122,6 +122,27 @@ def _availability_windows(path: str = "config/datasus.yaml") -> dict[str, tuple[
 
 
 @lru_cache(maxsize=4)
+def _availability_ceilings(path: str = "config/datasus.yaml") -> dict[str, int]:
+    """Per-system latest published ``last_year`` (publication lag). A system whose final data ends
+    before the requested window's end (e.g. SINASC final = 2022) must not be requested past its
+    ceiling, or a strict full-data run fails on a not-yet-published year. Additive to the first-year
+    floor; systems without a ``last_year`` have no ceiling (assume current)."""
+    try:
+        cfg = load_datasus_config(path)
+    except (OSError, ValueError, TypeError):
+        return {}
+    out: dict[str, int] = {}
+    for system, window in (cfg.get("availability") or {}).items():
+        if not isinstance(window, dict) or "last_year" not in window:
+            continue
+        try:
+            out[normalize_system(system)] = int(window["last_year"])
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+@lru_cache(maxsize=4)
 def _known_unavailable_periods(
     path: str = "config/datasus.yaml",
 ) -> frozenset[tuple[str, str, int, int | None]]:
@@ -169,6 +190,9 @@ def _is_available(system: str, year: int, month: int | None, *, uf: str | None =
     if year < first_year:
         return False
     if year == first_year and month is not None and month < first_month:
+        return False
+    ceiling = _availability_ceilings().get(system)
+    if ceiling is not None and year > ceiling:
         return False
     if uf is not None and (system, normalize_uf(uf), year, month) in _known_unavailable_periods():
         return False

@@ -26,10 +26,16 @@ datasus:
   # availability) so real data is never excluded. CNES establishment (ST) files begin
   # 2005-08; SIM-DO CID-10 from 1996; SINASC nationally from 1994; SIH-RD (reduced AIH)
   # from 1992. Only CNES-ST's floor bites any 2000+ study; the rest predate all requests.
+  # first_year/first_month = earliest published; last_year = latest published (publication lag). The
+  # planner emits no chunk request outside [first .. last], so strict completeness is not failed by a
+  # not-yet-published year. last_year is a point-in-time fact (advances as DATASUS releases) — dated in
+  # the comment. Verified 2026-07-10 from the DATASUS FTP directory listing (SIHSUS/SIM/SINASC Dados):
+  # SIM-DO complete through 2024; SIH-RD complete through 2024 (bar the RR/AP holes below); SINASC final
+  # data (NOV/DNRES) ends at 2022 — DN files for 2023/2024 do not exist for any UF (PRELIM folder empty).
   availability:
-    SIM-DO:  {first_year: 1996}
-    SINASC:  {first_year: 1994}
-    SIH-RD:  {first_year: 1992}
+    SIM-DO:  {first_year: 1996, last_year: 2024}
+    SINASC:  {first_year: 1994, last_year: 2022}
+    SIH-RD:  {first_year: 1992, last_year: 2024}
     CNES-ST: {first_year: 2005, first_month: 8}
 
   # Proven source-file absences inside an otherwise available system window. These

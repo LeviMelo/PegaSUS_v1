@@ -40,6 +40,7 @@ data/actual_state_panels/**
 data/sidra/**
 data/normalized/**
 data/denominators/**
+data/assets/**
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/metadata/.gitkeep
@@ -48,6 +49,7 @@ data/denominators/**
 !data/intermediate/.gitkeep
 !data/runs/.gitkeep
 !data/diagnostics/.gitkeep
+!data/assets/.gitkeep
 
 # Local logs and temp files
 *.log

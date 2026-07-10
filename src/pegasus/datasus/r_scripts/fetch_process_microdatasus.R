@@ -37,7 +37,7 @@ write_heartbeat <- function(stage, rows, message) {
   )
 }
 
-required <- c("microdatasus", "read.dbc", "arrow", "jsonlite", "dplyr")
+required <- c("microdatasus", "read.dbc", "arrow", "jsonlite", "dplyr", "stringi")
 missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing) > 0) {
   cat(paste("Missing R packages:", paste(missing, collapse = ", ")), file = stderr())
@@ -50,6 +50,7 @@ suppressPackageStartupMessages({
   library(arrow)
   library(jsonlite)
   library(dplyr)
+  library(stringi)
 })
 
 
@@ -57,8 +58,8 @@ sanitize_utf8_scalar <- function(x) {
   if (is.na(x)) return(NA_character_)
   y <- as.character(x)
   # DATASUS DBF text occasionally contains embedded NUL bytes. iconv aborts on
-  # those before it can apply sub="byte", so strip them at the byte boundary.
-  y <- gsub("\\x00", "", y, perl = TRUE, useBytes = TRUE)
+  # those before it can apply sub="byte" — and gsub can abort for the same
+  # reason — so strip them at the byte boundary before either function sees y.
   y <- tryCatch({
     bytes <- charToRaw(y)
     if (any(bytes == as.raw(0))) {
@@ -87,18 +88,29 @@ sanitize_utf8_scalar <- function(x) {
 # fallback, empty string for the irrecoverable, and NA preserved where NA.
 sanitize_utf8_column <- function(col) {
   before <- as.character(col)
-  na_mask <- is.na(before)
-  v <- gsub("\\x00", "", before, perl = TRUE, useBytes = TRUE)
-  Encoding(v) <- "unknown"
-  z <- iconv(v, from = "", to = "UTF-8", sub = "byte")
-  bad <- is.na(z)
-  if (any(bad)) {
-    z2 <- iconv(v[bad], from = "latin1", to = "UTF-8", sub = "byte")
-    z[bad] <- z2
-  }
-  z[is.na(z)] <- ""
-  z[na_mask] <- NA_character_
-  z
+  tryCatch({
+    na_mask <- is.na(before)
+    v <- gsub("\\x00", "", before, perl = TRUE, useBytes = TRUE)
+    Encoding(v) <- "unknown"
+    z <- iconv(v, from = "", to = "UTF-8", sub = "byte")
+    bad <- is.na(z)
+    if (any(bad)) {
+      z2 <- iconv(v[bad], from = "latin1", to = "UTF-8", sub = "byte")
+      z[bad] <- z2
+    }
+    z[is.na(z)] <- ""
+    z[na_mask] <- NA_character_
+    z
+  }, error = function(e) {
+    # Rare DBF columns can carry a true embedded NUL in their CHARSXP. Keep the
+    # fast base-R path for normal columns, but fall back to ICU's length-aware
+    # strings for the exceptional column instead of failing the entire month.
+    z <- stringi::stri_enc_toutf8(before, is_unknown_8bit = TRUE, validate = TRUE)
+    z <- stringi::stri_replace_all_regex(z, "\\x{0000}", "")
+    z[is.na(z) & !na_mask] <- ""
+    z[na_mask] <- NA_character_
+    z
+  })
 }
 
 sanitize_utf8_dataframe <- function(df) {

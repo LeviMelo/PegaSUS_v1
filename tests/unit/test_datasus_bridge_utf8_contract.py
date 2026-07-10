@@ -6,6 +6,7 @@ from pathlib import Path
 def test_r_bridge_declares_utf8_sanitized_contract() -> None:
     script = Path("src/pegasus/datasus/r_scripts/fetch_process_microdatasus.R").read_text(encoding="utf-8")
     assert "sanitize_utf8_dataframe <- function" in script
+    assert "stringi::stri_enc_toutf8" in script
     assert "write_utf8_parquet" in script
     # v4 bridge: canonical raw-coded parquet only (zstd), no raw.rds, microdatasus sidecar gated off.
     assert "datasus_r_bridge_v4_zstd_canonical_only" in script

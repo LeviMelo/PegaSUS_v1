@@ -150,8 +150,20 @@ def stream_normalize_batched(
     # time, in order) and batches are WRITTEN in read order, so surrogate identity and row order are
     # unchanged — only *where/when* a batch is decoded differs. In-flight is bounded to ``workers`` batches
     # so peak RAM stays ~= workers × one batch (independent of UF/national size). Serial when workers<=1.
+    #
+    # Worker count is memory-DYNAMIC (compute/resources): the core cap (leave 2 for I/O, hold ≤8 so a big
+    # UF doesn't starve the rest of the pipeline) is the ceiling, but on a loaded / low-RAM box it TIGHTENS
+    # below that so K concurrent decodes (each holds a decoded batch + its pending-write copy) can't OOM.
+    # Monotone-safe: it can only shrink from the core cap, never grow — and K never changes the output.
+    from pegasus.compute.resources import memory_budgeted_count
+
     cpu = os.cpu_count() or 4
-    workers = max(1, int(os.environ.get("PEGASUS_NORMALIZE_BATCH_PARALLEL", str(max(1, min(cpu - 2, 8))))))
+    core_cap = max(1, min(cpu - 2, 8))
+    default_workers = memory_budgeted_count(
+        ram_bytes_per_unit=batch_rows * 2048,  # ~1 wide decoded batch (~120 cols × 8 B) + its arrow copy
+        floor=1, cap=core_cap, headroom_frac=0.5,
+    )
+    workers = max(1, int(os.environ.get("PEGASUS_NORMALIZE_BATCH_PARALLEL", str(default_workers))))
 
     writer: "pq.ParquetWriter | None" = None
     target_schema: dict | None = None

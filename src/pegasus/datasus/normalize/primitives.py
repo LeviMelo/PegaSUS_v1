@@ -140,31 +140,71 @@ def stream_normalize_batched(
         out.write_parquet(output_path, compression="zstd")
         return out.height
 
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
     parquet = pq.ParquetFile(str(input_path))
+    # SIZE-BASED (NOT per-UF) parallel decode. The row-batch is already the memory unit; decode several
+    # concurrently to fill the cores (the population tensor's block model applied to the normalize). This
+    # is BYTE-IDENTICAL to the serial decode: each batch keeps its global ``row_offset`` (assigned at read
+    # time, in order) and batches are WRITTEN in read order, so surrogate identity and row order are
+    # unchanged — only *where/when* a batch is decoded differs. In-flight is bounded to ``workers`` batches
+    # so peak RAM stays ~= workers × one batch (independent of UF/national size). Serial when workers<=1.
+    cpu = os.cpu_count() or 4
+    workers = max(1, int(os.environ.get("PEGASUS_NORMALIZE_BATCH_PARALLEL", str(max(1, min(cpu - 2, 8))))))
+
     writer: "pq.ParquetWriter | None" = None
     target_schema: dict | None = None
     total = 0
+
+    def _prep(record_batch):
+        batch = pl.from_arrow(record_batch)
+        return batch.to_frame() if isinstance(batch, pl.Series) else batch  # single-column arrow batch
+
+    def _emit(out) -> None:
+        # Pin the schema from the first (in-order) batch so every appended table matches — a column that
+        # is all-null in one batch must not drift dtype across batches. Cast only on the rare mismatch.
+        nonlocal writer, target_schema, total
+        if target_schema is None:
+            target_schema = dict(out.schema)
+        elif dict(out.schema) != target_schema:
+            out = out.cast(target_schema)
+        table = out.to_arrow()
+        if writer is None:
+            writer = pq.ParquetWriter(str(output_path), table.schema, compression="zstd")
+        writer.write_table(table)
+        total += out.height
+
+    read_offset = 0  # global row index at read time → the batch's row_offset (surrogate-identity anchor)
     try:
-        for record_batch in parquet.iter_batches(batch_size=batch_rows):
-            if record_batch.num_rows == 0:
-                continue
-            batch = pl.from_arrow(record_batch)
-            if isinstance(batch, pl.Series):  # single-column arrow batch
-                batch = batch.to_frame()
-            out = _eager(frame_fn(batch, source_manifest_hash=source_manifest_hash, row_offset=total))
-            # Pin the schema from the first batch so every appended table matches (a column
-            # that is all-null in one batch must not drift dtype across batches). The decode
-            # dtypes are expression-determined, so batches almost always already agree — only
-            # cast on the rare mismatch to avoid a full-frame cast per batch.
-            if target_schema is None:
-                target_schema = dict(out.schema)
-            elif dict(out.schema) != target_schema:
-                out = out.cast(target_schema)
-            table = out.to_arrow()
-            if writer is None:
-                writer = pq.ParquetWriter(str(output_path), table.schema, compression="zstd")
-            writer.write_table(table)
-            total += record_batch.num_rows
+        if workers <= 1:
+            for record_batch in parquet.iter_batches(batch_size=batch_rows):
+                if record_batch.num_rows == 0:
+                    continue
+                _emit(_eager(frame_fn(_prep(record_batch), source_manifest_hash=source_manifest_hash, row_offset=read_offset)))
+                read_offset += record_batch.num_rows
+        else:
+            pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="normalize-batch")
+            pending: dict = {}
+            submit_i = next_i = 0
+            try:
+                for record_batch in parquet.iter_batches(batch_size=batch_rows):
+                    if record_batch.num_rows == 0:
+                        continue
+                    pending[submit_i] = pool.submit(
+                        lambda b, o: _eager(frame_fn(b, source_manifest_hash=source_manifest_hash, row_offset=o)),
+                        _prep(record_batch), read_offset,
+                    )
+                    read_offset += record_batch.num_rows
+                    submit_i += 1
+                    while len(pending) >= workers:  # bound in-flight; drain the next-in-order (blocks read)
+                        _emit(pending.pop(next_i).result())
+                        next_i += 1
+                while pending:  # drain remaining in read order
+                    _emit(pending.pop(next_i).result())
+                    next_i += 1
+            finally:
+                pool.shutdown()
     finally:
         if writer is not None:
             writer.close()

@@ -8,6 +8,7 @@ single-year profile follows the reference (2010) shape — with a safe uniform f
 from __future__ import annotations
 
 import numpy as np
+import polars as pl
 import pytest
 
 from pegasus.denominators.population.census_2000 import (
@@ -15,6 +16,7 @@ from pegasus.denominators.population.census_2000 import (
     assemble_2000_single_year_records,
     bracket_single_year_labels,
     carve_pre_census_children,
+    carve_pre_census_children_frame,
     disaggregate_2000_strata_to_single_year,
     disaggregate_bracket,
     reconcile_undeclared_race,
@@ -55,6 +57,20 @@ def test_carve_resolves_parents_from_amc_group_when_no_override() -> None:
     # total preserved; child carved from both group siblings present in 2000
     assert sum(r["value"] for r in records if r["period"] == "2000") == pytest.approx(80000.0)
     assert sum(r["value"] for r in records if r["municipality_cod6"] == "C" and r["period"] == "2000") > 0
+
+
+def test_columnar_amc_carve_matches_reference_rows() -> None:
+    records = [
+        _rec("P1", "2000", 60.0), _rec("P2", "2000", 40.0),
+        _rec("P1", "2010", 70.0), _rec("P2", "2010", 50.0), _rec("C", "2010", 20.0),
+    ]
+    reference = [dict(row) for row in records]
+    reference_stats = carve_pre_census_children(reference, {}, {"C": ["P1", "P2"]})
+    frame, frame_stats = carve_pre_census_children_frame(
+        pl.DataFrame(records), {}, {"C": ["P1", "P2"]}
+    )
+    assert frame_stats == reference_stats
+    assert frame.rows() == pl.DataFrame(reference).select(frame.columns).rows()
 
 
 def test_reconcile_undeclared_race_preserves_total_by_local_composition() -> None:

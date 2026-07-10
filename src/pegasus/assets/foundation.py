@@ -26,7 +26,7 @@ from pegasus.core.hashing import content_hash
 POPULATION_TENSOR = "population_tensor"
 # Bump when the tensor build math changes (SV, PROJ, solver): a new code version => a fresh identity
 # => a rebuild, so a stored asset never silently reflects stale build logic.
-POPULATION_TENSOR_CODE_VERSION = "fal-pop-sv1-proj1"
+POPULATION_TENSOR_CODE_VERSION = "fal-pop-sv1-proj2-contiguous-years1"
 
 
 def population_tensor_input_identity(

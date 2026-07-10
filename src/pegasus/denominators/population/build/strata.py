@@ -45,21 +45,70 @@ def _canonical_stratum(row: dict[str, Any]) -> dict[str, str] | None:
 
 
 def _read_population_strata(path: str | Path) -> pl.DataFrame:
-    frame = pl.read_parquet(path)
+    # Project before materializing.  The national 9606 artifact has 11.25M rows and fourteen
+    # string-heavy provenance columns, while reconstruction needs only four payload columns after
+    # filtering.  Reading the whole parquet expanded an 18MB file into a measured ~4.1GB frame.
+    # Lazy projection lets the parquet reader skip those buffers entirely.
+    available = set(pl.scan_parquet(path).collect_schema().names())
     required = {"table_id", "variable_id", "period", "locality_id", "category_tuple", "value_numeric", "value_status"}
-    missing = required - set(frame.columns)
+    missing = required - available
     if missing:
         raise ValueError(f"population strata facts missing columns: {sorted(missing)}")
-    return frame.filter(
-        (pl.col("table_id").cast(pl.Utf8) == "9606")
-        & (pl.col("variable_id").cast(pl.Utf8) == "93")
-        & (pl.col("value_status").cast(pl.Utf8) == "numeric")
-        & pl.col("value_numeric").is_not_null()
+    return (
+        pl.scan_parquet(path)
+        .filter(
+            (pl.col("table_id").cast(pl.Utf8) == "9606")
+            & (pl.col("variable_id").cast(pl.Utf8) == "93")
+            & (pl.col("value_status").cast(pl.Utf8) == "numeric")
+            & pl.col("value_numeric").is_not_null()
+        )
+        .select("period", "locality_id", "category_tuple", "value_numeric")
+        .collect()
+    )
+
+
+def _population_records_frame(strata: pl.DataFrame) -> pl.DataFrame:
+    """Project SIDRA category tuples to canonical axes without an O(rows) Python object graph.
+
+    National 9606 repeats only a small category vocabulary across municipalities and censuses. Parse
+    each distinct tuple once, then join that lookup onto the columnar facts. This is mathematically
+    identical to calling :func:`_canonical_stratum` row by row, but avoids ~11M dictionaries.
+    """
+    lookup_rows: list[dict[str, str]] = []
+    for raw in strata.get_column("category_tuple").unique().to_list():
+        canonical = _canonical_stratum({"category_tuple": raw})
+        if canonical is not None:
+            lookup_rows.append({"category_tuple": str(raw), **canonical})
+    if not lookup_rows:
+        return pl.DataFrame(
+            schema={
+                "municipality_cod6": pl.Utf8,
+                "period": pl.Utf8,
+                "value": pl.Float64,
+                "age_group": pl.Utf8,
+                "sex": pl.Utf8,
+                "race": pl.Utf8,
+            }
+        )
+    lookup = pl.DataFrame(
+        lookup_rows,
+        schema={"category_tuple": pl.Utf8, "age_group": pl.Utf8, "sex": pl.Utf8, "race": pl.Utf8},
+    )
+    return (
+        strata.join(lookup, on="category_tuple", how="inner")
+        .select(
+            pl.col("locality_id").cast(pl.Utf8).str.slice(0, 6).alias("municipality_cod6"),
+            pl.col("period").cast(pl.Utf8).str.slice(0, 4),
+            pl.col("value_numeric").cast(pl.Float64).alias("value"),
+            "age_group",
+            "sex",
+            "race",
+        )
     )
 
 
 def _census_2000_records_from_facts(
-    census_2000_path: str | Path, records: list[dict[str, Any]]
+    census_2000_path: str | Path, records: list[dict[str, Any]] | pl.DataFrame
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """Parse SIDRA 2093 (2000-census) facts into single-year age×sex×race records (FAL-POP #4).
 
@@ -120,7 +169,8 @@ def _census_2000_records_from_facts(
     recon_stats = reconcile_undeclared_race(profiles, undeclared)
 
     reference_2010: dict[tuple[str, str, str], dict[str, float]] = {}
-    for rec in records:
+    record_rows = records.iter_rows(named=True) if isinstance(records, pl.DataFrame) else iter(records)
+    for rec in record_rows:
         if rec["period"] == "2010":
             reference_2010.setdefault((rec["municipality_cod6"], rec["sex"], rec["race"]), {})[rec["age_group"]] = rec["value"]
 
@@ -135,5 +185,6 @@ __all__ = [
     "_category_by_classification",
     "_canonical_stratum",
     "_read_population_strata",
+    "_population_records_frame",
     "_census_2000_records_from_facts",
 ]

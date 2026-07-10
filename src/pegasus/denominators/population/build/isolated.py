@@ -6,7 +6,8 @@ a process-TREE kill, and a RAM floor, so:
   * the intermittent national GPU segfault (a native torch+polars transition race, exit 139) is
     RECOVERABLE — the parent simply retries past it, and only re-enables national GPU here because the
     isolation makes the crash survivable (``allow_national_gpu=True``);
-  * the child's build RAM (~5-6 GB) is released to the OS on every process exit (memory-graceful);
+  * the child's build RAM is released to the OS on every process exit (memory-graceful; the exact
+    national peak is measured per build rather than asserted from a state-scale proxy);
   * a pathological hang can never "lose us time" — the parent kills the whole child tree at the deadline.
     A shell ``timeout`` cannot do this reliably on Windows (it does not kill the child's descendants), so
     the parent uses ``taskkill /F /T`` — the actual kill-switch that terminates the process tree (§VII).

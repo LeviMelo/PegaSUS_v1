@@ -312,6 +312,127 @@ def carve_pre_census_children(
     return {"amc_carved_population": carved_population, "amc_children_carved": float(children_carved)}
 
 
+def carve_pre_census_children_frame(
+    records: "pl.DataFrame",
+    amc_crosswalk: dict[str, int],
+    overrides: dict[str, list[str]] | None = None,
+) -> tuple["pl.DataFrame", dict[str, float]]:
+    """Columnar equivalent of :func:`carve_pre_census_children`.
+
+    The original routine mutates millions of row dictionaries although the genealogy decision lives
+    at only ``(period, municipality)`` granularity.  Compute those decisions on the compact grouped
+    totals, retain the same sequential parent scaling, and apply the resulting factors to Polars
+    columns once.  Appended child rows remain in the same logical order (after all source rows).
+    """
+    import polars as pl
+
+    overrides = overrides or {}
+    grouped = records.group_by("period", "municipality_cod6", maintain_order=True).agg(
+        pl.col("value").sum().alias("base_population")
+    )
+    base = {
+        (str(row["period"]), str(row["municipality_cod6"])): float(row["base_population"])
+        for row in grouped.iter_rows(named=True)
+    }
+    present: dict[str, set[str]] = {}
+    period_totals: dict[str, float] = {}
+    for (period, municipality), value in base.items():
+        present.setdefault(municipality, set()).add(period)
+        period_totals[period] = period_totals.get(period, 0.0) + value
+
+    group_members: dict[int, set[str]] = {}
+    for municipality in present:
+        group = amc_crosswalk.get(municipality)
+        if group is not None:
+            group_members.setdefault(group, set()).add(municipality)
+
+    scale: dict[tuple[str, str], float] = {}
+    appended: list[tuple[str, str, str, float]] = []
+    carved_population = 0.0
+    children_carved = 0
+    for census_year in sorted(period_totals, key=int):
+        for child in list(present):
+            if census_year in present[child]:
+                continue
+            later = [year for year in present[child] if int(year) > int(census_year)]
+            if not later:
+                continue
+            reference_year = min(later, key=int)
+            if child in overrides:
+                parents = [parent for parent in overrides[child] if census_year in present.get(parent, set())]
+            else:
+                group = amc_crosswalk.get(child)
+                parents = (
+                    [member for member in group_members.get(group, set()) if member != child and census_year in present.get(member, set())]
+                    if group is not None
+                    else []
+                )
+            if not parents:
+                continue
+
+            child_key = (reference_year, child)
+            child_scale = scale.get(child_key, 1.0)
+            child_population = base.get(child_key, 0.0) * child_scale
+            state_census = period_totals.get(census_year, 0.0)
+            state_reference = period_totals.get(reference_year, 0.0)
+            if child_population <= 0.0 or state_reference <= 0.0:
+                continue
+            amount = child_population * (state_census / state_reference)
+            parent_populations = {
+                parent: base.get((census_year, parent), 0.0) * scale.get((census_year, parent), 1.0)
+                for parent in parents
+            }
+            parent_total = sum(parent_populations.values())
+            if parent_total <= 0.0:
+                continue
+            amount = min(amount, parent_total)
+            for parent, population in parent_populations.items():
+                if population > 0.0:
+                    key = (census_year, parent)
+                    # Preserve the operation order of the row-dictionary reference implementation;
+                    # the algebraically simplified ``1 - amount / parent_total`` differs by a few
+                    # ulps and those ulps feed the soft-anchor optimizer.
+                    factor = max(0.0, 1.0 - (amount * population / parent_total) / population)
+                    scale[key] = scale.get(key, 1.0) * factor
+            appended.append((reference_year, child, census_year, child_scale * amount / child_population))
+            carved_population += amount
+            children_carved += 1
+
+    if scale:
+        scale_frame = pl.DataFrame(
+            [
+                {"period": period, "municipality_cod6": municipality, "_amc_scale": factor}
+                for (period, municipality), factor in scale.items()
+            ]
+        )
+        adjusted = (
+            records.join(scale_frame, on=["period", "municipality_cod6"], how="left")
+            .with_columns(
+                (pl.col("value") * pl.col("_amc_scale").fill_null(1.0)).alias("value")
+            )
+            .drop("_amc_scale")
+        )
+    else:
+        adjusted = records
+
+    additions = []
+    for reference_year, child, census_year, factor in appended:
+        additions.append(
+            records.filter(
+                (pl.col("period") == reference_year) & (pl.col("municipality_cod6") == child)
+            ).with_columns(
+                pl.lit(census_year).alias("period"),
+                (pl.col("value") * factor).alias("value"),
+            )
+        )
+    if additions:
+        adjusted = pl.concat([adjusted, *additions], how="vertical", rechunk=False)
+    return adjusted, {
+        "amc_carved_population": carved_population,
+        "amc_children_carved": float(children_carved),
+    }
+
+
 __all__ = [
     "CLEAN_AGE_BRACKETS_2093",
     "SIDRA_2093_UNDECLARED_RACE",
@@ -324,4 +445,5 @@ __all__ = [
     "load_amc_crosswalk",
     "load_municipality_genealogy_overrides",
     "carve_pre_census_children",
+    "carve_pre_census_children_frame",
 ]

@@ -75,6 +75,8 @@ def test_tensor_reanchors_intercensal_closure_off_6579(tmp_path: Path):
         mode="independent_denominator",
     )
     out = pl.read_parquet(build.output_path)
+    # Annual person-time support is contiguous even when SIDRA 6579 omits individual years.
+    assert out["year"].unique().sort().to_list() == list(range(2010, 2023))
     total_2021 = out.filter(pl.col("year") == 2021)["value"].sum()
     total_2022 = out.filter(pl.col("year") == 2022)["value"].sum()
     total_2010 = out.filter(pl.col("year") == 2010)["value"].sum()

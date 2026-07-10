@@ -24,6 +24,8 @@ def test_known_uf_month_source_gaps_are_not_planned_as_failed_fetches() -> None:
     assert [manifest.month_start for manifest in rr] == list(range(6, 13))
     ro = build_datasus_manifests(system="SIH-RD", uf="RO", years="2000", config={"rscript_path": "Rscript"})
     assert [manifest.month_start for manifest in ro] == list(range(1, 13))
+    ap = build_datasus_manifests(system="SIH-RD", uf="AP", years="2007", config={"rscript_path": "Rscript"})
+    assert 10 not in [manifest.month_start for manifest in ap]
 
 
 def test_sim_sinasc_remain_annual_manifests() -> None:

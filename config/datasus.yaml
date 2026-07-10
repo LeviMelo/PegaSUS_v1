@@ -40,5 +40,9 @@ datasus:
         year: 2000
         months: [1, 2, 3, 4, 5]
         evidence: "DATASUS historical FTP SIHSUS/199201_200712 returned 550 for RDRR0001.dbc through RDRR0005.dbc; verified 2026-07-10"
+      - uf: AP
+        year: 2007
+        months: [10]
+        evidence: "DATASUS historical FTP SIHSUS/199201_200712 returned 550 for RDAP0710.dbc; verified 2026-07-10"
 
   optional_ftp_discovery: false

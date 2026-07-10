@@ -1,7 +1,7 @@
 {
   "budget": "standard",
   "context_policy": ["actual_source_state_panel", "include_cnes_sih"],
-  "exclude_systems": [],
+  "exclude_systems": ["CNES-ST"],
   "execution_scale": "national",
   "execution_stage": "investigate",
   "force_selectors": [],
@@ -13,6 +13,6 @@
   "population_mode": "sim_informed_population_tensor",
   "race_tensor_mode": "decoupled",
   "run_profile": "contextual",
-  "system_weights": { "SIDRA": 1.0, "SIM-DO": 1.0, "SIH-RD": 1.0, "CNES-ST": 1.0, "SINASC": 1.0 },
+  "system_weights": { "SIDRA": 1.0, "SIM-DO": 1.0, "SIH-RD": 1.0, "SINASC": 1.0 },
   "time": { "start_year": 2000, "end_year": 2024, "start_month": null, "end_month": null }
 }

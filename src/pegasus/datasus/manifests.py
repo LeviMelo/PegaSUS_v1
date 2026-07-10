@@ -121,19 +121,56 @@ def _availability_windows(path: str = "config/datasus.yaml") -> dict[str, tuple[
     return out
 
 
-def _is_available(system: str, year: int, month: int | None) -> bool:
+@lru_cache(maxsize=4)
+def _known_unavailable_periods(
+    path: str = "config/datasus.yaml",
+) -> frozenset[tuple[str, str, int, int | None]]:
+    """Evidence-backed holes within a system's general availability window."""
+    try:
+        cfg = load_datasus_config(path)
+    except (OSError, ValueError, TypeError):
+        return frozenset()
+    out: set[tuple[str, str, int, int | None]] = set()
+    for raw_system, entries in (cfg.get("known_unavailable") or {}).items():
+        try:
+            system = normalize_system(raw_system)
+        except ValueError:
+            continue
+        for entry in entries or ():
+            if not isinstance(entry, dict):
+                continue
+            try:
+                uf = normalize_uf(str(entry["uf"]))
+                year = int(entry["year"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            months = entry.get("months")
+            if months is None:
+                out.add((system, uf, year, None))
+            else:
+                for month in months:
+                    month_int = int(month)
+                    if 1 <= month_int <= 12:
+                        out.add((system, uf, year, month_int))
+    return frozenset(out)
+
+
+def _is_available(system: str, year: int, month: int | None, *, uf: str | None = None) -> bool:
     """True if DATASUS publishes ``system`` at ``(year, month)`` per the availability floor.
 
     A chunk below the floor is not emitted — DATASUS has no file there, so fetching it only
     spins up a doomed R subprocess. For annual systems (``month is None``) only the year floor
     applies. Systems without a configured floor are always available (no filtering)."""
-    floor = _availability_windows().get(normalize_system(system))
+    system = normalize_system(system)
+    floor = _availability_windows().get(system)
     if floor is None:
         return True
     first_year, first_month = floor
     if year < first_year:
         return False
     if year == first_year and month is not None and month < first_month:
+        return False
+    if uf is not None and (system, normalize_uf(uf), year, month) in _known_unavailable_periods():
         return False
     return True
 
@@ -269,7 +306,7 @@ def build_datasus_manifests(
                 for year in parsed_years
                 # Keep any year that has ≥1 available month (partial availability years
                 # still fetch the whole year; microdatasus returns what exists).
-                if _is_available(system, year, 12)
+                if any(_is_available(system, year, month, uf=uf) for month in range(1, 13))
             ]
         return [
             build_datasus_request_manifest(
@@ -278,7 +315,7 @@ def build_datasus_manifests(
             )
             for year in parsed_years
             for month in range(1, 13)
-            if _is_available(system, year, month)
+            if _is_available(system, year, month, uf=uf)
         ]
 
     return [
@@ -293,7 +330,7 @@ def build_datasus_manifests(
             data_root=data_root,
         )
         for year in parsed_years
-        if _is_available(system, year, None)
+        if _is_available(system, year, None, uf=uf)
     ]
 
 
